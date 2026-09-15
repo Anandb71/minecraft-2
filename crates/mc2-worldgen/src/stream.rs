@@ -36,10 +36,10 @@ pub struct StreamConfig {
 impl Default for StreamConfig {
     fn default() -> Self {
         Self {
-            full_m: 96.0,
-            cell_m: 384.0,
-            node2_m: 1024.0,
-            node8_m: 2560.0,
+            full_m: 64.0,
+            cell_m: 192.0,
+            node2_m: 512.0,
+            node8_m: 1536.0,
             hysteresis_m: 48.0,
             max_inflight: 64,
             insert_budget_ms: 3.0,
@@ -148,13 +148,14 @@ impl ChunkStreamer {
                 let Some(relaxed) = self.config.lod_for(d, slack) else {
                     continue;
                 };
+                let (column_lo, column_hi) = self.generator.column_range(cx, cz);
                 for cy in 0..max_y {
                     let pos = ChunkPos(IVec3::new(cx, cy, cz));
                     if !pos.in_world() {
                         continue;
                     }
                     let bottom = (cy * CHUNK_VOXELS) as f32 / 16.0;
-                    if bottom > self.generator.max_height_over(pos) {
+                    if bottom > column_hi {
                         break;
                     }
                     let current = self.loaded.get(&pos).copied();
@@ -169,7 +170,8 @@ impl ChunkStreamer {
                     // Buried chunks are invisible; keep only a thin solid layer
                     // under a nearby camera for digging and physics.
                     let pinned = self.pinned.contains(&pos);
-                    if !pinned && self.generator.is_buried(pos) {
+                    let top = bottom + chunk_m;
+                    if !pinned && top < column_lo {
                         let below_camera = camera.y as f32 - bottom;
                         if lod != Lod::Full || below_camera > 64.0 {
                             continue;
@@ -224,7 +226,8 @@ impl ChunkStreamer {
             let generator = self.generator.clone();
             let tx = self.tx.clone();
             rayon::spawn(move || {
-                let tree = generator.generate(pos, lod);
+                let mut tree = generator.generate(pos, lod);
+                tree.prepare_flat();
                 let _ = tx.send(Done { pos, lod, tree });
             });
         }

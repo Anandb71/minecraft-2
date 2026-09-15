@@ -117,41 +117,38 @@ impl ChunkGenerator {
     /// Conservative highest surface over a chunk's footprint, metres, from
     /// the coarse grid alone. Chunks entirely above it are air.
     pub fn max_height_over(&self, pos: ChunkPos) -> f32 {
+        self.column_range(pos.0.x, pos.0.z).1
+    }
+
+    /// Conservative (lowest, highest) surface elevation over a chunk
+    /// column's footprint, metres, from the coarse grid plus the largest
+    /// possible amplified detail. Independent of the chunk's height, so
+    /// streaming evaluates it once per column.
+    pub fn column_range(&self, cx: i32, cz: i32) -> (f32, f32) {
         let t = self.terrain();
         let c = t.params.cell_m;
-        let x0 = pos.0.x as f32 * CHUNK_VOXELS as f32 * VOXEL_M;
-        let z0 = pos.0.z as f32 * CHUNK_VOXELS as f32 * VOXEL_M;
         let size = CHUNK_VOXELS as f32 * VOXEL_M;
+        let x0 = cx as f32 * size;
+        let z0 = cz as f32 * size;
         let (i0, i1) = (((x0 / c) as i64) - 2, (((x0 + size) / c) as i64) + 2);
         let (j0, j1) = (((z0 / c) as i64) - 2, (((z0 + size) / c) as i64) + 2);
-        let mut hi = f32::MIN;
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
         for j in j0..=j1 {
             for i in i0..=i1 {
-                hi = hi.max(t.height.at(i, j));
+                let h = t.height.at(i, j);
+                lo = lo.min(h);
+                hi = hi.max(h);
             }
         }
         // Bicubic overshoot plus amplified detail.
-        hi + DETAIL_MARGIN_M + 8.0
+        (lo - DETAIL_MARGIN_M - 8.0, hi + DETAIL_MARGIN_M + 8.0)
     }
 
     /// True when the whole chunk lies below the lowest possible surface of
     /// its footprint: no ray reaches it until something is excavated.
     pub fn is_buried(&self, pos: ChunkPos) -> bool {
-        let t = self.terrain();
-        let c = t.params.cell_m;
-        let x0 = pos.0.x as f32 * CHUNK_VOXELS as f32 * VOXEL_M;
-        let z0 = pos.0.z as f32 * CHUNK_VOXELS as f32 * VOXEL_M;
-        let size = CHUNK_VOXELS as f32 * VOXEL_M;
-        let (i0, i1) = (((x0 / c) as i64) - 2, (((x0 + size) / c) as i64) + 2);
-        let (j0, j1) = (((z0 / c) as i64) - 2, (((z0 + size) / c) as i64) + 2);
-        let mut lo = f32::MAX;
-        for j in j0..=j1 {
-            for i in i0..=i1 {
-                lo = lo.min(t.height.at(i, j));
-            }
-        }
         let top = (pos.origin().y + CHUNK_VOXELS) as f32 * VOXEL_M;
-        top < lo - DETAIL_MARGIN_M - 8.0
+        top < self.column_range(pos.0.x, pos.0.z).0
     }
 
     fn samples(&self, pos: ChunkPos) -> ChunkSamples<'_> {
