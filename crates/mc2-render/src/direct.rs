@@ -26,6 +26,7 @@ fn unfilterable() -> wgpu::BindingType {
 #[derive(Clone, Copy)]
 pub struct DirectTargets {
     pub vis_id_prev: TexHandle,
+    pub light_trace: TexHandle,
     pub light_vis: TexHandle,
     pub light_vis_prev: TexHandle,
     pub res_a0: TexHandle,
@@ -46,6 +47,7 @@ impl DirectTargets {
         };
         Self {
             vis_id_prev: graph.create_history(history_desc("vis id prev", crate::vis::VIS_ID)),
+            light_trace: t(graph, "light trace", RGBA16F),
             light_vis: t(graph, "light visibility", RGBA16F),
             light_vis_prev: graph.create_history(history_desc("light visibility prev", RGBA16F)),
             res_a0: t(graph, "reservoir a0", RGBA32F),
@@ -74,16 +76,18 @@ fn views<'a>(
 pub struct SunPass {
     vis: VisTargets,
     t: DirectTargets,
-    pipeline: HotCompute,
-    bgl: wgpu::BindGroupLayout,
-    group: Option<(u64, wgpu::BindGroup)>,
+    trace: HotCompute,
+    resolve: HotCompute,
+    trace_layout: wgpu::BindGroupLayout,
+    resolve_layout: wgpu::BindGroupLayout,
+    groups: Option<(u64, wgpu::BindGroup, wgpu::BindGroup)>,
 }
 
 impl SunPass {
     pub fn new(device: &wgpu::Device, ctx: &FrameCtx, vis: VisTargets, t: DirectTargets) -> Self {
-        let bgl = layout(
+        let trace_layout = layout(
             device,
-            "direct sun",
+            "visibility trace",
             wgpu::ShaderStages::COMPUTE,
             &[
                 bind::utexture_2d(),
@@ -94,19 +98,41 @@ impl SunPass {
                 bind::write_2d(RGBA16F),
             ],
         );
-        let pipeline = HotCompute::new(
+        let resolve_layout = layout(
+            device,
+            "visibility resolve",
+            wgpu::ShaderStages::COMPUTE,
+            &[
+                bind::utexture_2d(),
+                unfilterable(),
+                bind::utexture_2d(),
+                unfilterable(),
+                unfilterable(),
+                bind::write_2d(RGBA16F),
+            ],
+        );
+        let trace = HotCompute::new(
             device,
             &ctx.shaders,
-            "direct_sun.wgsl",
+            "visibility_trace.wgsl",
             "main",
-            &[&ctx.frame_layout, &ctx.world_layout, &bgl],
+            &[&ctx.frame_layout, &ctx.world_layout, &trace_layout],
+        );
+        let resolve = HotCompute::new(
+            device,
+            &ctx.shaders,
+            "visibility_resolve.wgsl",
+            "main",
+            &[&ctx.frame_layout, &ctx.world_layout, &resolve_layout],
         );
         Self {
             vis,
             t,
-            pipeline,
-            bgl,
-            group: None,
+            trace,
+            resolve,
+            trace_layout,
+            resolve_layout,
+            groups: None,
         }
     }
 }
@@ -122,44 +148,77 @@ impl Pass<FrameCtx> for SunPass {
         b.read(self.vis.motion);
         b.read(self.t.vis_id_prev);
         b.read(self.t.light_vis_prev);
+        b.write(self.t.light_trace);
         b.write(self.t.light_vis);
     }
 
     fn execute(&mut self, ctx: &mut PassContext<'_, FrameCtx>) {
         let generation = ctx.graph.generation();
-        if self.group.as_ref().is_none_or(|(g, _)| *g != generation) {
-            let v = self.vis;
-            let res = views(
+        if self
+            .groups
+            .as_ref()
+            .is_none_or(|(g, _, _)| *g != generation)
+        {
+            let (v, t) = (self.vis, self.t);
+            let trace = views(
                 ctx,
                 &[
                     v.id,
                     v.depth,
                     v.motion,
-                    self.t.vis_id_prev,
-                    self.t.light_vis_prev,
-                    self.t.light_vis,
+                    t.vis_id_prev,
+                    t.light_vis_prev,
+                    t.light_trace,
                 ],
             );
-            self.group = Some((
+            let resolve = views(
+                ctx,
+                &[
+                    v.id,
+                    v.motion,
+                    t.vis_id_prev,
+                    t.light_vis_prev,
+                    t.light_trace,
+                    t.light_vis,
+                ],
+            );
+            self.groups = Some((
                 generation,
-                bind_group(ctx.device, "direct sun", &self.bgl, &res),
+                bind_group(ctx.device, "visibility trace", &self.trace_layout, &trace),
+                bind_group(
+                    ctx.device,
+                    "visibility resolve",
+                    &self.resolve_layout,
+                    &resolve,
+                ),
             ));
         }
-        let group = self.group.as_ref().expect("group").1.clone();
+        let (_, tg, rg) = self.groups.as_ref().expect("groups");
+        let (tg, rg) = (tg.clone(), rg.clone());
         let (fg, wg) = (
             ctx.frame.frame_bind_group.clone(),
             ctx.frame.world_bind_group.clone(),
         );
-        let p = self.pipeline.get(ctx.device, &ctx.frame.shaders).clone();
+        let pt = self.trace.get(ctx.device, &ctx.frame.shaders).clone();
+        let pr = self.resolve.get(ctx.device, &ctx.frame.shaders).clone();
         let e = ctx.graph.extent(self.t.light_vis);
+        let stride = ctx.frame.uniforms.trace_stride.max(1);
+        let blocks = (e.width.div_ceil(stride), e.height.div_ceil(stride));
         dispatch_all(
             ctx,
             "direct.sun",
-            &[(
-                &p,
-                &[&fg, &wg, &group],
-                (e.width.div_ceil(8), e.height.div_ceil(8), 1),
-            )],
+            &[
+                (
+                    &pt,
+                    &[&fg, &wg, &tg],
+                    (blocks.0.div_ceil(8), blocks.1.div_ceil(8), 1),
+                ),
+                (
+                    &pr,
+                    &[&fg, &wg, &rg],
+                    (e.width.div_ceil(8), e.height.div_ceil(8), 1),
+                ),
+            ],
         );
     }
 }
