@@ -121,8 +121,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // the indirect pass.
     let sky_e = sky_irradiance(normal) * frame.sun_illuminance;
     light += (sky_e * diffuse + vec3<f32>(0.004, 0.006, 0.012) * frame.moon_illuminance * albedo) * lv.b;
-    // Emissive voxels gathered by ReSTIR.
-    light += textureLoad(direct_lights, pixel, 0).rgb;
+    // Emissive voxels gathered by ReSTIR, which does not run without lights.
+    if frame.light_count > 0u {
+        light += textureLoad(direct_lights, pixel, 0).rgb;
+    }
     // Emission.
     light += mat.emission;
 
