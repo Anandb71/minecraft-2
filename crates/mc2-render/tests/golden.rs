@@ -166,3 +166,113 @@ fn world_debug_shade() {
         panic!("{e}");
     }
 }
+
+/// Generated terrain: coarse erosion on a small grid, full-detail chunks,
+/// marched and debug shaded. Pins worldgen, streaming and the marcher at once.
+#[test]
+fn generated_terrain() {
+    let Some(gpu) = software_gpu() else {
+        return;
+    };
+    use mc2_worldgen::chunkgen::{ChunkGenerator, Lod};
+    use mc2_worldgen::erosion::ErosionParams;
+    use mc2_worldgen::terrain::{CoarseTerrain, TerrainParams};
+    let params = TerrainParams {
+        size: 128,
+        cell_m: 128.0,
+        sea_level: 96.0,
+        erosion: ErosionParams {
+            iterations: 60,
+            ..Default::default()
+        },
+    };
+    let terrain = std::sync::Arc::new(CoarseTerrain::generate(7, params, &mut |_, _| {}));
+    let generator = ChunkGenerator::new(terrain.clone());
+    // A 3x3 patch of full-detail chunk columns on land near the map centre.
+    let (cx, cz) = (256, 258);
+    let mut world = mc2_voxel::world::VoxelWorld::new();
+    for z in cz - 1..=cz + 1 {
+        for x in cx - 1..=cx + 1 {
+            let (lo, hi) = generator.column_range(x, z);
+            for y in 0..16 {
+                let bottom = (y * 32) as f32;
+                if bottom > hi || bottom + 32.0 < lo {
+                    continue;
+                }
+                let pos = mc2_voxel::coords::ChunkPos(glam::IVec3::new(x, y, z));
+                let tree = generator.generate(pos, Lod::Full);
+                if !tree.is_empty() {
+                    world.insert_chunk(pos, tree);
+                }
+            }
+        }
+    }
+    let centre_x = (cx as f64 + 0.5) * 32.0;
+    let centre_z = (cz as f64 + 0.5) * 32.0;
+    let ground = f64::from(terrain.height_at(centre_x as f32, centre_z as f32));
+    let mut camera = mc2_render::camera::Camera {
+        position: glam::DVec3::new(centre_x - 30.0, ground + 18.0, centre_z - 30.0),
+        ..Default::default()
+    };
+    camera.look_at(glam::DVec3::new(centre_x + 10.0, ground, centre_z + 10.0));
+
+    let size = (320, 180);
+    let mut renderer = Renderer::new(
+        &gpu,
+        FORMAT,
+        size,
+        RendererOptions {
+            mode: RenderMode::World,
+            world: GpuWorldConfig {
+                tree_words: 4 << 20,
+                voxel_words: 16 << 20,
+                upload_budget: usize::MAX,
+                proximity_m: 1.0e4,
+                structure_budget_ms: f32::INFINITY,
+            },
+            render_scale: 1.0,
+        },
+    );
+    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("golden target"),
+        size: wgpu::Extent3d {
+            width: size.0,
+            height: size.1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let mut quiet = 0;
+    for _ in 0..300 {
+        renderer.prepare(&gpu, &mut world, &camera, 1.0 / 60.0);
+        renderer.render(&gpu, target.clone());
+        gpu.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        let s = renderer.world.stats;
+        quiet = if s.bricks_uploaded_last_frame == 0 && s.feedback_requests_last_frame == 0 {
+            quiet + 1
+        } else {
+            0
+        };
+        if quiet >= 3 {
+            break;
+        }
+    }
+    let rgba = read_rgba8(&gpu.device, &gpu.queue, &target);
+    if let Err(e) = check_golden(
+        &golden_dir(),
+        "generated_terrain",
+        size.0,
+        size.1,
+        &rgba,
+        &GoldenTolerance::default(),
+    ) {
+        panic!("{e}");
+    }
+}

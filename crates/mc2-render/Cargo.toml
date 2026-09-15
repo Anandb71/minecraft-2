@@ -16,4 +16,5 @@ png.workspace = true
 log.workspace = true
 
 [dev-dependencies]
+mc2-worldgen.workspace = true
 naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out"] }
