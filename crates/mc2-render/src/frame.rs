@@ -20,6 +20,7 @@ pub struct FrameCtx {
     pub frame_bind_group: wgpu::BindGroup,
     pub world_layout: wgpu::BindGroupLayout,
     pub world_bind_group: wgpu::BindGroup,
+    pub lights_bind_group: wgpu::BindGroup,
 }
 
 impl FrameCtx {
@@ -28,6 +29,7 @@ impl FrameCtx {
         shaders: mc2_gpu::ShaderLibrary,
         world_layout: wgpu::BindGroupLayout,
         world_bind_group: wgpu::BindGroup,
+        lights_bind_group: wgpu::BindGroup,
     ) -> Self {
         let frame_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame uniforms"),
@@ -62,6 +64,7 @@ impl FrameCtx {
             frame_bind_group,
             world_layout,
             world_bind_group,
+            lights_bind_group,
         }
     }
 }

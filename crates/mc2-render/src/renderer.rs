@@ -41,6 +41,7 @@ pub struct Renderer {
     pub frame: FrameCtx,
     pub profiler: GpuProfiler,
     pub world: GpuWorld,
+    pub lights: crate::lights::LightRegistry,
     output: TexHandle,
     pub output_format: wgpu::TextureFormat,
     output_size: (u32, u32),
@@ -74,7 +75,14 @@ impl Renderer {
         let dev = &gpu.device;
         let shaders = crate::shaders::library();
         let world = GpuWorld::new(dev, opts.world);
-        let frame = FrameCtx::new(dev, shaders, world.layout.clone(), world.bind_group.clone());
+        let lights = crate::lights::LightRegistry::new(dev);
+        let frame = FrameCtx::new(
+            dev,
+            shaders,
+            world.layout.clone(),
+            world.bind_group.clone(),
+            lights.bind_group.clone(),
+        );
         let mut graph = FrameGraph::new(render_size(output_size, opts.render_scale), output_size);
         let output = graph.declare_import(TextureDesc {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -127,6 +135,7 @@ impl Renderer {
             frame,
             profiler: GpuProfiler::new(dev, &gpu.queue, gpu.timestamps),
             world,
+            lights,
             output,
             output_format,
             output_size,
@@ -168,6 +177,14 @@ impl Renderer {
     /// Streams world changes and sets the camera for the next frame.
     pub fn prepare(&mut self, gpu: &Gpu, world: &mut VoxelWorld, camera: &Camera, dt: f32) {
         self.world.update(&gpu.queue, world, camera.position);
+        {
+            mc2_core::scope!("lights.update");
+            for pos in self.world.take_changed() {
+                self.lights.update_chunk(pos, world.chunk(pos));
+            }
+            self.lights.upload(&gpu.device, &gpu.queue, camera.position);
+            self.frame.lights_bind_group = self.lights.bind_group.clone();
+        }
         let prev = self.prev_camera.unwrap_or(*camera);
         self.frame.uniforms = FrameUniforms::build(&FrameInputs {
             camera: *camera,
