@@ -50,6 +50,15 @@ pub fn run(args: &Args) -> Result<(), String> {
     let mut game = Game::new();
     let mut loader = TerrainLoader::start(args.seed, args.world_dir.clone(), Default::default());
     let terrain = loader.wait(&mut game)?;
+    {
+        // Captures and benchmarks see a frozen sky.
+        let mut clock = game.clock();
+        clock.paused = true;
+        if let Some(hour) = args.time {
+            clock.set_hour(hour);
+        }
+    }
+    renderer.celestial = crate::world::celestial(&game);
     let mut camera = spawn_camera(&terrain);
     if let Some((pos, look)) = args.camera {
         camera.position = glam::DVec3::from_array(pos);

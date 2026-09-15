@@ -31,6 +31,8 @@ pub struct Args {
     /// Scripted play before a headless capture.
     pub demo: Option<crate::demo::Demo>,
     pub quality: mc2_render::quality::Preset,
+    /// Time of day in hours; headless runs freeze the clock there.
+    pub time: Option<f64>,
 }
 
 impl Default for Args {
@@ -49,6 +51,7 @@ impl Default for Args {
             camera: None,
             demo: None,
             quality: mc2_render::quality::Preset::UltraRealistic,
+            time: None,
         }
     }
 }
@@ -66,6 +69,7 @@ usage: minecraft-2 [options]
   --world <dir>          world directory (default worlds/default)
   --camera x,y,z,lx,ly,lz  headless camera position and look-at target (m)
   --demo build           scripted building before a headless capture
+  --time <hours>         time of day, e.g. 6.5 or 22 (headless: frozen)
   --quality <tier>       0 Realistic, 1 Hyper Realistic, 2 Ultra Realistic
                          (default), 3 Super Ultra Crazy Duper Realistic
   --view <n>             debug view: 0 shaded, 1 LOD hits, 2 march iterations";
@@ -117,6 +121,15 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 }
                 out.camera = Some(([v[0], v[1], v[2]], [v[3], v[4], v[5]]));
             }
+            "--time" => {
+                let v: f64 = value("--time")?
+                    .parse()
+                    .map_err(|e| format!("--time: {e}"))?;
+                if !(0.0..=24.0).contains(&v) {
+                    return Err("--time expects hours in 0..=24".into());
+                }
+                out.time = Some(v);
+            }
             "--quality" => {
                 let v = value("--quality")?;
                 out.quality = mc2_render::quality::Preset::parse(&v)
@@ -163,6 +176,8 @@ mod tests {
             Preset::SuperUltraCrazyDuperRealistic
         );
         assert!(p("--quality low").is_err());
+        assert_eq!(p("--time 21.5").unwrap().time, Some(21.5));
+        assert!(p("--time 25").is_err());
     }
 
     #[test]

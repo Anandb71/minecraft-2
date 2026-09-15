@@ -3,7 +3,7 @@
 
 use glam::DVec3;
 use mc2_game::{Game, Streaming, Voxels};
-use mc2_render::camera::Camera;
+use mc2_render::camera::{Camera, Celestial};
 use mc2_worldgen::chunkgen::ChunkGenerator;
 use mc2_worldgen::stream::{ChunkStreamer, StreamConfig, StreamStats};
 use mc2_worldgen::terrain::{CoarseTerrain, TerrainParams};
@@ -86,6 +86,21 @@ impl TerrainLoader {
 }
 
 /// Streams chunks around `camera` into the game's voxel world.
+/// The renderer's view of the sky from the world clock.
+pub fn celestial(game: &Game) -> Celestial {
+    let clock = game.world.resource::<mc2_game::clock::WorldClock>();
+    let sky = clock.sky();
+    Celestial {
+        sun_dir: sky.sun_dir,
+        sun_illuminance: glam::Vec3::splat(sky.sun_illuminance),
+        moon_dir: sky.moon_dir,
+        moon_illuminance: sky.moon_illuminance,
+        moon_phase: sky.moon_phase,
+        star_rotation: sky.sidereal_angle,
+        latitude: clock.latitude.to_radians() as f32,
+    }
+}
+
 pub fn stream(game: &mut Game, camera: DVec3) {
     game.world
         .resource_scope(|world, mut streaming: bevy_ecs::prelude::Mut<Streaming>| {

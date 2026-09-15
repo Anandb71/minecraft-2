@@ -229,6 +229,7 @@ impl App {
         let renderer = &mut r.renderer;
         renderer.frame.time = self.start.elapsed().as_secs_f32();
         renderer.debug_mode = self.debug_mode;
+        renderer.celestial = crate::world::celestial(&self.game);
         {
             let mut voxels = self.game.world.resource_mut::<mc2_game::Voxels>();
             renderer.prepare(&r.gpu, &mut voxels.0, &self.camera, dt);
@@ -263,13 +264,20 @@ impl App {
                     s.tree_mb,
                     s.voxel_mb
                 ),
-                format!(
-                    "pos {:.1} {:.1} {:.1}  quality {} (F6)",
-                    p.x,
-                    p.y,
-                    p.z,
-                    self.quality.name()
-                ),
+                {
+                    let clock = self.game.world.resource::<mc2_game::clock::WorldClock>();
+                    let hour = clock.hour();
+                    format!(
+                        "pos {:.1} {:.1} {:.1}  quality {} (F6)  time {:02}:{:02}{} ([ ] T)",
+                        p.x,
+                        p.y,
+                        p.z,
+                        self.quality.name(),
+                        hour.floor() as u32,
+                        (hour.fract() * 60.0).floor() as u32,
+                        if clock.paused { " paused" } else { "" }
+                    )
+                },
                 format!(
                     "click capture  WASD move  space jump  ctrl crouch  shift sprint  F fly  F5 view  Tab mode  1-9 slot  F3 HUD  F4 view {}  V vsync {}",
                     self.debug_mode,
@@ -335,6 +343,19 @@ impl App {
             KeyCode::KeyV => {
                 self.vsync = !self.vsync;
                 self.reconfigure();
+            }
+            KeyCode::KeyT => {
+                let mut clock = self.game.clock();
+                clock.paused = !clock.paused;
+            }
+            KeyCode::BracketLeft | KeyCode::BracketRight => {
+                let step = if code == KeyCode::BracketLeft {
+                    -1.0
+                } else {
+                    1.0
+                };
+                // Step through midnight into the next or previous day.
+                self.game.clock().days += step / 24.0;
             }
             _ => {}
         }
