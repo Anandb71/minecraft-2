@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: fmt, clippy, test (linux, lavapipe)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test
+        env:
+          MC2_FORCE_FALLBACK: "1"
+          MC2_SKIP_GOLDEN: "1"
+        run: cargo test --workspace
+
+  golden:
+    name: golden images (windows, WARP)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: golden image tests
+        env:
+          MC2_REQUIRE_GPU: "1"
+          MC2_FORCE_FALLBACK: "1"
+          MC2_BACKEND: dx12
+        run: cargo test -p mc2-render --test golden
+      - name: upload diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-out
+          path: target/golden-out
