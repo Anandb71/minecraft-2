@@ -21,6 +21,8 @@ pub struct Args {
     pub software: bool,
     /// Draw the profiler overlay into headless captures.
     pub hud: bool,
+    /// Renderer debug view index.
+    pub debug_view: u32,
 }
 
 impl Default for Args {
@@ -32,6 +34,7 @@ impl Default for Args {
             size: (1280, 720),
             software: false,
             hud: false,
+            debug_view: 0,
         }
     }
 }
@@ -43,7 +46,8 @@ usage: minecraft-2 [options]
   --frames <n>           frames to render (headless default 120; window exits)
   --size <w>x<h>         headless resolution (default 1280x720)
   --software             use the software adapter (WARP / lavapipe)
-  --hud                  draw the profiler overlay into captures";
+  --hud                  draw the profiler overlay into captures
+  --view <n>             debug view: 0 shaded, 1 LOD hits";
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut out = Args::default();
@@ -69,6 +73,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             }
             "--software" => out.software = true,
             "--hud" => out.hud = true,
+            "--view" => {
+                out.debug_view = value("--view")?
+                    .parse()
+                    .map_err(|e| format!("--view: {e}"))?
+            }
             "-h" | "--help" => return Err(USAGE.to_owned()),
             other => return Err(format!("unknown argument `{other}`\n{USAGE}")),
         }

@@ -7,6 +7,8 @@
 use mc2_gpu::capture::{GoldenTolerance, check_golden, read_rgba8};
 use mc2_gpu::{Gpu, GpuOptions};
 use mc2_render::Renderer;
+use mc2_render::renderer::{RenderMode, RendererOptions};
+use mc2_render::voxel_gpu::GpuWorldConfig;
 use std::path::PathBuf;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -61,7 +63,20 @@ fn calibration_display_transform() {
         return;
     };
     let size = (320, 180);
-    let mut renderer = Renderer::new(&gpu, FORMAT, size);
+    let mut renderer = Renderer::new(
+        &gpu,
+        FORMAT,
+        size,
+        RendererOptions {
+            mode: RenderMode::Calibration,
+            world: GpuWorldConfig {
+                tree_words: 1 << 16,
+                voxel_words: 1 << 16,
+                ..Default::default()
+            },
+            render_scale: 1.0,
+        },
+    );
     renderer.frame.time = 1.0;
     let rgba = render(&gpu, &mut renderer, size, 1);
     let result = check_golden(

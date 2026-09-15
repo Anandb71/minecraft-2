@@ -37,8 +37,9 @@ impl Camera {
         )
     }
 
+    /// Screen-right in a right-handed, y-up world.
     pub fn right(&self) -> Vec3 {
-        Vec3::new(self.yaw.cos(), 0.0, -self.yaw.sin())
+        Vec3::new(-self.yaw.cos(), 0.0, self.yaw.sin())
     }
 
     /// Camera-relative view matrix (no translation).
@@ -179,6 +180,8 @@ mod tests {
         let want = Vec3::new(3.0, 4.0, -5.0).normalize();
         assert!((c.forward() - want).length() < 1e-5);
         assert!(c.right().dot(c.forward()).abs() < 1e-5);
+        // Right-handed: forward x right points down.
+        assert!(c.forward().cross(c.right()).y < 0.0);
     }
 
     #[test]

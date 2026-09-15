@@ -36,6 +36,7 @@ mc2-voxel = { path = "crates/mc2-voxel" }
 mc2-core.workspace = true
 mc2-gpu.workspace = true
 mc2-render.workspace = true
+mc2-voxel.workspace = true
 wgpu.workspace = true
 winit.workspace = true
 glam.workspace = true

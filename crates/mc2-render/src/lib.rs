@@ -2,11 +2,13 @@
 
 pub mod calibration;
 pub mod camera;
+pub mod debug_shade;
 pub mod frame;
 pub mod hud;
 pub mod overlay;
 pub mod present;
 pub mod renderer;
+pub mod vis;
 pub mod voxel_gpu;
 
 pub use frame::FrameCtx;

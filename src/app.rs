@@ -1,16 +1,24 @@
-//! Windowed application: event loop, surface management, frame pacing.
+//! Windowed application: event loop, surface management, input, frame pacing.
 
+use crate::flycam::{FlyCam, Input};
+use crate::scene;
+use glam::Vec2;
 use mc2_core::RollingStats;
 use mc2_gpu::{Gpu, GpuOptions};
 use mc2_render::Renderer;
+use mc2_render::camera::Camera;
 use mc2_render::overlay::{OverlayInput, draw_profiler};
+use mc2_render::renderer::RendererOptions;
+use mc2_voxel::world::VoxelWorld;
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::{
+    DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorGrabMode, Window, WindowId};
 
 struct Running {
     window: Arc<Window>,
@@ -22,11 +30,17 @@ struct Running {
 
 pub struct App {
     running: Option<Running>,
+    world: VoxelWorld,
+    camera: Camera,
+    flycam: FlyCam,
+    input: Input,
+    grabbed: bool,
     start: Instant,
     last_frame: Instant,
     frame_ms: RollingStats,
     show_profiler: bool,
     vsync: bool,
+    debug_mode: u32,
     error: Option<String>,
     exit_after: Option<u32>,
     frames: u32,
@@ -34,13 +48,20 @@ pub struct App {
 
 impl App {
     fn new(exit_after: Option<u32>) -> Self {
+        let (world, camera) = scene::demo();
         Self {
             running: None,
+            world,
+            camera,
+            flycam: FlyCam::default(),
+            input: Input::default(),
+            grabbed: false,
             start: Instant::now(),
             last_frame: Instant::now(),
             frame_ms: RollingStats::default(),
             show_profiler: true,
             vsync: true,
+            debug_mode: 0,
             error: None,
             exit_after,
             frames: 0,
@@ -79,7 +100,12 @@ impl App {
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
         surface.configure(&gpu.device, &config);
-        let renderer = Renderer::new(&gpu, format, (config.width, config.height));
+        let renderer = Renderer::new(
+            &gpu,
+            format,
+            (config.width, config.height),
+            RendererOptions::default(),
+        );
         self.running = Some(Running {
             window,
             surface,
@@ -102,20 +128,47 @@ impl App {
         }
     }
 
+    fn set_grab(&mut self, grab: bool) {
+        let Some(r) = &self.running else {
+            return;
+        };
+        if grab {
+            let ok = r
+                .window
+                .set_cursor_grab(CursorGrabMode::Locked)
+                .or_else(|_| r.window.set_cursor_grab(CursorGrabMode::Confined))
+                .is_ok();
+            r.window.set_cursor_visible(!ok);
+            self.grabbed = ok;
+        } else {
+            let _ = r.window.set_cursor_grab(CursorGrabMode::None);
+            r.window.set_cursor_visible(true);
+            self.grabbed = false;
+            self.input.release_all();
+        }
+    }
+
     fn frame(&mut self, event_loop: &ActiveEventLoop) {
         self.frames += 1;
         if self.exit_after.is_some_and(|n| self.frames > n) {
             event_loop.exit();
             return;
         }
+        let now = Instant::now();
+        let dt = (now - self.last_frame).as_secs_f32();
+        self.frame_ms.push(dt * 1000.0);
+        self.last_frame = now;
+
+        {
+            mc2_core::scope!("game.update");
+            self.flycam
+                .update(&mut self.camera, &self.input, dt.min(0.1), self.grabbed);
+            self.input.clear_frame();
+        }
+
         let Some(r) = &mut self.running else {
             return;
         };
-        let now = Instant::now();
-        self.frame_ms
-            .push((now - self.last_frame).as_secs_f32() * 1000.0);
-        self.last_frame = now;
-
         let surface_tex = match r.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
@@ -128,23 +181,41 @@ impl App {
 
         let renderer = &mut r.renderer;
         renderer.frame.time = self.start.elapsed().as_secs_f32();
+        renderer.debug_mode = self.debug_mode;
+        renderer.prepare(&r.gpu, &mut self.world, &self.camera, dt);
         renderer.frame.hud.clear();
         if self.show_profiler {
             let cpu_rows = mc2_core::profiler::rows();
-            let extra = [format!(
-                "F3 profiler  V vsync ({})  Esc quit",
-                if self.vsync { "on" } else { "off" }
-            )];
+            let s = renderer.world.stats;
+            let p = self.camera.position;
+            let extra = [
+                format!(
+                    "chunks {}  bricks {}  +{} ({:.1} MB)  feedback {}  tree {:.1} MB  voxels {:.1} MB",
+                    s.chunks,
+                    s.bricks_resident,
+                    s.bricks_uploaded_last_frame,
+                    s.bytes_uploaded_last_frame as f32 / 1e6,
+                    s.feedback_requests_last_frame,
+                    s.tree_mb,
+                    s.voxel_mb
+                ),
+                format!(
+                    "pos {:.1} {:.1} {:.1}  speed {:.1} m/s",
+                    p.x, p.y, p.z, self.flycam.speed
+                ),
+                format!(
+                    "click look  WASD fly  wheel speed  F3 HUD  F4 view {}  V vsync {}  Esc release/quit",
+                    self.debug_mode,
+                    if self.vsync { "on" } else { "off" }
+                ),
+            ];
             let input = OverlayInput {
                 gpu: &renderer.profiler,
                 cpu: &cpu_rows,
                 frame_ms: &self.frame_ms,
                 adapter: &r.gpu.info.name,
                 resolution: renderer.output_size(),
-                render_resolution: mc2_render::renderer::render_size(
-                    renderer.output_size(),
-                    renderer.render_scale,
-                ),
+                render_resolution: renderer.render_size(),
                 extra: &extra,
             };
             let mut hud = std::mem::take(&mut renderer.frame.hud);
@@ -161,13 +232,28 @@ impl App {
     }
 
     fn key(&mut self, event_loop: &ActiveEventLoop, event: &KeyEvent) {
-        if event.state != ElementState::Pressed || event.repeat {
+        let PhysicalKey::Code(code) = event.physical_key else {
+            return;
+        };
+        if event.state == ElementState::Released {
+            self.input.release(code);
             return;
         }
-        match event.physical_key {
-            PhysicalKey::Code(KeyCode::Escape) => event_loop.exit(),
-            PhysicalKey::Code(KeyCode::F3) => self.show_profiler = !self.show_profiler,
-            PhysicalKey::Code(KeyCode::KeyV) => {
+        if event.repeat {
+            return;
+        }
+        self.input.press(code);
+        match code {
+            KeyCode::Escape => {
+                if self.grabbed {
+                    self.set_grab(false);
+                } else {
+                    event_loop.exit();
+                }
+            }
+            KeyCode::F3 => self.show_profiler = !self.show_profiler,
+            KeyCode::F4 => self.debug_mode = (self.debug_mode + 1) % 2,
+            KeyCode::KeyV => {
                 self.vsync = !self.vsync;
                 self.reconfigure();
             }
@@ -199,9 +285,29 @@ impl ApplicationHandler for App {
                     self.reconfigure();
                 }
             }
+            WindowEvent::Focused(false) => self.set_grab(false),
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } if !self.grabbed => self.set_grab(true),
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.input.scroll += match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
+                };
+            }
             WindowEvent::KeyboardInput { event, .. } => self.key(event_loop, &event),
             WindowEvent::RedrawRequested => self.frame(event_loop),
             _ => {}
+        }
+    }
+
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
+        if let DeviceEvent::MouseMotion { delta } = event
+            && self.grabbed
+        {
+            self.input.mouse_delta += Vec2::new(delta.0 as f32, delta.1 as f32);
         }
     }
 

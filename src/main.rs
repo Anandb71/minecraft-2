@@ -2,8 +2,10 @@
 
 mod app;
 mod cli;
+mod flycam;
 mod headless;
 mod logger;
+mod scene;
 
 fn main() {
     logger::init();
