@@ -83,6 +83,10 @@ pub struct FrameUniforms {
     pub lod_pixels: f32,
     pub beam: u32,
     pub _pad: [u32; 3],
+    pub sun_illuminance: [f32; 3],
+    pub sun_angular_radius: f32,
+    pub moon_dir: [f32; 3],
+    pub moon_illuminance: f32,
 }
 
 /// Halton (2,3) sequence, centred, for sub-pixel jitter.
@@ -116,6 +120,9 @@ pub struct FrameInputs {
     pub quality: u32,
     pub lod_pixels: f32,
     pub beam: bool,
+    pub sun_illuminance: Vec3,
+    pub moon_dir: Vec3,
+    pub moon_illuminance: f32,
 }
 
 impl FrameUniforms {
@@ -157,6 +164,10 @@ impl FrameUniforms {
             lod_pixels: i.lod_pixels,
             beam: u32::from(i.beam),
             _pad: [0; 3],
+            sun_illuminance: i.sun_illuminance.to_array(),
+            sun_angular_radius: 0.004_675,
+            moon_dir: i.moon_dir.normalize_or(Vec3::NEG_Y).to_array(),
+            moon_illuminance: i.moon_illuminance,
         }
     }
 
@@ -171,8 +182,8 @@ mod tests {
 
     #[test]
     fn uniform_block_matches_wgsl_size() {
-        // 3 mat4 (192) + 3 x 16 + 4 x vec2 (32) + 3 x 16, as laid out in frame.wgsl
-        assert_eq!(std::mem::size_of::<FrameUniforms>(), 320);
+        // 3 mat4 (192) + 3 x 16 + 4 x vec2 (32) + 5 x 16, as laid out in frame.wgsl
+        assert_eq!(std::mem::size_of::<FrameUniforms>(), 352);
     }
 
     #[test]
@@ -212,6 +223,9 @@ mod tests {
             quality: 0,
             lod_pixels: 1.0,
             beam: false,
+            sun_illuminance: Vec3::ONE,
+            moon_dir: Vec3::NEG_Y,
+            moon_illuminance: 0.0,
         });
         let inv = Mat4::from_cols_array_2d(&u.inv_view_proj);
         let far = inv * glam::Vec4::new(0.0, 0.0, 0.5, 1.0);

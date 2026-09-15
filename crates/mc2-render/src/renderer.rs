@@ -52,6 +52,9 @@ pub struct Renderer {
     pub lod_pixels: f32,
     /// Start primary rays from the beam prepass distances.
     pub beam: bool,
+    pub sun_illuminance: Vec3,
+    pub moon_dir: Vec3,
+    pub moon_illuminance: f32,
 }
 
 pub fn render_size(output: (u32, u32), scale: f32) -> (u32, u32) {
@@ -132,6 +135,9 @@ impl Renderer {
             debug_mode: 0,
             lod_pixels: 1.0,
             beam: true,
+            sun_illuminance: Vec3::splat(100_000.0),
+            moon_dir: Vec3::new(-0.4, -0.8, -0.3),
+            moon_illuminance: 0.3,
         }
     }
 
@@ -177,6 +183,9 @@ impl Renderer {
             quality: 0,
             lod_pixels: self.lod_pixels,
             beam: self.beam,
+            sun_illuminance: self.sun_illuminance,
+            moon_dir: self.moon_dir,
+            moon_illuminance: self.moon_illuminance,
         });
         self.prev_camera = Some(*camera);
     }
