@@ -9,7 +9,9 @@
 //! the torches in the room.
 
 use bytemuck::{Pod, Zeroable};
-use glam::{IVec3, Vec3};
+use glam::{DVec3, IVec3, Vec3};
+use mc2_core::FxHashMap;
+use mc2_gpu::{bind, bind_group, layout};
 use mc2_voxel::brick::VOXELS;
 use mc2_voxel::coords::{BRICK_VOXELS, ChunkPos};
 use mc2_voxel::material::MaterialId;
@@ -143,6 +145,154 @@ pub fn build_alias(weights: &[f32]) -> Vec<GpuAlias> {
         table[i].alias = i as u32;
     }
     table
+}
+
+pub struct LightRegistry {
+    slots: Vec<GpuLight>,
+    free: Vec<u32>,
+    by_chunk: FxHashMap<ChunkPos, Vec<u32>>,
+    dirty: bool,
+    built_at: Option<DVec3>,
+    lights: wgpu::Buffer,
+    alias: wgpu::Buffer,
+    capacity: usize,
+    pub layout: wgpu::BindGroupLayout,
+    pub bind_group: wgpu::BindGroup,
+    /// Lights beyond this distance get no candidates.
+    pub radius_m: f64,
+}
+
+impl LightRegistry {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let layout = layout(
+            device,
+            "lights",
+            wgpu::ShaderStages::COMPUTE,
+            &[bind::storage(true), bind::storage(true)],
+        );
+        let capacity = 1024;
+        let (lights, alias, bind_group) = Self::buffers(device, &layout, capacity);
+        Self {
+            slots: Vec::new(),
+            free: Vec::new(),
+            by_chunk: FxHashMap::default(),
+            dirty: true,
+            built_at: None,
+            lights,
+            alias,
+            capacity,
+            layout,
+            bind_group,
+            radius_m: 192.0,
+        }
+    }
+
+    fn buffers(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        capacity: usize,
+    ) -> (wgpu::Buffer, wgpu::Buffer, wgpu::BindGroup) {
+        let make = |label: &str, stride: usize| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: (capacity * stride) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let lights = make("lights", std::mem::size_of::<GpuLight>());
+        let alias = make("light alias table", std::mem::size_of::<GpuAlias>());
+        let bg = bind_group(
+            device,
+            "lights",
+            layout,
+            &[lights.as_entire_binding(), alias.as_entire_binding()],
+        );
+        (lights, alias, bg)
+    }
+
+    pub fn light_count(&self) -> usize {
+        self.slots.len() - self.free.len()
+    }
+
+    /// Replaces a chunk's emitters; `None` removes the chunk.
+    pub fn update_chunk(&mut self, pos: ChunkPos, tree: Option<&ChunkTree>) {
+        if let Some(old) = self.by_chunk.remove(&pos) {
+            for slot in old {
+                self.slots[slot as usize] = GpuLight::zeroed();
+                self.free.push(slot);
+            }
+            self.dirty = true;
+        }
+        let Some(tree) = tree else {
+            return;
+        };
+        let emitters = chunk_emitters(pos, tree);
+        if emitters.is_empty() {
+            return;
+        }
+        let mut slots = Vec::with_capacity(emitters.len());
+        for e in emitters {
+            let slot = match self.free.pop() {
+                Some(s) => {
+                    self.slots[s as usize] = e;
+                    s
+                }
+                None => {
+                    self.slots.push(e);
+                    self.slots.len() as u32 - 1
+                }
+            };
+            slots.push(slot);
+        }
+        self.by_chunk.insert(pos, slots);
+        self.dirty = true;
+    }
+
+    /// Rebuilds the alias table when lights changed or the camera moved.
+    pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, camera_m: DVec3) {
+        let moved = self.built_at.is_none_or(|p| p.distance(camera_m) > 8.0);
+        if !self.dirty && !moved {
+            return;
+        }
+        self.dirty = false;
+        self.built_at = Some(camera_m);
+        let n = self.slots.len().max(1);
+        if n > self.capacity {
+            self.capacity = n.next_power_of_two();
+            let (l, a, bg) = Self::buffers(device, &self.layout, self.capacity);
+            self.lights = l;
+            self.alias = a;
+            self.bind_group = bg;
+        }
+        let cam_v = camera_m * 16.0;
+        let radius_v = self.radius_m * 16.0;
+        let weights: Vec<f32> = self
+            .slots
+            .iter()
+            .map(|l| {
+                if l.count == 0 {
+                    return 0.0;
+                }
+                let e = Vec3::from_array(l.emission);
+                let lum = e.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+                let area = (l.count as f32).powf(2.0 / 3.0) * 6.0 / 256.0;
+                let d = (IVec3::from_array(l.voxel).as_dvec3() - cam_v).length();
+                if d > radius_v {
+                    return 0.0;
+                }
+                let d_m = (d / 16.0) as f32;
+                lum * area / (d_m * d_m).max(16.0)
+            })
+            .collect();
+        let mut lights = self.slots.clone();
+        if lights.is_empty() {
+            lights.push(GpuLight::zeroed());
+        }
+        let table = build_alias(if weights.is_empty() { &[0.0] } else { &weights });
+        queue.write_buffer(&self.lights, 0, bytemuck::cast_slice(&lights));
+        queue.write_buffer(&self.alias, 0, bytemuck::cast_slice(&table));
+    }
 }
 
 #[cfg(test)]
