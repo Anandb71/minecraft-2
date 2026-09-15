@@ -1,11 +1,25 @@
-// Sky-view LUT, per frame: sky luminance around the camera per unit sun
-// illuminance, in Hillaire's horizon-dense latitude mapping.
+// Sky-view LUT, per frame: sky luminance around the camera per unit
+// illuminance of one light (sun or moon), in Hillaire's horizon-dense
+// latitude mapping with longitude measured from that light.
 #import "frame.wgsl"
 #import "atmosphere.wgsl"
 
 @group(1) @binding(0) var transmittance_lut: texture_2d<f32>;
 @group(1) @binding(1) var multiscatter_lut: texture_2d<f32>;
 @group(1) @binding(2) var lut_sampler: sampler;
+@group(1) @binding(4) var<uniform> params: SkyParams;
+
+// Which light this dispatch integrates: 0 sun, 1 moon.
+struct SkyParams {
+    light: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
+fn light_dir() -> vec3<f32> {
+    return normalize(select(frame.sun_dir, frame.moon_dir, params.light == 1u));
+}
 @group(1) @binding(3) var out_lut: texture_storage_2d<rgba16float, write>;
 
 fn camera_height_km() -> f32 {
@@ -22,7 +36,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(size);
     let height = camera_height_km();
     let p = sky_view_params(uv, height);
-    let sun = normalize(frame.sun_dir);
+    let sun = light_dir();
     let sun_zenith = clamp(sun.y, -1.0, 1.0);
     // Local frame: sun in the XY plane.
     let sun_local = vec3<f32>(sqrt(max(0.0, 1.0 - sun_zenith * sun_zenith)), sun_zenith, 0.0);
