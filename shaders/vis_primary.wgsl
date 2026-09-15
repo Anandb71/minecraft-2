@@ -77,7 +77,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let t_m = hit.t / VOXELS_PER_METRE;
     let rel = dir * t_m;
     let motion = prev_uv(rel) - current_uv(rel);
-    let face = hit.axis * 2u + select(0u, 1u, normal[hit.axis] > 0.0);
+    // The face the ray entered through; an aggregate LOD normal can point
+    // the other way along this axis, so it is not used for the sign.
+    let face = hit.axis * 2u + select(0u, 1u, dir[hit.axis] < 0.0);
     textureStore(vis_id, id.xy, vec4<u32>(vec3<u32>(hit.voxel), hit.material | (face << 16u) | (hit.kind << 30u)));
     textureStore(vis_depth, id.xy, vec4<f32>(t_m));
     textureStore(vis_motion, id.xy, vec4<f32>(motion, oct_encode(normal)));
