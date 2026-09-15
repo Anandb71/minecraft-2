@@ -867,6 +867,7 @@ dependencies = [
  "log",
  "mc2-core",
  "mc2-gpu",
+ "mc2-voxel",
  "naga",
  "png",
  "wgpu",
