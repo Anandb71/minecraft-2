@@ -17,6 +17,11 @@ pub enum SizePolicy {
     /// Fraction of the display resolution.
     Output(f32),
     Fixed(u32, u32, u32),
+    /// One texel per `block` render pixels, plus `extra` (e.g. block corners).
+    RenderBlocks {
+        block: u32,
+        extra: u32,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -183,6 +188,11 @@ impl GraphResources {
                 width: w,
                 height: h,
                 depth_or_array_layers: d,
+            },
+            SizePolicy::RenderBlocks { block, extra } => wgpu::Extent3d {
+                width: self.render_size.0.div_ceil(block) + extra,
+                height: self.render_size.1.div_ceil(block) + extra,
+                depth_or_array_layers: 1,
             },
         }
     }
