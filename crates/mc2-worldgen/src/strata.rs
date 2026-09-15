@@ -31,6 +31,29 @@ pub struct Strata {
     fold: Perlin,
     region: Perlin,
     seed: u64,
+    /// Cumulative normalised layer tops for the first cycles, so a lookup
+    /// does no hashing. Deeper cycles fall back to computing them.
+    cycles: Vec<[f32; 8]>,
+}
+
+const CACHED_CYCLES: i32 = 16;
+
+fn cycle_bounds(seed: u64, cycle: i32) -> [f32; 8] {
+    let mut weights = [0.0f32; 8];
+    let mut total = 0.0;
+    for (j, &(_, frac)) in SEQUENCE.iter().enumerate() {
+        let jitter = 0.6 + 0.8 * hash_unit(hash3(cycle, j as i32, 0, seed));
+        weights[j] = frac * jitter;
+        total += weights[j];
+    }
+    let mut acc = 0.0;
+    let mut out = [0.0f32; 8];
+    for (o, w) in out.iter_mut().zip(weights) {
+        acc += w / total;
+        *o = acc;
+    }
+    out[7] = f32::INFINITY;
+    out
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +69,7 @@ impl Strata {
             fold: Perlin::new(seed ^ 0x5717_a7a0),
             region: Perlin::new(seed ^ 0x09e6_1011),
             seed,
+            cycles: (0..CACHED_CYCLES).map(|c| cycle_bounds(seed, c)).collect(),
         }
     }
 
@@ -73,7 +97,21 @@ impl Strata {
     }
 
     /// Layer containing warped elevation `yw` in column `(x, z)`.
+    fn pluton(&self, x: f32, z: f32) -> bool {
+        self.region.noise2(x / 400.0 + 91.0, z / 400.0 - 17.0) > 0.25
+    }
+
     fn layer_warped(&self, x: f32, yw: f32, z: f32, volcanism: f32, basement: f32) -> LayerRef {
+        self.layer_with(yw, volcanism, basement, || self.pluton(x, z))
+    }
+
+    fn layer_with(
+        &self,
+        yw: f32,
+        volcanism: f32,
+        basement: f32,
+        pluton: impl Fn() -> bool,
+    ) -> LayerRef {
         if yw < BEDROCK_M {
             return LayerRef {
                 index: 0,
@@ -83,32 +121,27 @@ impl Strata {
         if yw < basement {
             // Granite plutons intrude the gneiss. Constant along a column so
             // the monotonic index still identifies one material per column.
-            let pluton = self.region.noise2(x / 400.0 + 91.0, z / 400.0 - 17.0) > 0.25;
             return LayerRef {
                 index: 1,
-                material: if pluton { ids::GRANITE } else { ids::GNEISS },
+                material: if pluton() { ids::GRANITE } else { ids::GNEISS },
             };
         }
         let above = yw - basement;
         let cycle = (above / PERIOD_M).floor() as i32;
-        let mut t = above / PERIOD_M - cycle as f32;
+        let t = above / PERIOD_M - cycle as f32;
         // Per-cycle thickness variation, renormalised to the period.
-        let mut weights = [0.0f32; 8];
-        let mut total = 0.0;
-        for (j, &(_, frac)) in SEQUENCE.iter().enumerate() {
-            let jitter = 0.6 + 0.8 * hash_unit(hash3(cycle, j as i32, 0, self.seed));
-            weights[j] = frac * jitter;
-            total += weights[j];
-        }
-        let mut j = SEQUENCE.len() - 1;
-        for (k, w) in weights.iter().enumerate() {
-            let w = w / total;
-            if t < w {
-                j = k;
-                break;
+        let computed;
+        let bounds = match self.cycles.get(cycle as usize) {
+            Some(b) if cycle >= 0 => b,
+            _ => {
+                computed = cycle_bounds(self.seed, cycle);
+                &computed
             }
-            t -= w;
-        }
+        };
+        let j = bounds
+            .iter()
+            .position(|&top| t < top)
+            .unwrap_or(SEQUENCE.len() - 1);
         let mut material = SEQUENCE[j].0;
         if volcanism > 0.55 {
             // Flows replace the limestones; tuffs replace the chalk.
@@ -134,11 +167,10 @@ impl Strata {
     pub fn column(&self, x: f32, z: f32) -> Column<'_> {
         Column {
             strata: self,
-            x,
-            z,
             warp: self.warp(x, z),
             volcanism: self.volcanism(x, z),
             basement: self.basement_top(x, z),
+            pluton: self.pluton(x, z),
         }
     }
 
@@ -149,17 +181,17 @@ impl Strata {
 
 pub struct Column<'a> {
     strata: &'a Strata,
-    x: f32,
-    z: f32,
     warp: f32,
     volcanism: f32,
     basement: f32,
+    pluton: bool,
 }
 
 impl Column<'_> {
     pub fn layer(&self, y: f32) -> LayerRef {
+        let pluton = self.pluton;
         self.strata
-            .layer_warped(self.x, y + self.warp, self.z, self.volcanism, self.basement)
+            .layer_with(y + self.warp, self.volcanism, self.basement, || pluton)
     }
 }
 
