@@ -228,8 +228,8 @@ impl ChunkTree {
     pub fn from_dense(cells: &[u16], mut bricks: Vec<(u32, Brick)>) -> Self {
         assert_eq!(cells.len(), 64 * 64 * 64, "dense chunk must be 64^3 cells");
         let mut tree = Self::default();
-        bricks.sort_unstable_by_key(|(i, _)| *i);
-        let mut brick_iter = bricks.into_iter().peekable();
+        // Cells are visited in tree order, not index order: look bricks up.
+        let mut by_index: mc2_core::FxHashMap<u32, Brick> = bricks.drain(..).collect();
         let cell_at = |c: IVec3| (c.x + c.z * 64 + c.y * 4096) as usize;
         for a in 0..64u32 {
             let ca = child_coord(a) << 4;
@@ -242,9 +242,10 @@ impl ChunkTree {
                 for c in 0..64u32 {
                     let cc = cm + child_coord(c);
                     let index = cell_at(cc) as u32;
-                    let brick = match brick_iter.peek() {
-                        Some((i, _)) if *i == index => brick_iter.next().map(|(_, b)| b),
-                        _ => None,
+                    let brick = if by_index.is_empty() {
+                        None
+                    } else {
+                        by_index.remove(&index)
                     };
                     let cell = match brick {
                         Some(b) if b.is_empty() => Cell::Empty,
@@ -805,14 +806,21 @@ mod tests {
                 }
             }
         }
-        let mut brick = Brick::filled(ids::SAND);
-        brick.set(IVec3::ONE, ids::IRON_ORE);
-        let at = IVec3::new(10, 30, 40);
-        incremental.set_brick(at, brick.clone());
-        let built = ChunkTree::from_dense(
-            &dense,
-            vec![((at.x + at.z * 64 + at.y * 4096) as u32, brick)],
-        );
+        let mut bricks = Vec::new();
+        let spots = [
+            IVec3::new(10, 30, 40),
+            IVec3::new(63, 21, 0),
+            IVec3::new(0, 17, 63),
+            IVec3::new(33, 60, 2),
+        ];
+        for (k, at) in spots.into_iter().enumerate() {
+            let mut brick = Brick::filled(ids::SAND);
+            brick.set(IVec3::splat(k as i32), ids::IRON_ORE);
+            incremental.set_brick(at, brick.clone());
+            bricks.push(((at.x + at.z * 64 + at.y * 4096) as u32, brick));
+        }
+        let at = spots[0];
+        let built = ChunkTree::from_dense(&dense, bricks);
         for i in 0..20000 {
             let v = IVec3::new(
                 (next() % 512) as i32,
@@ -825,8 +833,8 @@ mod tests {
                 "voxel {v} (probe {i})"
             );
         }
-        let v = (at << 3) + IVec3::ONE;
-        assert_eq!(built.voxel(v), ids::IRON_ORE);
+        assert_eq!(built.voxel(at << 3), ids::IRON_ORE);
+        assert_eq!(built.brick_count(), incremental.brick_count());
         assert_eq!(
             built.uniform_nodes().len(),
             incremental.uniform_nodes().len()
