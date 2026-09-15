@@ -36,15 +36,22 @@ fn main() {
         let mut bytes = 0;
         let mut bricks = 0;
         let mut words = 0;
+        let mut flatten_s = 0.0;
         for &p in &positions {
             let tree = generator.generate(p, lod);
             bytes += tree.memory_bytes();
             bricks += tree.brick_count();
+            let f = Instant::now();
             words += mc2_voxel::gpu_layout::flatten_chunk(&tree, &|_| None)
                 .words
                 .len();
+            flatten_s += f.elapsed().as_secs_f64();
         }
         let ms = t.elapsed().as_secs_f64() * 1000.0 / positions.len() as f64;
+        println!(
+            "  flatten alone: {:.2} ms/chunk",
+            flatten_s * 1000.0 / positions.len() as f64
+        );
         println!(
             "{lod:?}: {ms:.2} ms/chunk single-threaded, {:.1} KB CPU, {:.1} KB tree words, {:.0} bricks per chunk",
             bytes as f64 / positions.len() as f64 / 1024.0,

@@ -75,30 +75,47 @@ pub fn pack_lod(lod: &Lod) -> u32 {
     u32::from(lod.material.0) | q(u) << 16 | q(v) << 22 | spread << 28
 }
 
-/// Material histogram small enough to live on the stack for most nodes.
-#[derive(Default)]
-struct Histogram(Vec<(MaterialId, u32)>);
+/// Material histogram on the stack. It keeps the eight largest entries; a
+/// ninth material replaces the smallest only if it outweighs it, which can
+/// misjudge the dominant material only when no material is dominant.
+#[derive(Default, Clone, Copy)]
+struct Histogram {
+    entries: [(MaterialId, u32); 8],
+    len: usize,
+}
 
 impl Histogram {
     fn add(&mut self, m: MaterialId, n: u32) {
         if m.is_air() || n == 0 {
             return;
         }
-        match self.0.iter_mut().find(|(k, _)| *k == m) {
-            Some((_, c)) => *c += n,
-            None => self.0.push((m, n)),
+        let used = &mut self.entries[..self.len];
+        if let Some(e) = used.iter_mut().find(|(k, _)| *k == m) {
+            e.1 += n;
+            return;
+        }
+        if self.len < self.entries.len() {
+            self.entries[self.len] = (m, n);
+            self.len += 1;
+            return;
+        }
+        let smallest = (0..self.len)
+            .min_by_key(|&i| self.entries[i].1)
+            .unwrap_or(0);
+        if n > self.entries[smallest].1 {
+            self.entries[smallest] = (m, n);
         }
     }
 
     fn merge(&mut self, other: &Histogram) {
-        for &(m, n) in &other.0 {
+        for &(m, n) in &other.entries[..other.len] {
             self.add(m, n);
         }
     }
 
     /// Dominant entry by voxel coverage, never by averaging colours.
     fn dominant(&self) -> MaterialId {
-        self.0
+        self.entries[..self.len]
             .iter()
             .max_by_key(|&&(m, n)| (n, std::cmp::Reverse(m.0)))
             .map_or(MaterialId(0), |&(m, _)| m)
@@ -225,14 +242,16 @@ pub fn flatten_chunk(tree: &ChunkTree, bricks: &impl BrickResidency) -> FlatChun
     // Children blocks are appended breadth first so a node's block is contiguous.
     let l2_block = words.len();
     words.resize(l2_block + tree.root.items.len() * NODE_WORDS, 0);
-    let mut l2_summaries = Vec::with_capacity(tree.root.items.len());
+    let mut l2_summaries = [(0u32, 0.0f32, Histogram::default()); 64];
+    let mut l2_summaries_len = 0;
     for (k, (i2, l2)) in tree.root.iter().enumerate() {
         let (words_l2, cov, hist) = flatten_l2(tree, l2, &mut words, &mut brick_leaves, bricks);
         words[l2_block + k * NODE_WORDS..l2_block + (k + 1) * NODE_WORDS]
             .copy_from_slice(&words_l2);
-        l2_summaries.push((i2, cov, hist));
+        l2_summaries[l2_summaries_len] = (i2, cov, hist);
+        l2_summaries_len += 1;
     }
-    let s = summarise(l2_summaries.into_iter());
+    let s = summarise(l2_summaries[..l2_summaries_len].iter().copied());
     let root = node_words(l2_block as u32, 0, tree.root.mask, &s.lod);
     words[..NODE_WORDS].copy_from_slice(&root);
     FlatChunk {
@@ -276,13 +295,15 @@ fn flatten_l2(
     };
     let block = words.len();
     words.resize(block + nodes.items.len() * NODE_WORDS, 0);
-    let mut summaries = Vec::with_capacity(nodes.items.len());
+    let mut summaries = [(0u32, 0.0f32, Histogram::default()); 64];
+    let mut summaries_len = 0;
     for (k, (i1, l1)) in nodes.iter().enumerate() {
         let (w, cov, hist) = flatten_l1(tree, l1, words, leaves, bricks);
         words[block + k * NODE_WORDS..block + (k + 1) * NODE_WORDS].copy_from_slice(&w);
-        summaries.push((i1, cov, hist));
+        summaries[summaries_len] = (i1, cov, hist);
+        summaries_len += 1;
     }
-    let s = summarise(summaries.into_iter());
+    let s = summarise(summaries[..summaries_len].iter().copied());
     (
         node_words(block as u32, 0, nodes.mask, &s.lod),
         s.coverage,
@@ -302,7 +323,8 @@ fn flatten_l1(
         L1::Cells(cells) => cells,
     };
     let block = words.len();
-    let mut summaries = Vec::with_capacity(cells.items.len());
+    let mut summaries = [(0u32, 0.0f32, Histogram::default()); 64];
+    let mut summaries_len = 0;
     for (i, &cell) in cells.iter() {
         let word = match cell {
             Cell::Empty => unreachable!("empty cells are absent from the mask"),
@@ -320,9 +342,10 @@ fn flatten_l1(
         };
         words.push(word);
         let (cov, hist) = cell_summary(tree, cell);
-        summaries.push((i, cov, hist));
+        summaries[summaries_len] = (i, cov, hist);
+        summaries_len += 1;
     }
-    let s = summarise(summaries.into_iter());
+    let s = summarise(summaries[..summaries_len].iter().copied());
     (
         node_words(block as u32, LEAF_PARENT, cells.mask, &s.lod),
         s.coverage,
