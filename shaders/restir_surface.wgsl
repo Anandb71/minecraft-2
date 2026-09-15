@@ -18,8 +18,7 @@ fn shading_at(pixel: vec2<i32>, id: vec4<u32>) -> Shading {
 
 fn face_of(id: vec4<u32>) -> vec3<f32> {
     let face_index = (id.w >> 16u) & 7u;
-    var f = vec3<f32>(0.0);
-    f[face_index / 2u] = select(-1.0, 1.0, (face_index & 1u) == 1u);
-    return f;
+    let sign = select(-1.0, 1.0, (face_index & 1u) == 1u);
+    return select(vec3<f32>(0.0), vec3<f32>(sign), axis_mask(face_index / 2u));
 }
 
