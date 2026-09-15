@@ -93,16 +93,49 @@ impl Renderer {
             wgpu::TextureFormat::Rgba16Float,
             1.0,
         ));
+        let mut exposure = None;
         let vis = match opts.mode {
             RenderMode::Calibration => {
                 graph.add_pass(Box::new(CalibrationPass::new(dev, &frame.shaders, scene)));
                 None
             }
             RenderMode::World => {
+                use crate::direct::{ComposePass, DirectTargets, HistoryPass, RestirPass, SunPass};
+                use crate::sky::{SkyFramePass, SkyLutPass, SkyTargets};
                 let vis = VisTargets::create(&mut graph);
+                let sky = SkyTargets::create(&mut graph);
+                let direct = DirectTargets::create(&mut graph);
                 graph.add_pass(Box::new(BeamPass::new(dev, &frame, vis.beam)));
                 graph.add_pass(Box::new(PrimaryVisPass::new(dev, &frame, vis)));
+                graph.add_pass(Box::new(SkyLutPass::new(dev, &frame, sky)));
+                graph.add_pass(Box::new(SkyFramePass::new(dev, &frame, sky)));
+                graph.add_pass(Box::new(SunPass::new(dev, &frame, vis, direct)));
+                graph.add_pass(Box::new(RestirPass::new(
+                    dev,
+                    &frame,
+                    &lights.layout,
+                    vis,
+                    direct,
+                )));
+                graph.add_pass(Box::new(ComposePass::new(
+                    dev, &frame, vis, direct, sky, scene,
+                )));
                 graph.add_pass(Box::new(DebugShadePass::new(dev, &frame, vis, scene)));
+                let exposure_targets = crate::direct::ExposurePass::targets(&mut graph);
+                graph.add_pass(Box::new(crate::direct::ExposurePass::new(
+                    dev,
+                    &frame,
+                    scene,
+                    exposure_targets,
+                )));
+                exposure = Some(exposure_targets.0);
+                graph.add_pass(Box::new(HistoryPass::new(vec![
+                    (exposure_targets.0, exposure_targets.1),
+                    (vis.id, direct.vis_id_prev),
+                    (direct.light_vis, direct.light_vis_prev),
+                    (direct.res_a1, direct.res_a_prev),
+                    (direct.res_b1, direct.res_b_prev),
+                ])));
                 Some(vis)
             }
         };
@@ -111,7 +144,7 @@ impl Renderer {
             &frame.shaders,
             scene,
             output,
-            None,
+            exposure,
             output_format,
         )));
         if let Some(vis) = vis {

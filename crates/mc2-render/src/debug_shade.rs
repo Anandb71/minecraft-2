@@ -55,6 +55,9 @@ impl Pass<FrameCtx> for DebugShadePass {
     }
 
     fn execute(&mut self, ctx: &mut PassContext<'_, FrameCtx>) {
+        if ctx.frame.uniforms.debug_mode == 0 {
+            return;
+        }
         let generation = ctx.graph.generation();
         if self
             .bind_group

@@ -135,6 +135,10 @@ fn world_debug_shade() {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
+    // Unlit material view: this golden pins the marcher and streaming, not
+    // lighting, whose accumulation depends on how many frames streaming took.
+    renderer.debug_mode = 3;
+    renderer.frame.auto_exposure = false;
     // Render until streaming is quiescent, so the image never depends on
     // how many bricks one frame happened to upload.
     let mut quiet = 0;
@@ -247,6 +251,8 @@ fn generated_terrain() {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
+    renderer.debug_mode = 3;
+    renderer.frame.auto_exposure = false;
     let mut quiet = 0;
     for _ in 0..300 {
         renderer.prepare(&gpu, &mut world, &camera, 1.0 / 60.0);
