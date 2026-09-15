@@ -496,12 +496,15 @@ impl GpuWorld {
     }
 
     /// Queues up to `limit` non-resident bricks within the proximity radius.
-    fn queue_proximity(&mut self, camera_m: DVec3, limit: usize) {
+    fn queue_proximity(&mut self, world: &VoxelWorld, camera_m: DVec3, limit: usize) {
+        if self.config.proximity_m <= 0.0 {
+            return;
+        }
         let cam_v = camera_m * VOXELS_PER_METRE;
         let r_v = self.config.proximity_m * VOXELS_PER_METRE;
         let mut found = Vec::new();
         for (pos, chunk) in &self.chunks {
-            if chunk.fully_resident {
+            if chunk.fully_resident || found.len() >= limit {
                 continue;
             }
             let min = pos.origin().as_dvec3();
@@ -509,8 +512,18 @@ impl GpuWorld {
             if cam_v.clamp(min, max).distance(cam_v) > r_v {
                 continue;
             }
-            for &(_, slot) in &chunk.leaves {
-                if !chunk.bricks.contains_key(&slot) {
+            let Some(tree) = world.chunk(*pos) else {
+                continue;
+            };
+            for (cell_pos, cell) in tree.cells() {
+                let mc2_voxel::tree::Cell::Brick(slot) = cell else {
+                    continue;
+                };
+                if chunk.bricks.contains_key(&slot) {
+                    continue;
+                }
+                let centre = min + (cell_pos * 8).as_dvec3() + 4.0;
+                if centre.distance(cam_v) <= r_v {
                     found.push((*pos, slot));
                     if found.len() >= limit {
                         break;
@@ -567,7 +580,7 @@ impl GpuWorld {
             }
         }
         if self.queue.len() < 4096 {
-            self.queue_proximity(camera_m, 4096);
+            self.queue_proximity(world, camera_m, 4096);
         }
 
         // Nearest requests first.
