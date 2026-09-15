@@ -156,6 +156,23 @@ pub fn run(args: &Args) -> Result<(), String> {
     }
     let elapsed = start.elapsed().as_secs_f32();
 
+    // MC2_DUMP=1 also writes intermediate lighting targets next to a capture.
+    if let Mode::Capture(path) = &args.mode
+        && std::env::var("MC2_DUMP").is_ok()
+    {
+        for (label, scale) in [
+            ("sky view", 20.0),
+            ("sky transmittance", 1.0),
+            ("sky multiscatter", 50.0),
+            ("light visibility", 1.0),
+            ("direct lights", 1.0),
+        ] {
+            if let Some(tex) = renderer.graph_texture(label) {
+                let name = format!("dump_{}.png", label.replace(' ', "_"));
+                dump_rgba16f(&gpu, tex, &path.with_file_name(name), scale)?;
+            }
+        }
+    }
     match &args.mode {
         Mode::Capture(path) => {
             let rgba = mc2_gpu::capture::read_rgba8(&gpu.device, &gpu.queue, &tex);
@@ -188,6 +205,38 @@ pub fn run(args: &Args) -> Result<(), String> {
         Mode::Window => unreachable!("headless::run called in window mode"),
     }
     Ok(())
+}
+
+/// Writes an rgba16float texture as a PNG, scaled and clamped, for debugging.
+fn dump_rgba16f(
+    gpu: &Gpu,
+    tex: &wgpu::Texture,
+    path: &std::path::Path,
+    scale: f32,
+) -> Result<(), String> {
+    let raw = mc2_gpu::capture::read_texture(&gpu.device, &gpu.queue, tex);
+    let half = |b: [u8; 2]| {
+        let h = u16::from_le_bytes(b);
+        let sign = if h >> 15 == 1 { -1.0 } else { 1.0 };
+        let e = i32::from((h >> 10) & 0x1f);
+        let m = f32::from(h & 0x3ff);
+        sign * match e {
+            0 => m / 1024.0 * 2f32.powi(-14),
+            31 => f32::INFINITY,
+            _ => (1.0 + m / 1024.0) * 2f32.powi(e - 15),
+        }
+    };
+    let size = tex.size();
+    let mut rgba = Vec::with_capacity(raw.len() / 2);
+    for px in raw.as_chunks::<8>().0 {
+        for c in 0..3 {
+            let v = half([px[c * 2], px[c * 2 + 1]]) * scale;
+            rgba.push((v.clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8);
+        }
+        rgba.push(255);
+    }
+    eprintln!("dump {} ({}x{})", path.display(), size.width, size.height);
+    mc2_gpu::capture::save_png(path, size.width, size.height, &rgba).map_err(|e| e.to_string())
 }
 
 fn print_report(renderer: &Renderer, frame_ms: &RollingStats, args: &Args, elapsed: f32) {
