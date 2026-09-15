@@ -10,6 +10,7 @@ pub mod hud;
 pub mod lights;
 pub mod overlay;
 pub mod present;
+pub mod quality;
 pub mod renderer;
 pub mod sky;
 pub mod vis;
