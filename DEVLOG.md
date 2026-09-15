@@ -120,3 +120,58 @@ surface bricks, about 400 bytes per brick including palette counts.
   They return on the GPU where `f32` makes them worth it.
 - Quantising bricks above 16 materials to the nearest material: lossy, and
   the wide fallback costs nothing for bricks that never need it.
+
+## Step 3: GPU marcher, visibility buffer, brick streaming (`v0.3-marcher`)
+
+**Built.**
+
+- `mc2-voxel::gpu_layout`: the GPU word format (D5) and chunk flattening.
+  LOD words take the dominant material by voxel coverage, never averaged
+  colour, and a normal from the occupancy gradient with a spread term.
+- `mc2-gpu::alloc::RangeAllocator`: segregated free lists over fixed
+  buffers, with exact classes for 89-word narrow bricks, 273-word wide
+  bricks and 128-word state blocks.
+- `mc2-render::voxel_gpu::GpuWorld`: tree and brick pools, chunk structure
+  upload on change, sector blocks holding copies of chunk roots under 128 m
+  nodes, feedback readback, nearest-first brick uploads within a byte budget.
+- `shaders/march.wgsl`: six tree levels from the 32 x 32 sector grid down to
+  brick cells, then subblocks and voxels. Empty 2x2x2 child groups are left
+  in one step. Non-resident data returns LOD hits and requests upload.
+- `vis.beam` and `vis.march` write the visibility buffer: world voxel id,
+  material, face and hit kind (`rgba32uint`), hit distance (`r32float`),
+  motion vectors and octahedral normal (`rgba16float`). Nothing is shaded
+  during traversal; `debug.shade` turns the buffer into a picture.
+- A free-flying camera, F4 debug views (shaded, LOD hits, iteration
+  heatmap), and a naga validation test so a broken WGSL edit fails CI
+  without a GPU.
+
+**Measured** (sample terrain, 960x540, integrated GPU, Vulkan):
+
+| Change | vis cost | iterations/ray |
+|---|---|---|
+| first working marcher | 132.4 ms | 51.2 |
+| state in locals, per-field stacks | 46.5 ms | 51.2 |
+| 2x2x2 empty group coalescing | 35.6 ms | 42.8 |
+| cached node mask | 34.6 ms | 42.8 |
+| beam prepass | 18.5 ms (2.2 + 16.3) | 17.6 |
+
+DX12 runs the same shaders (50.2 ms against 46.5 ms on Vulkan, measured
+before coalescing) after replacing dynamic-index vector writes that FXC
+cannot address.
+
+Correctness: the GPU visibility buffer matches the CPU reference marcher on
+every one of 1620 sampled pixels (voxel id, material, depth within 1 cm), and
+a golden image of the terrain renders on WARP in CI.
+
+Streaming: with proximity uploads off, 40 frames at 96x54 made 2297 of 39982
+bricks resident. The rest never cost GPU memory.
+
+At 1440p with 65% internal resolution the march covers about 3x this pixel
+count, roughly 55 ms here; scaled to the discrete target that is still above
+the 2.5 ms budget line. Remaining ideas, deferred to the optimisation pass:
+octant mirroring, skipping the sector and 128 m levels when the beam distance
+lands inside a known chunk, and half-resolution beams for secondary rays.
+
+**Rejected.** Disabling wgpu's loop bounding (3.4x slower on this driver);
+disabling bounds checks (no change, not worth `unsafe`); reprojected depth
+as a start distance (D7).
