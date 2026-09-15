@@ -145,7 +145,7 @@ fn sky_view_uv(view_height: f32, view_zenith_cos: f32, light_view_cos: f32, hits
     let beta = acos(cos_beta);
     let zenith_horizon = 3.14159265 - beta;
     var uv: vec2<f32>;
-    if hits_ground {
+    if !hits_ground {
         var c = acos(clamp(view_zenith_cos, -1.0, 1.0)) / zenith_horizon;
         c = 1.0 - sqrt(max(1.0 - c, 0.0));
         uv.y = c * 0.5;
