@@ -4,12 +4,14 @@
 struct PresentUniforms {
     exposure: f32,
     tonemap: u32,
-    _pad: vec2<f32>,
+    auto_exposure: u32,
+    _pad: f32,
 }
 
 @group(0) @binding(0) var<uniform> present: PresentUniforms;
 @group(0) @binding(1) var scene: texture_2d<f32>;
 @group(0) @binding(2) var linear_clamp: sampler;
+@group(0) @binding(3) var auto_exposure: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -28,7 +30,10 @@ fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
 
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
-    let hdr = textureSampleLevel(scene, linear_clamp, in.uv, 0.0).rgb * present.exposure;
+    // present.exposure is a manual multiplier on top of automatic exposure;
+    // the auto channel holds 1 until metering has run.
+    let metered = select(1.0, textureLoad(auto_exposure, vec2<i32>(0), 0).g, present.auto_exposure == 1u);
+    let hdr = textureSampleLevel(scene, linear_clamp, in.uv, 0.0).rgb * present.exposure * metered;
     var ldr = hdr;
     if present.tonemap == 1u {
         ldr = agx(hdr);
