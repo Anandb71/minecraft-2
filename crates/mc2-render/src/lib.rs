@@ -3,6 +3,7 @@
 pub mod calibration;
 pub mod camera;
 pub mod debug_shade;
+pub mod direct;
 pub mod frame;
 pub mod gizmo;
 pub mod hud;
