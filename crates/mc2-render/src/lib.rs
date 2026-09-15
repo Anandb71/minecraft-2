@@ -3,6 +3,7 @@
 pub mod calibration;
 pub mod frame;
 pub mod hud;
+pub mod overlay;
 pub mod present;
 pub mod renderer;
 
