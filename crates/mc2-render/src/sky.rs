@@ -189,3 +189,130 @@ impl Pass<FrameCtx> for SkyLutPass {
         );
     }
 }
+
+/// Per-frame sky-view LUT and aerial perspective volume.
+pub struct SkyFramePass {
+    t: SkyTargets,
+    view: HotCompute,
+    aerial: HotCompute,
+    view_layout: wgpu::BindGroupLayout,
+    aerial_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    groups: Option<(u64, wgpu::BindGroup, wgpu::BindGroup)>,
+}
+
+impl SkyFramePass {
+    pub fn new(device: &wgpu::Device, ctx: &FrameCtx, t: SkyTargets) -> Self {
+        let common = [bind::texture_2d(), bind::texture_2d(), bind::sampler(true)];
+        let view_layout = layout(
+            device,
+            "sky view",
+            wgpu::ShaderStages::COMPUTE,
+            &[common[0], common[1], common[2], bind::write_2d(FORMAT)],
+        );
+        let aerial_layout = layout(
+            device,
+            "sky aerial",
+            wgpu::ShaderStages::COMPUTE,
+            &[
+                common[0],
+                common[1],
+                common[2],
+                bind::storage_texture(
+                    FORMAT,
+                    wgpu::TextureViewDimension::D3,
+                    wgpu::StorageTextureAccess::WriteOnly,
+                ),
+            ],
+        );
+        Self {
+            t,
+            view: HotCompute::new(
+                device,
+                &ctx.shaders,
+                "sky_view.wgsl",
+                "main",
+                &[&ctx.frame_layout, &view_layout],
+            ),
+            aerial: HotCompute::new(
+                device,
+                &ctx.shaders,
+                "sky_aerial.wgsl",
+                "main",
+                &[&ctx.frame_layout, &aerial_layout],
+            ),
+            view_layout,
+            aerial_layout,
+            sampler: linear_clamp(device),
+            groups: None,
+        }
+    }
+}
+
+impl Pass<FrameCtx> for SkyFramePass {
+    fn name(&self) -> &'static str {
+        "sky.frame"
+    }
+
+    fn setup(&mut self, b: &mut PassBuilder<'_>) {
+        b.read(self.t.transmittance);
+        b.read(self.t.multiscatter);
+        b.write(self.t.sky_view);
+        b.write(self.t.aerial);
+    }
+
+    fn execute(&mut self, ctx: &mut PassContext<'_, FrameCtx>) {
+        let generation = ctx.graph.generation();
+        if self
+            .groups
+            .as_ref()
+            .is_none_or(|(g, _, _)| *g != generation)
+        {
+            let g = ctx.graph;
+            let luts = |out: TexHandle| {
+                [
+                    wgpu::BindingResource::TextureView(g.view(self.t.transmittance)),
+                    wgpu::BindingResource::TextureView(g.view(self.t.multiscatter)),
+                    wgpu::BindingResource::Sampler(&self.sampler),
+                    wgpu::BindingResource::TextureView(g.view(out)),
+                ]
+            };
+            let vg = bind_group(
+                ctx.device,
+                "sky view",
+                &self.view_layout,
+                &luts(self.t.sky_view),
+            );
+            let ag = bind_group(
+                ctx.device,
+                "sky aerial",
+                &self.aerial_layout,
+                &luts(self.t.aerial),
+            );
+            self.groups = Some((generation, vg, ag));
+        }
+        let (_, vg, ag) = self.groups.as_ref().expect("groups");
+        let (vg, ag) = (vg.clone(), ag.clone());
+        let frame_group = ctx.frame.frame_bind_group.clone();
+        let (sw, sh) = SKY_VIEW_SIZE;
+        let (aw, ah, ad) = AERIAL_SIZE;
+        let pv = self.view.get(ctx.device, &ctx.frame.shaders).clone();
+        let pa = self.aerial.get(ctx.device, &ctx.frame.shaders).clone();
+        dispatch_all(
+            ctx,
+            "sky.frame",
+            &[
+                (
+                    &pv,
+                    &[&frame_group, &vg],
+                    (sw.div_ceil(8), sh.div_ceil(8), 1),
+                ),
+                (
+                    &pa,
+                    &[&frame_group, &ag],
+                    (aw.div_ceil(4), ah.div_ceil(4), ad.div_ceil(4)),
+                ),
+            ],
+        );
+    }
+}
