@@ -1,0 +1,12 @@
+[package]
+name = "mc2-game"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mc2-core.workspace = true
+mc2-voxel.workspace = true
+mc2-worldgen.workspace = true
+bevy_ecs.workspace = true
+glam.workspace = true
