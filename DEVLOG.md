@@ -60,3 +60,63 @@ the discrete target. It is the first number to revisit in the optimisation pass.
 - Blocking timestamp readback: simple, but a `poll(Wait)` per frame hides
   exactly the GPU stalls the profiler exists to show.
 - Hardware golden references: see D3.
+
+## Step 2: Brickmap, 64-tree, palette compression, CPU reference marcher (`v0.2-brickmap`)
+
+**Read first.** Amanatides and Woo's DDA; Laine and Karras's ESVO for the
+contour and beam ideas deferred to LOD; Museth's HDDA talk (level-adaptive
+leapfrogging, re-initialised on descent); dubiousconst282's 64-tree guide and
+the VoxelRT benchmark table, which shaped D5.
+
+**Built.** New crate `mc2-voxel`.
+
+- `coords`: every unit is a power of two above the 6.25 cm voxel: 25 cm
+  subblock, 50 cm brick, 1 m block, 2 m and 8 m tree nodes, 32 m chunk, 128 m
+  and 512 m upper nodes. The world is 32 x 1 x 32 sectors, 16 384 m square
+  and 512 m tall, addressed in `i32` voxels.
+- `material`: 51 materials with render (albedo, roughness, metallic,
+  emission, IOR), structural (density, compressive and tensile strength,
+  hardness), thermal (conductivity, specific heat, ignition and melt points,
+  flammability) and acoustic (absorption) properties. Later systems read
+  these instead of inventing their own tables.
+- `brick::Brick`: palette slot 0 is air. Narrow bricks store 4-bit indices
+  inline (256 bytes); a seventeenth material promotes the brick to 8-bit
+  indices in a boxed wide variant, after first recycling slots whose voxel
+  count dropped to zero. Occupancy is eight `u64`, one per subblock.
+  `VoxelState` packs damage, wetness, temperature band and burn progress into
+  one byte, and the 512 byte state array exists only while some voxel is
+  non-default.
+- `tree::ChunkTree`: `Sparse64<T>` compact child arrays indexed by popcount,
+  three levels deep over brick cells. Setting a voxel in a uniform cell
+  materialises a brick; a brick that returns to one material collapses back
+  to a uniform cell, and emptied nodes are pruned upward. Dirty tracking
+  separates structure changes from brick content changes for upload.
+- `world::VoxelWorld`: FxHash map of chunk trees, voxel get/set across chunk
+  boundaries, `fill_box` that writes whole uniform cells inside the box and
+  edits only boundary bricks, `fill_sphere` returning changed voxels.
+- `march`: hierarchical DDA. Chunk grid, then 128/32/8 voxel tree levels,
+  then brick subblocks (skipped when their mask is zero), then voxels. Each
+  child DDA starts from its parent's entry time and locates its first cell by
+  clamping into bounds. Accepts a material predicate so audio and physics can
+  ignore foliage or glass.
+
+**Measured** (`cargo run --release -p mc2-voxel --example march_bench`,
+200 000 random rays, max 40 m, single thread):
+
+| Marcher | ns/ray | iterations/hit |
+|---|---|---|
+| hierarchical | 569 | 20.8 |
+| voxel walk | 6349 | 105.9 |
+
+Correctness: 3000 rays, a share of them axis-aligned or confined to a plane,
+agree with the voxel walk on voxel, distance (1e-9 m) and material.
+
+Memory: the sample terrain costs 17 MB for 2400 m^2 of fully detailed
+surface bricks, about 400 bytes per brick including palette counts.
+
+**Rejected.**
+- Mantissa bit tricks on the CPU: `f64` headroom makes plain floor-and-clamp
+  exact at world scale and keeps the reference marcher obviously correct.
+  They return on the GPU where `f32` makes them worth it.
+- Quantising bricks above 16 materials to the nearest material: lossy, and
+  the wide fallback costs nothing for bricks that never need it.
