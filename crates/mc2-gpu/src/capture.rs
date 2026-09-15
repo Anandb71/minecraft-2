@@ -2,16 +2,21 @@
 
 use std::path::Path;
 
-/// Blocking readback of an 8-bit RGBA or BGRA texture as tightly packed RGBA.
-pub fn read_rgba8(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Vec<u8> {
+/// Blocking readback of any uncompressed single-sample 2D texture as tightly
+/// packed rows (no alignment padding).
+pub fn read_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+) -> Vec<u8> {
     let size = texture.size();
     let (w, h) = (size.width, size.height);
-    let bgra = matches!(
-        texture.format(),
-        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-    );
+    let bpp = texture
+        .format()
+        .block_copy_size(None)
+        .expect("readable colour format");
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let bytes_per_row = (4 * w).div_ceil(align) * align;
+    let bytes_per_row = (bpp * w).div_ceil(align) * align;
     let staging = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("capture staging"),
         size: u64::from(bytes_per_row) * u64::from(h),
@@ -43,21 +48,29 @@ pub fn read_rgba8(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Te
         .expect("map callback")
         .expect("capture buffer mapping failed");
     let view = staging.get_mapped_range(..).expect("mapped capture range");
-    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    let row = (bpp * w) as usize;
+    let mut out = Vec::with_capacity(row * h as usize);
     for y in 0..h as usize {
         let start = y * bytes_per_row as usize;
-        let row = &view[start..start + 4 * w as usize];
-        if bgra {
-            for px in row.as_chunks::<4>().0 {
-                out.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
-            }
-        } else {
-            out.extend_from_slice(row);
-        }
+        out.extend_from_slice(&view[start..start + row]);
     }
     drop(view);
     staging.unmap();
     out
+}
+
+/// Blocking readback of an 8-bit RGBA or BGRA texture as RGBA.
+pub fn read_rgba8(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Vec<u8> {
+    let mut px = read_texture(device, queue, texture);
+    if matches!(
+        texture.format(),
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+    ) {
+        for p in px.as_chunks_mut::<4>().0 {
+            p.swap(0, 2);
+        }
+    }
+    px
 }
 
 pub fn save_png(path: &Path, w: u32, h: u32, rgba: &[u8]) -> std::io::Result<()> {

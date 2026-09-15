@@ -134,6 +134,11 @@ impl Renderer {
         render_size(self.output_size, self.render_scale)
     }
 
+    /// A frame graph texture by label, e.g. "vis id", for tests and tools.
+    pub fn graph_texture(&self, label: &str) -> Option<&wgpu::Texture> {
+        self.graph.resources().find(label)
+    }
+
     pub fn live_passes(&self) -> Vec<&'static str> {
         self.graph.live_passes()
     }

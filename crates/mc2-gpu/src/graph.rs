@@ -145,6 +145,14 @@ impl GraphResources {
         self.textures[t.0 as usize].extent
     }
 
+    /// Looks a texture up by label, for tests and debug readback.
+    pub fn find(&self, label: &str) -> Option<&wgpu::Texture> {
+        self.textures
+            .iter()
+            .find(|t| t.desc.label == label)
+            .and_then(|t| t.texture.as_ref())
+    }
+
     pub fn label(&self, t: TexHandle) -> &'static str {
         self.textures[t.0 as usize].desc.label
     }
