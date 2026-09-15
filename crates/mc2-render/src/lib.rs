@@ -7,6 +7,7 @@ pub mod hud;
 pub mod overlay;
 pub mod present;
 pub mod renderer;
+pub mod voxel_gpu;
 
 pub use frame::FrameCtx;
 pub use renderer::Renderer;
