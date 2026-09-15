@@ -465,6 +465,8 @@ impl ComposePass {
                 bind::texture(wgpu::TextureViewDimension::D3, true),
                 bind::sampler(true),
                 bind::write_2d(RGBA16F),
+                bind::texture_2d(),
+                bind::texture(wgpu::TextureViewDimension::D3, true),
             ],
         );
         let pipeline = HotCompute::new(
@@ -505,6 +507,8 @@ impl Pass<FrameCtx> for ComposePass {
         b.read(self.sky.transmittance);
         b.read(self.sky.sky_view);
         b.read(self.sky.aerial);
+        b.read(self.sky.sky_view_moon);
+        b.read(self.sky.aerial_moon);
         b.write(self.out);
     }
 
@@ -527,6 +531,12 @@ impl Pass<FrameCtx> for ComposePass {
             );
             r.push(wgpu::BindingResource::Sampler(&self.sampler));
             r.push(wgpu::BindingResource::TextureView(ctx.graph.view(self.out)));
+            r.push(wgpu::BindingResource::TextureView(
+                ctx.graph.view(self.sky.sky_view_moon),
+            ));
+            r.push(wgpu::BindingResource::TextureView(
+                ctx.graph.view(self.sky.aerial_moon),
+            ));
             self.group = Some((
                 generation,
                 bind_group(ctx.device, "shade compose", &self.bgl, &r),

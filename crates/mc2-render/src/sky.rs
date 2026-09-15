@@ -18,6 +18,9 @@ pub struct SkyTargets {
     pub multiscatter: TexHandle,
     pub sky_view: TexHandle,
     pub aerial: TexHandle,
+    /// Moon-lit counterparts, rendered only while moonlight matters.
+    pub sky_view_moon: TexHandle,
+    pub aerial_moon: TexHandle,
 }
 
 fn fixed(label: &'static str, w: u32, h: u32, d: u32) -> TextureDesc {
@@ -44,6 +47,10 @@ impl SkyTargets {
             multiscatter: graph.create_history(fixed("sky multiscatter", mw, mh, 1)),
             sky_view: graph.create_texture(fixed("sky view", sw, sh, 1)),
             aerial: graph.create_texture(fixed("sky aerial", aw, ah, ad)),
+            // History textures persist, so a skipped moon frame keeps valid
+            // (if stale) contents rather than whatever the graph reallocated.
+            sky_view_moon: graph.create_history(fixed("sky view moon", sw, sh, 1)),
+            aerial_moon: graph.create_history(fixed("sky aerial moon", aw, ah, ad)),
         }
     }
 }
@@ -190,7 +197,8 @@ impl Pass<FrameCtx> for SkyLutPass {
     }
 }
 
-/// Per-frame sky-view LUT and aerial perspective volume.
+/// Per-frame sky-view LUT and aerial perspective volume, for the sun and,
+/// at night, the moon.
 pub struct SkyFramePass {
     t: SkyTargets,
     view: HotCompute,
@@ -198,33 +206,56 @@ pub struct SkyFramePass {
     view_layout: wgpu::BindGroupLayout,
     aerial_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    groups: Option<(u64, wgpu::BindGroup, wgpu::BindGroup)>,
+    /// Light index uniforms: sun, moon.
+    params: [wgpu::Buffer; 2],
+    /// (generation, [sun view, sun aerial, moon view, moon aerial]).
+    groups: Option<(u64, [wgpu::BindGroup; 4])>,
 }
 
 impl SkyFramePass {
     pub fn new(device: &wgpu::Device, ctx: &FrameCtx, t: SkyTargets) -> Self {
-        let common = [bind::texture_2d(), bind::texture_2d(), bind::sampler(true)];
+        let luts = [bind::texture_2d(), bind::texture_2d(), bind::sampler(true)];
         let view_layout = layout(
             device,
             "sky view",
             wgpu::ShaderStages::COMPUTE,
-            &[common[0], common[1], common[2], bind::write_2d(FORMAT)],
+            &[
+                luts[0],
+                luts[1],
+                luts[2],
+                bind::write_2d(FORMAT),
+                bind::uniform(),
+            ],
         );
         let aerial_layout = layout(
             device,
             "sky aerial",
             wgpu::ShaderStages::COMPUTE,
             &[
-                common[0],
-                common[1],
-                common[2],
+                luts[0],
+                luts[1],
+                luts[2],
                 bind::storage_texture(
                     FORMAT,
                     wgpu::TextureViewDimension::D3,
                     wgpu::StorageTextureAccess::WriteOnly,
                 ),
+                bind::uniform(),
             ],
         );
+        let params = [0u32, 1].map(|light| {
+            let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("sky light params"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM,
+                mapped_at_creation: true,
+            });
+            buf.get_mapped_range_mut(..)
+                .expect("mapped at creation")
+                .copy_from_slice(bytemuck::cast_slice(&[light, 0, 0, 0]));
+            buf.unmap();
+            buf
+        });
         Self {
             t,
             view: HotCompute::new(
@@ -244,6 +275,7 @@ impl SkyFramePass {
             view_layout,
             aerial_layout,
             sampler: linear_clamp(device),
+            params,
             groups: None,
         }
     }
@@ -259,60 +291,57 @@ impl Pass<FrameCtx> for SkyFramePass {
         b.read(self.t.multiscatter);
         b.write(self.t.sky_view);
         b.write(self.t.aerial);
+        b.write(self.t.sky_view_moon);
+        b.write(self.t.aerial_moon);
     }
 
     fn execute(&mut self, ctx: &mut PassContext<'_, FrameCtx>) {
         let generation = ctx.graph.generation();
-        if self
-            .groups
-            .as_ref()
-            .is_none_or(|(g, _, _)| *g != generation)
-        {
+        if self.groups.as_ref().is_none_or(|(g, _)| *g != generation) {
             let g = ctx.graph;
-            let luts = |out: TexHandle| {
-                [
-                    wgpu::BindingResource::TextureView(g.view(self.t.transmittance)),
-                    wgpu::BindingResource::TextureView(g.view(self.t.multiscatter)),
-                    wgpu::BindingResource::Sampler(&self.sampler),
-                    wgpu::BindingResource::TextureView(g.view(out)),
-                ]
+            let group = |layout: &wgpu::BindGroupLayout, out: TexHandle, light: usize| {
+                bind_group(
+                    ctx.device,
+                    "sky frame",
+                    layout,
+                    &[
+                        wgpu::BindingResource::TextureView(g.view(self.t.transmittance)),
+                        wgpu::BindingResource::TextureView(g.view(self.t.multiscatter)),
+                        wgpu::BindingResource::Sampler(&self.sampler),
+                        wgpu::BindingResource::TextureView(g.view(out)),
+                        self.params[light].as_entire_binding(),
+                    ],
+                )
             };
-            let vg = bind_group(
-                ctx.device,
-                "sky view",
-                &self.view_layout,
-                &luts(self.t.sky_view),
-            );
-            let ag = bind_group(
-                ctx.device,
-                "sky aerial",
-                &self.aerial_layout,
-                &luts(self.t.aerial),
-            );
-            self.groups = Some((generation, vg, ag));
+            let groups = [
+                group(&self.view_layout, self.t.sky_view, 0),
+                group(&self.aerial_layout, self.t.aerial, 0),
+                group(&self.view_layout, self.t.sky_view_moon, 1),
+                group(&self.aerial_layout, self.t.aerial_moon, 1),
+            ];
+            self.groups = Some((generation, groups));
         }
-        let (_, vg, ag) = self.groups.as_ref().expect("groups");
-        let (vg, ag) = (vg.clone(), ag.clone());
+        let groups = self.groups.as_ref().expect("groups").1.clone();
         let frame_group = ctx.frame.frame_bind_group.clone();
         let (sw, sh) = SKY_VIEW_SIZE;
         let (aw, ah, ad) = AERIAL_SIZE;
+        let view_work = (sw.div_ceil(8), sh.div_ceil(8), 1);
+        let aerial_work = (aw.div_ceil(4), ah.div_ceil(4), ad.div_ceil(4));
         let pv = self.view.get(ctx.device, &ctx.frame.shaders).clone();
         let pa = self.aerial.get(ctx.device, &ctx.frame.shaders).clone();
-        dispatch_all(
-            ctx,
-            "sky.frame",
-            &[
-                (
-                    &pv,
-                    &[&frame_group, &vg],
-                    (sw.div_ceil(8), sh.div_ceil(8), 1),
-                ),
-                (
-                    &pa,
-                    &[&frame_group, &ag],
-                    (aw.div_ceil(4), ah.div_ceil(4), ad.div_ceil(4)),
-                ),
-            ],
-        );
+        let moon = ctx.frame.uniforms.sky_flags & crate::camera::SKY_MOON != 0;
+        let sets = [
+            [&frame_group, &groups[0]],
+            [&frame_group, &groups[1]],
+            [&frame_group, &groups[2]],
+            [&frame_group, &groups[3]],
+        ];
+        let jobs: [Job<'_>; 4] = [
+            (&pv, &sets[0], view_work),
+            (&pa, &sets[1], aerial_work),
+            (&pv, &sets[2], view_work),
+            (&pa, &sets[3], aerial_work),
+        ];
+        dispatch_all(ctx, "sky.frame", &jobs[..if moon { 4 } else { 2 }]);
     }
 }
