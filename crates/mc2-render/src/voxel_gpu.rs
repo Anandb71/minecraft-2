@@ -79,6 +79,7 @@ struct GpuChunk {
     root: [u32; 4],
     lod: Lod,
     fully_resident: bool,
+    tree_id: u64,
 }
 
 #[derive(Default)]
@@ -334,6 +335,23 @@ impl GpuWorld {
     }
 
     fn upload_structure(&mut self, queue: &wgpu::Queue, pos: ChunkPos, tree: &ChunkTree) {
+        // A different tree (regenerated at another level of detail) shares no
+        // brick slots with the old one: drop its bricks before flattening.
+        if self
+            .chunks
+            .get(&pos)
+            .is_some_and(|c| c.tree_id != tree.id())
+        {
+            let c = self.chunks.get_mut(&pos).expect("checked");
+            let bricks: Vec<BrickAlloc> = c.bricks.drain().map(|(_, b)| b).collect();
+            c.tree_id = tree.id();
+            for b in bricks {
+                self.voxel_alloc.free(b.range);
+                if let Some(s) = b.state {
+                    self.voxel_alloc.free(s);
+                }
+            }
+        }
         let existing = self.chunks.get(&pos);
         let residency = |slot: u32| {
             existing.and_then(|c| {
@@ -361,6 +379,7 @@ impl GpuWorld {
                 root: [0; 4],
                 lod: flat.lod,
                 fully_resident: false,
+                tree_id: tree.id(),
             },
         };
         chunk.bricks.retain(|slot, alloc| {

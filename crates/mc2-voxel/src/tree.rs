@@ -160,8 +160,11 @@ fn common_uniform<T>(
         .then_some(first)
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ChunkTree {
+    /// Unique per constructed tree, so GPU residency can tell a regenerated
+    /// chunk from an edited one (brick slab slots are not comparable).
+    id: u64,
     pub root: Sparse64<L2>,
     bricks: Vec<Brick>,
     free: Vec<u32>,
@@ -192,9 +195,27 @@ pub struct UniformNode {
     pub material: MaterialId,
 }
 
+impl Default for ChunkTree {
+    fn default() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self {
+            id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            root: Sparse64::default(),
+            bricks: Vec::new(),
+            free: Vec::new(),
+            dirty_bricks: Vec::new(),
+            structure_dirty: false,
+        }
+    }
+}
+
 impl ChunkTree {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     pub fn is_empty(&self) -> bool {
