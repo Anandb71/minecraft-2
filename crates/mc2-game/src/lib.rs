@@ -1,6 +1,7 @@
 //! Game layer: player, interaction, blocks, on a standalone bevy_ecs world.
 
 pub mod blocks;
+pub mod clock;
 pub mod collide;
 pub mod input;
 pub mod interact;
@@ -44,9 +45,10 @@ impl Game {
         world.insert_resource(blocks::BlockLayer::default());
         world.insert_resource(interact::Interaction::default());
         world.insert_resource(view::ViewCamera::default());
+        world.insert_resource(clock::WorldClock::default());
 
         let mut frame = Schedule::default();
-        frame.add_systems((player::look, player::toggles).chain());
+        frame.add_systems((clock::advance_clock, player::look, player::toggles).chain());
         let mut fixed = Schedule::default();
         fixed.add_systems(player::movement);
         let mut late = Schedule::default();
@@ -86,6 +88,14 @@ impl Game {
 
     pub fn input(&mut self) -> Mut<'_, input::Input> {
         self.world.resource_mut::<input::Input>()
+    }
+
+    pub fn clock(&mut self) -> Mut<'_, clock::WorldClock> {
+        self.world.resource_mut::<clock::WorldClock>()
+    }
+
+    pub fn sky(&self) -> clock::Sky {
+        self.world.resource::<clock::WorldClock>().sky()
     }
 
     pub fn view(&self) -> view::ViewCamera {
