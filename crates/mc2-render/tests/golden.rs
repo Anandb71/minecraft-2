@@ -18,6 +18,17 @@ fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../golden")
 }
 
+/// WARP devices are serialised: several world tests running at once
+/// exhausted the software adapter and crashed the process with an access
+/// violation, while each passes alone.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn software_gpu() -> Option<Gpu> {
     if std::env::var("MC2_SKIP_GOLDEN").is_ok_and(|v| v == "1") {
         eprintln!("MC2_SKIP_GOLDEN=1: references are rendered on WARP, skipping here");
@@ -60,6 +71,7 @@ fn render(gpu: &Gpu, renderer: &mut Renderer, size: (u32, u32), frames: u32) -> 
 
 #[test]
 fn calibration_display_transform() {
+    let _serial = serial();
     let Some(gpu) = software_gpu() else {
         return;
     };
@@ -98,6 +110,7 @@ fn calibration_display_transform() {
 
 #[test]
 fn world_debug_shade() {
+    let _serial = serial();
     let Some(gpu) = software_gpu() else {
         return;
     };
@@ -295,6 +308,7 @@ fn render_until_quiet(
 /// through the unlit material view.
 #[test]
 fn generated_terrain() {
+    let _serial = serial();
     let Some(gpu) = software_gpu() else {
         return;
     };
@@ -322,6 +336,7 @@ fn generated_terrain() {
 /// restarts the frame counter and accumulates a fixed number of frames so
 /// every random sequence and history length is the same on every run.
 fn lit_golden(name: &str, celestial: mc2_render::camera::Celestial, lantern: bool) {
+    let _serial = serial();
     let Some(gpu) = software_gpu() else {
         return;
     };
