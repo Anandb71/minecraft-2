@@ -236,3 +236,59 @@ tree order, not index order (caught by the chunk benchmark's brick count).
 **Rejected.** Noise-stack terrain (the brief), GPU erosion (D9), a separate
 far-terrain renderer (D10), and noise-worm caves: caves wait for karst
 dissolution in worldgen v2.
+
+## Step 5: Player, collision, carve and place (`v0.5-player`)
+
+**Built.** New crate `mc2-game` on standalone `bevy_ecs`: the voxel world,
+streaming, input, the fixed clock, the block layer and the interaction state
+are resources; the player is an entity with `Player` and `Body` components.
+Three schedules run per frame: look and toggles, then the fixed 120 Hz
+movement ticks that are due, then the view camera and interaction.
+
+- `collide`: boxes swept one axis at a time in steps shorter than a voxel,
+  snapping flush to the face they meet. Foliage and liquids do not block.
+- `player`: walk, sprint, crouch (standing only when there is headroom),
+  jump, fly. Ledges up to 0.55 m are climbed automatically with the camera
+  eased over the step; on 6.25 cm terrain that is most of walking.
+  Movement pauses over chunks that have not streamed in.
+- `blocks`: the macro layer. A generated block is its dominant material,
+  derived from voxels on demand, so natural terrain costs nothing; only
+  placed blocks with identity (torch, lantern, window, slab) are recorded.
+  Every block is a 16^3 voxel model.
+- `interact`: block mode breaks the targeted 1 m cell (its voxels go to the
+  inventory by material volume, so half a carved block is half a block of
+  stone) and places models against the targeted face; carve mode cuts or
+  deposits spheres of 1 to 16 voxels. Before an edit touches a brick cell
+  stored coarsely (buried rock), the generator restores its voxel detail, so
+  a tunnel wall shows real layer boundaries.
+- `view`: first person, or third person pulled in front of walls.
+- The renderer gained a gizmo pass for placement and carve previews that
+  dims where the marched depth hides them, and the app a crosshair and
+  hotbar HUD. `--demo build` drives the real systems with scripted input for
+  headless captures.
+
+**Measured.**
+
+| What | Cost |
+|---|---|
+| Flattening a full-detail chunk after an edit | 2.26 ms (was 5.62 ms before stack histograms) |
+| Scripted build demo, game.update | 1.00 ms mean, 16.0 ms worst frame |
+
+The first demo run found a 213.8 ms frame: a 15-voxel carve touched about 64
+coarse cells and resampled the chunk's surface and strata once per cell.
+Batching restoration per chunk brought the worst frame to 16.0 ms.
+
+Controller tests run against a voxel arena: lands flush at 10.000 m, climbs a
+0.5 m ledge, stops flush at a 1.5 m wall, jumps 1.16 m, stays crouched under
+a 1.5 m ceiling. An ECS integration test breaks a block through the full
+schedule and finds 4096 voxels of sandstone in the inventory.
+
+**Rejected.**
+- A capsule collider: smoother on slopes, but capsule against 6.25 cm voxels
+  needs per-voxel sphere tests where the box needs a range scan, and step-up
+  already smooths what the capsule would.
+- Explicit block ids for generated terrain: 32 768 ids per chunk that only
+  restate the voxels.
+- Physics-thread player movement: the player joins the 120 Hz physics thread
+  with rigid bodies in step 9; until then the same fixed clock runs on the
+  main thread.
