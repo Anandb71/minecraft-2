@@ -89,6 +89,51 @@ pub struct FrameUniforms {
     pub sun_angular_radius: f32,
     pub moon_dir: [f32; 3],
     pub moon_illuminance: f32,
+    pub moon_phase: f32,
+    pub star_rotation: f32,
+    pub latitude: f32,
+    pub sky_flags: u32,
+}
+
+/// `sky_flags` bit: the moon-lit sky LUTs are rendered this frame.
+pub const SKY_MOON: u32 = 1;
+
+/// Sun, moon and stars as seen from the world, in world axes (+X east, +Y up,
+/// -Z north). Illuminance is above the atmosphere, in lux.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Celestial {
+    pub sun_dir: Vec3,
+    pub sun_illuminance: Vec3,
+    pub moon_dir: Vec3,
+    pub moon_illuminance: f32,
+    /// 0 new moon, 0.5 full.
+    pub moon_phase: f32,
+    /// Star field rotation about the celestial pole, radians.
+    pub star_rotation: f32,
+    /// Observer latitude, radians; tilts the celestial pole.
+    pub latitude: f32,
+}
+
+impl Default for Celestial {
+    fn default() -> Self {
+        Self {
+            sun_dir: Vec3::new(0.4, 0.8, 0.3).normalize(),
+            sun_illuminance: Vec3::splat(127_500.0),
+            moon_dir: Vec3::new(-0.4, -0.8, -0.3).normalize(),
+            moon_illuminance: 0.32,
+            moon_phase: 0.5,
+            star_rotation: 0.0,
+            latitude: 47f32.to_radians(),
+        }
+    }
+}
+
+impl Celestial {
+    /// Whether moonlight is worth its own sky LUTs: the moon is up (or just
+    /// set, still lighting the upper atmosphere) and the sun is not.
+    pub fn moon_sky(&self) -> bool {
+        self.moon_illuminance > 0.0 && self.moon_dir.y > -0.25 && self.sun_dir.y < 0.05
+    }
 }
 
 /// Halton (2,3) sequence, centred, for sub-pixel jitter.
@@ -116,7 +161,7 @@ pub struct FrameInputs {
     pub time: f32,
     pub dt: f32,
     pub jitter: bool,
-    pub sun_dir: Vec3,
+    pub celestial: Celestial,
     pub exposure: f32,
     pub debug_mode: u32,
     pub restir_candidates: u32,
@@ -124,9 +169,6 @@ pub struct FrameInputs {
     pub beam: bool,
     pub trace_stride: u32,
     pub light_count: u32,
-    pub sun_illuminance: Vec3,
-    pub moon_dir: Vec3,
-    pub moon_illuminance: f32,
 }
 
 impl FrameUniforms {
@@ -160,7 +202,7 @@ impl FrameUniforms {
             output_size: [i.output_size.0 as f32, i.output_size.1 as f32],
             jitter: jitter.to_array(),
             prev_jitter: prev_jitter.to_array(),
-            sun_dir: i.sun_dir.normalize().to_array(),
+            sun_dir: i.celestial.sun_dir.normalize().to_array(),
             exposure: i.exposure,
             debug_mode: i.debug_mode,
             restir_candidates: i.restir_candidates,
@@ -170,10 +212,14 @@ impl FrameUniforms {
             trace_stride: i.trace_stride,
             light_count: i.light_count,
             _pad: 0,
-            sun_illuminance: i.sun_illuminance.to_array(),
+            sun_illuminance: i.celestial.sun_illuminance.to_array(),
             sun_angular_radius: 0.004_675,
-            moon_dir: i.moon_dir.normalize_or(Vec3::NEG_Y).to_array(),
-            moon_illuminance: i.moon_illuminance,
+            moon_dir: i.celestial.moon_dir.normalize_or(Vec3::NEG_Y).to_array(),
+            moon_illuminance: i.celestial.moon_illuminance,
+            moon_phase: i.celestial.moon_phase,
+            star_rotation: i.celestial.star_rotation,
+            latitude: i.celestial.latitude,
+            sky_flags: if i.celestial.moon_sky() { SKY_MOON } else { 0 },
         }
     }
 
@@ -188,8 +234,8 @@ mod tests {
 
     #[test]
     fn uniform_block_matches_wgsl_size() {
-        // 3 mat4 (192) + 3 x 16 + 4 x vec2 (32) + 5 x 16, as laid out in frame.wgsl
-        assert_eq!(std::mem::size_of::<FrameUniforms>(), 352);
+        // 3 mat4 (192) + 3 x 16 + 4 x vec2 (32) + 6 x 16, as laid out in frame.wgsl
+        assert_eq!(std::mem::size_of::<FrameUniforms>(), 368);
     }
 
     #[test]
@@ -223,7 +269,7 @@ mod tests {
             time: 0.0,
             dt: 0.0,
             jitter: false,
-            sun_dir: Vec3::Y,
+            celestial: Celestial::default(),
             exposure: 1.0,
             debug_mode: 0,
             restir_candidates: 32,
@@ -231,9 +277,6 @@ mod tests {
             beam: false,
             trace_stride: 1,
             light_count: 0,
-            sun_illuminance: Vec3::ONE,
-            moon_dir: Vec3::NEG_Y,
-            moon_illuminance: 0.0,
         });
         let inv = Mat4::from_cols_array_2d(&u.inv_view_proj);
         let far = inv * glam::Vec4::new(0.0, 0.0, 0.5, 1.0);

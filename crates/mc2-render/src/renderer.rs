@@ -1,7 +1,7 @@
 //! Owns the frame graph and drives one frame end to end.
 
 use crate::calibration::CalibrationPass;
-use crate::camera::{Camera, FrameInputs, FrameUniforms};
+use crate::camera::{Camera, Celestial, FrameInputs, FrameUniforms};
 use crate::debug_shade::DebugShadePass;
 use crate::frame::FrameCtx;
 use crate::hud::HudPass;
@@ -9,7 +9,6 @@ use crate::present::PresentPass;
 use crate::quality::Quality;
 use crate::vis::{BeamPass, PrimaryVisPass, VisTargets};
 use crate::voxel_gpu::{GpuWorld, GpuWorldConfig};
-use glam::Vec3;
 use mc2_gpu::{FrameGraph, Gpu, GpuProfiler, TexHandle, TextureDesc};
 use mc2_voxel::world::VoxelWorld;
 
@@ -48,13 +47,10 @@ pub struct Renderer {
     output_size: (u32, u32),
     quality: Quality,
     prev_camera: Option<Camera>,
-    pub sun_dir: Vec3,
+    pub celestial: Celestial,
     pub debug_mode: u32,
     /// Start primary rays from the beam prepass distances.
     pub beam: bool,
-    pub sun_illuminance: Vec3,
-    pub moon_dir: Vec3,
-    pub moon_illuminance: f32,
 }
 
 pub fn render_size(output: (u32, u32), scale: f32) -> (u32, u32) {
@@ -176,12 +172,9 @@ impl Renderer {
             output_size,
             quality: opts.quality,
             prev_camera: None,
-            sun_dir: Vec3::new(0.4, 0.8, 0.3),
+            celestial: Celestial::default(),
             debug_mode: 0,
             beam: true,
-            sun_illuminance: Vec3::splat(100_000.0),
-            moon_dir: Vec3::new(-0.4, -0.8, -0.3),
-            moon_illuminance: 0.3,
         }
     }
 
@@ -245,7 +238,7 @@ impl Renderer {
             time: self.frame.time,
             dt,
             jitter: false,
-            sun_dir: self.sun_dir,
+            celestial: self.celestial,
             exposure: self.frame.exposure,
             debug_mode: self.debug_mode,
             restir_candidates: self.quality.restir_candidates,
@@ -253,9 +246,6 @@ impl Renderer {
             beam: self.beam,
             trace_stride: self.quality.trace_stride,
             light_count: self.lights.sampled_len(),
-            sun_illuminance: self.sun_illuminance,
-            moon_dir: self.moon_dir,
-            moon_illuminance: self.moon_illuminance,
         });
         self.prev_camera = Some(*camera);
     }
