@@ -115,3 +115,71 @@ fn gpu_hits_match_cpu_reference() {
         "too many hit/miss mismatches"
     );
 }
+
+#[test]
+fn feedback_streams_visible_bricks_only() {
+    let Some(gpu) = mc2_gpu::device::test_gpu() else {
+        return;
+    };
+    let size = (96u32, 54u32);
+    let mut renderer = Renderer::new(
+        &gpu,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        size,
+        RendererOptions {
+            world: GpuWorldConfig {
+                tree_words: 1 << 20,
+                voxel_words: 4 << 20,
+                upload_budget: 400 * 356,
+                proximity_m: 0.0,
+            },
+            ..Default::default()
+        },
+    );
+    renderer.beam = false;
+    let mut world = rolling_terrain(&mut Rng(0x9e37_79b9_7f4a_7c15));
+    let total_bricks: usize = world.chunks().map(|(_, t)| t.brick_count()).sum();
+    let mut camera = Camera {
+        position: DVec3::new(6.3, 19.1, 4.7),
+        ..Default::default()
+    };
+    camera.look_at(DVec3::new(34.0, 12.0, 26.0));
+    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("target"),
+        size: wgpu::Extent3d {
+            width: size.0,
+            height: size.1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let mut resident = Vec::new();
+    let mut requested = 0;
+    for _ in 0..40 {
+        renderer.prepare(&gpu, &mut world, &camera, 0.016);
+        renderer.render(&gpu, target.clone());
+        gpu.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        resident.push(renderer.world.stats.bricks_resident);
+        requested += renderer.world.stats.feedback_requests_last_frame;
+    }
+    eprintln!(
+        "resident after 40 frames: {} of {total_bricks}, {requested} requests",
+        resident.last().unwrap()
+    );
+    assert_eq!(resident[0], 0, "nothing uploads before a ray asks");
+    assert!(requested > 0, "marcher never reported a non-resident brick");
+    assert!(resident.windows(2).all(|w| w[1] >= w[0]));
+    let last = *resident.last().unwrap();
+    assert!(last > 100, "only {last} bricks streamed");
+    assert!(
+        last < total_bricks / 2,
+        "{last} of {total_bricks} resident: streaming is not visibility driven"
+    );
+}
