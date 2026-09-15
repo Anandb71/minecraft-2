@@ -876,6 +876,7 @@ name = "mc2-voxel"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "mc2-core",
  "rayon",
 ]
 
