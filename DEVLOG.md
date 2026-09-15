@@ -175,3 +175,64 @@ lands inside a known chunk, and half-resolution beams for secondary rays.
 **Rejected.** Disabling wgpu's loop bounding (3.4x slower on this driver);
 disabling bounds checks (no change, not worth `unsafe`); reprojected depth
 as a start distance (D7).
+
+## Step 4: Worldgen v1, region streaming, LOD (`v0.4-worldgen`)
+
+**Read first.** Mei, Decaudin and Hu's virtual-pipe erosion (flux update,
+outflow scaling, velocity from flux, capacity from tilt and speed,
+semi-Lagrangian sediment transport, evaporation).
+
+**Built.** New crate `mc2-worldgen`, plus supporting work in the voxel crate.
+
+- Uniform 2 m and 8 m nodes in chunk trees and in the GPU layout: a solid
+  chunk is 64 material references instead of 262 144 cells. One-pass
+  construction from a dense cell array.
+- `noise`: seeded improved Perlin, fBm, ridged multifractal, Worley.
+- `strata`: a gneiss basement with granite plutons, a repeating sedimentary
+  cycle (conglomerate, sandstone, shale, limestone, chalk) with per-cycle
+  thickness jitter, regional dip and folds, and volcanic provinces where
+  basalt flows and rhyolite tuff replace limestone and chalk. The layer
+  index is monotonic in elevation so generation can prove a node is one rock.
+- `terrain` and `erosion`: a continent falling to sea at the world edge,
+  ridged mountain belts, broad hills, then Mei erosion over the whole 16 km
+  at 16 m with dissolving scaled by the hardness of whatever stratum is
+  currently exposed, the sea as a fixed reservoir, and thermal slumping.
+  Cached per seed (checksum, parameter fingerprint, atomic rename).
+- `amplify`: surface detail whose amplitude follows the coarse field (crags
+  on steep eroded slopes, swells on plains, almost none where discharge is
+  high) and surface materials from slope, altitude, sediment and water.
+- `chunkgen`: top-down generation. Uniform nodes wherever rock is one
+  stratum; voxel bricks only where the surface or an exposed boundary
+  crosses a cell; buried boundaries kept at cell resolution with
+  `detail_brick` to restore voxels when something digs there. Ore bodies
+  follow their host rock. Four levels of detail.
+- `stream`: distance bands with hysteresis, buried-chunk skipping, pinning of
+  edited chunks, rayon generation, budgeted inserts. GPU residency uploads
+  structure nearest-first within a budget using worker-prepared flattenings.
+- The app loads terrain in the background, spawns on open land facing the
+  highest nearby ground, and streams around the camera.
+
+**Measured** (integrated GPU, i5-13450HX):
+
+| What | Cost |
+|---|---|
+| World terrain, 1024^2 x 600 erosion iterations | 32.8 s once, 0.07 s from cache |
+| Full-detail surface chunk | 89 ms, 1.7 MB CPU, 164 KB tree words |
+| Cell / Node2 / Node8 chunk | 32 / 1.5 / 0.05 ms |
+| Streaming the spawn area (21 389 chunks) | 24 s on 16 threads |
+| voxel_gpu.update while streaming | 2.7 ms mean, 6.0 ms p99 |
+| vis.beam + vis.march, 1280x720, generated world | 5.1 + 29.8 ms |
+
+Chunk generation went 190 -> 187 ms with dense construction, then 187 -> 89
+ms by caching per-cycle layer bounds (every rock voxel had been hashing
+eight thickness jitters).
+
+Bugs found by measurement: the headless warm-up closed no profiler frames,
+so hundreds of frames' scopes summed into one "9 second frame"; a proximity
+scan that stopped at its limit was never repeated; and building trees from
+dense arrays briefly dropped 97% of bricks because children are visited in
+tree order, not index order (caught by the chunk benchmark's brick count).
+
+**Rejected.** Noise-stack terrain (the brief), GPU erosion (D9), a separate
+far-terrain renderer (D10), and noise-worm caves: caves wait for karst
+dissolution in worldgen v2.
