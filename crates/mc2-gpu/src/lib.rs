@@ -1,5 +1,6 @@
 //! GPU foundations: device, frame graph, shaders, timestamp profiling.
 
+pub mod capture;
 pub mod device;
 pub mod graph;
 pub mod pipeline;
