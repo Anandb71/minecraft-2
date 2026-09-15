@@ -383,6 +383,15 @@ impl ChunkGenerator {
         self.brick(&s, cell, pos.origin().y)
     }
 
+    /// `detail_brick` for many cells of one chunk, sampling the chunk once.
+    pub fn detail_bricks(&self, pos: ChunkPos, cells: &[IVec3]) -> Vec<Brick> {
+        let s = self.samples(pos);
+        cells
+            .iter()
+            .map(|&c| self.brick(&s, c, pos.origin().y))
+            .collect()
+    }
+
     fn brick(&self, s: &ChunkSamples<'_>, cell: IVec3, base_y: i32) -> Brick {
         let (bx, bz) = (cell.x as usize, cell.z as usize);
         let c00 = s.corner(bx, bz);

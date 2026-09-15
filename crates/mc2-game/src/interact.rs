@@ -154,6 +154,7 @@ pub fn edit_box(
     mut f: impl FnMut(IVec3, MaterialId) -> MaterialId,
 ) -> (FxHashMap<MaterialId, u64>, FxHashMap<MaterialId, u64>) {
     let mut chunks = FxHashSet::default();
+    let mut restore: FxHashMap<ChunkPos, Vec<IVec3>> = FxHashMap::default();
     let (lo_cell, hi_cell) = (min >> BRICK_SHIFT, max >> BRICK_SHIFT);
     for cz in lo_cell.z..=hi_cell.z {
         for cy in lo_cell.y..=hi_cell.y {
@@ -162,20 +163,26 @@ pub fn edit_box(
                 let pos = ChunkPos::of_voxel(cell_world << BRICK_SHIFT);
                 let local = cell_world - (pos.0 << (CHUNK_SHIFT - BRICK_SHIFT));
                 chunks.insert(pos);
-                if !touched.insert((pos, local)) {
+                if !touched.insert((pos, local)) || streamer.is_none() {
                     continue;
                 }
-                let Some(s) = streamer.as_ref() else {
-                    continue;
-                };
-                let Some(tree) = world.chunk(pos) else {
-                    continue;
-                };
-                if matches!(tree.cell(local), Cell::Uniform(_)) {
-                    let detail = s.generator().detail_brick(pos, local);
-                    if let Some(tree) = world.chunk_mut(pos) {
-                        tree.set_brick(local, detail);
-                    }
+                if world
+                    .chunk(pos)
+                    .is_some_and(|tree| matches!(tree.cell(local), Cell::Uniform(_)))
+                {
+                    restore.entry(pos).or_default().push(local);
+                }
+            }
+        }
+    }
+    // Coarse cells get their generated voxel detail back, one chunk sample
+    // pass per chunk however many cells the edit touches.
+    if let Some(s) = streamer.as_ref() {
+        for (pos, cells) in restore {
+            let bricks = s.generator().detail_bricks(pos, &cells);
+            if let Some(tree) = world.chunk_mut(pos) {
+                for (cell, brick) in cells.into_iter().zip(bricks) {
+                    tree.set_brick(cell, brick);
                 }
             }
         }
