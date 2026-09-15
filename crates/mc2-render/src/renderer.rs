@@ -6,6 +6,7 @@ use crate::debug_shade::DebugShadePass;
 use crate::frame::FrameCtx;
 use crate::hud::HudPass;
 use crate::present::PresentPass;
+use crate::quality::Quality;
 use crate::vis::{BeamPass, PrimaryVisPass, VisTargets};
 use crate::voxel_gpu::{GpuWorld, GpuWorldConfig};
 use glam::Vec3;
@@ -23,7 +24,7 @@ pub enum RenderMode {
 pub struct RendererOptions {
     pub mode: RenderMode,
     pub world: GpuWorldConfig,
-    pub render_scale: f32,
+    pub quality: Quality,
 }
 
 impl Default for RendererOptions {
@@ -31,7 +32,7 @@ impl Default for RendererOptions {
         Self {
             mode: RenderMode::World,
             world: GpuWorldConfig::default(),
-            render_scale: 1.0,
+            quality: Quality::default(),
         }
     }
 }
@@ -45,12 +46,10 @@ pub struct Renderer {
     output: TexHandle,
     pub output_format: wgpu::TextureFormat,
     output_size: (u32, u32),
-    /// Internal render resolution as a fraction of the display.
-    pub render_scale: f32,
+    quality: Quality,
     prev_camera: Option<Camera>,
     pub sun_dir: Vec3,
     pub debug_mode: u32,
-    pub lod_pixels: f32,
     /// Start primary rays from the beam prepass distances.
     pub beam: bool,
     pub sun_illuminance: Vec3,
@@ -83,7 +82,10 @@ impl Renderer {
             world.bind_group.clone(),
             lights.bind_group.clone(),
         );
-        let mut graph = FrameGraph::new(render_size(output_size, opts.render_scale), output_size);
+        let mut graph = FrameGraph::new(
+            render_size(output_size, opts.quality.render_scale),
+            output_size,
+        );
         let output = graph.declare_import(TextureDesc {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             ..TextureDesc::output_target("display", output_format)
@@ -172,11 +174,10 @@ impl Renderer {
             output,
             output_format,
             output_size,
-            render_scale: opts.render_scale,
+            quality: opts.quality,
             prev_camera: None,
             sun_dir: Vec3::new(0.4, 0.8, 0.3),
             debug_mode: 0,
-            lod_pixels: 1.0,
             beam: true,
             sun_illuminance: Vec3::splat(100_000.0),
             moon_dir: Vec3::new(-0.4, -0.8, -0.3),
@@ -186,8 +187,24 @@ impl Renderer {
 
     pub fn resize(&mut self, output_size: (u32, u32)) {
         self.output_size = output_size;
-        self.graph
-            .resize(render_size(output_size, self.render_scale), output_size);
+        self.graph.resize(
+            render_size(output_size, self.quality.render_scale),
+            output_size,
+        );
+    }
+
+    pub fn quality(&self) -> Quality {
+        self.quality
+    }
+
+    /// Applies quality settings, resizing internal targets if the render
+    /// scale changed.
+    pub fn set_quality(&mut self, quality: Quality) {
+        let rescale = quality.render_scale != self.quality.render_scale;
+        self.quality = quality;
+        if rescale {
+            self.resize(self.output_size);
+        }
     }
 
     pub fn output_size(&self) -> (u32, u32) {
@@ -195,7 +212,7 @@ impl Renderer {
     }
 
     pub fn render_size(&self) -> (u32, u32) {
-        render_size(self.output_size, self.render_scale)
+        render_size(self.output_size, self.quality.render_scale)
     }
 
     /// A frame graph texture by label, e.g. "vis id", for tests and tools.
@@ -231,9 +248,11 @@ impl Renderer {
             sun_dir: self.sun_dir,
             exposure: self.frame.exposure,
             debug_mode: self.debug_mode,
-            quality: 0,
-            lod_pixels: self.lod_pixels,
+            restir_candidates: self.quality.restir_candidates,
+            lod_pixels: self.quality.lod_pixels,
             beam: self.beam,
+            trace_stride: self.quality.trace_stride,
+            light_count: self.lights.sampled_len(),
             sun_illuminance: self.sun_illuminance,
             moon_dir: self.moon_dir,
             moon_illuminance: self.moon_illuminance,

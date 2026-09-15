@@ -7,6 +7,7 @@
 use mc2_gpu::capture::{GoldenTolerance, check_golden, read_rgba8};
 use mc2_gpu::{Gpu, GpuOptions};
 use mc2_render::Renderer;
+use mc2_render::quality::Quality;
 use mc2_render::renderer::{RenderMode, RendererOptions};
 use mc2_render::voxel_gpu::GpuWorldConfig;
 use std::path::PathBuf;
@@ -74,7 +75,10 @@ fn calibration_display_transform() {
                 voxel_words: 1 << 16,
                 ..Default::default()
             },
-            render_scale: 1.0,
+            quality: Quality {
+                render_scale: 1.0,
+                ..Default::default()
+            },
         },
     );
     renderer.frame.time = 1.0;
@@ -111,7 +115,10 @@ fn world_debug_shade() {
                 proximity_m: 1.0e4,
                 structure_budget_ms: f32::INFINITY,
             },
-            render_scale: 1.0,
+            quality: Quality {
+                render_scale: 1.0,
+                ..Default::default()
+            },
         },
     );
     let mut world =
@@ -234,7 +241,10 @@ fn generated_terrain() {
                 proximity_m: 1.0e4,
                 structure_budget_ms: f32::INFINITY,
             },
-            render_scale: 1.0,
+            quality: Quality {
+                render_scale: 1.0,
+                ..Default::default()
+            },
         },
     );
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {

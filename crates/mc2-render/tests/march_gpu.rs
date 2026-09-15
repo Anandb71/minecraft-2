@@ -4,6 +4,7 @@ use glam::{DVec3, IVec3, Mat4, Vec4};
 use mc2_gpu::capture::read_texture;
 use mc2_render::Renderer;
 use mc2_render::camera::Camera;
+use mc2_render::quality::Quality;
 use mc2_render::renderer::RendererOptions;
 use mc2_render::voxel_gpu::GpuWorldConfig;
 use mc2_voxel::march::raycast;
@@ -27,11 +28,16 @@ fn gpu_hits_match_cpu_reference() {
                 proximity_m: 1.0e4,
                 structure_budget_ms: f32::INFINITY,
             },
+            // Every brick is resident; disable sub-pixel LOD so both
+            // marchers see voxels.
+            quality: Quality {
+                render_scale: 1.0,
+                lod_pixels: 0.0,
+                ..Default::default()
+            },
             ..Default::default()
         },
     );
-    // Every brick is resident; disable sub-pixel LOD so both marchers see voxels.
-    renderer.lod_pixels = 0.0;
     let mut world = rolling_terrain(&mut Rng(0x9e37_79b9_7f4a_7c15));
     let mut camera = Camera {
         position: DVec3::new(6.3, 19.1, 4.7),
@@ -134,6 +140,10 @@ fn feedback_streams_visible_bricks_only() {
                 upload_budget: 400 * 356,
                 proximity_m: 0.0,
                 structure_budget_ms: f32::INFINITY,
+            },
+            quality: Quality {
+                render_scale: 1.0,
+                ..Default::default()
             },
             ..Default::default()
         },
