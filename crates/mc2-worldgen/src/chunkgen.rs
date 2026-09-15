@@ -205,11 +205,14 @@ impl ChunkGenerator {
         if bottom_m > self.max_height_over(pos) {
             return tree;
         }
+        if lod != Lod::Full {
+            return self.generate_coarse(pos, lod);
+        }
         let s = self.samples(pos);
         let base_y = pos.origin().y;
         for l2 in 0..64u32 {
             let c2 = IVec3::new((l2 & 3) as i32, (l2 >> 4 & 3) as i32, (l2 >> 2 & 3) as i32);
-            self.node(&mut tree, &s, lod, 2, c2 * 16, 16, base_y);
+            self.node(&mut tree, &s, 2, c2 * 16, 16, base_y);
         }
         if lod == Lod::Full {
             self.stamp_ores(&mut tree, pos);
@@ -217,16 +220,50 @@ impl ChunkGenerator {
         tree
     }
 
+    /// Coarse levels sample one surface column per node or cell and give
+    /// every vertical cell the material at its centre. Cost scales with the
+    /// number of columns: 4096 for `Cell`, 256 for `Node2`, 16 for `Node8`.
+    fn generate_coarse(&self, pos: ChunkPos, lod: Lod) -> ChunkTree {
+        let mut tree = ChunkTree::new();
+        let (cells, level) = match lod {
+            Lod::Cell => (1, 0),
+            Lod::Node2 => (4, 1),
+            _ => (16, 2),
+        };
+        let per_axis = 64 / cells;
+        let origin = pos.origin();
+        let size_m = cells as f32 * 0.5;
+        for cz in 0..per_axis {
+            for cx in 0..per_axis {
+                let x = origin.x as f32 * VOXEL_M + (cx as f32 + 0.5) * size_m;
+                let z = origin.z as f32 * VOXEL_M + (cz as f32 + 0.5) * size_m;
+                let sample = self.surface.sample(x, z);
+                let bottom = origin.y as f32 * VOXEL_M;
+                if sample.height < bottom {
+                    continue;
+                }
+                let column = self.strata.column(x, z);
+                for cy in 0..per_axis {
+                    let centre = bottom + (cy as f32 + 0.5) * size_m;
+                    if centre > sample.height {
+                        break;
+                    }
+                    let m = material_at(&self.surface, &sample, &column, centre);
+                    if !m.is_air() {
+                        self.put(&mut tree, level, IVec3::new(cx, cy, cz) * cells, m);
+                    }
+                }
+            }
+        }
+        tree
+    }
+
     /// Fills a node covering `cells` brick cells from `min_cell`.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "recursion state is flat by design"
-    )]
     fn node(
         &self,
         tree: &mut ChunkTree,
         s: &ChunkSamples<'_>,
-        lod: Lod,
+
         level: u32,
         min_cell: IVec3,
         cells: i32,
@@ -249,14 +286,7 @@ impl ChunkGenerator {
         // Layer boundaries buried under metres of rock are invisible until
         // someone digs; keep them at brick-cell resolution until then
         // (`detail_brick` restores voxel detail on demand).
-        let buried = y1 <= rock - BURIED_M;
-        let stop = match lod {
-            Lod::Node8 => cells == 16,
-            Lod::Node2 => cells <= 4,
-            Lod::Cell => cells == 1,
-            Lod::Full => buried && cells == 1,
-        };
-        if stop {
+        if y1 <= rock - BURIED_M && cells == 1 {
             let cx = x0 + n / 2;
             let cz = z0 + n / 2;
             let centre = (y0 + y1) * 0.5;
@@ -278,7 +308,6 @@ impl ChunkGenerator {
             self.node(
                 tree,
                 s,
-                lod,
                 level.saturating_sub(1),
                 min_cell + c * child,
                 child,
