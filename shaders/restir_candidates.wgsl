@@ -1,4 +1,4 @@
-// ReSTIR step 1: M = 32 candidates per pixel drawn by emitter power through
+// ReSTIR step 1: M candidates per pixel (32 in the paper, set by quality) drawn by emitter power through
 // an alias table, resampled by the unshadowed contribution, then the
 // survivor's visibility is traced and occluded samples dropped (W = 0)
 // before they can spread through temporal and spatial reuse.
@@ -15,8 +15,6 @@
 @group(2) @binding(4) var out_b: texture_storage_2d<rgba32float, write>;
 #import "restir_surface.wgsl"
 
-const CANDIDATES: u32 = 32u;
-
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let size = vec2<u32>(frame.render_size);
@@ -26,7 +24,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pixel = vec2<i32>(gid.xy);
     let id = textureLoad(vis_id, pixel, 0);
     var r = empty_reservoir();
-    let slots = arrayLength(&alias_table);
+    let slots = frame.light_count;
     if (id.w >> 30u) == 0u || slots == 0u {
         textureStore(out_a, pixel, pack_a(r));
         textureStore(out_b, pixel, pack_b(r));
@@ -34,7 +32,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let s = shading_at(pixel, id);
     var rng = rng_seed(gid.xy, frame.frame_index ^ 0x5e5717u);
-    for (var i = 0u; i < CANDIDATES; i++) {
+    for (var i = 0u; i < frame.restir_candidates; i++) {
         let bin = min(u32(rng_next(&rng) * f32(slots)), slots - 1u);
         var slot = bin;
         if rng_next(&rng) >= alias_table[bin].probability {
