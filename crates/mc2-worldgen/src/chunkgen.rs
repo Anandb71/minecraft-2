@@ -245,7 +245,15 @@ impl ChunkGenerator {
                     if centre > sample.height {
                         break;
                     }
-                    let m = material_at(&self.surface, &sample, &column, centre);
+                    // The topmost cell shows the surface material, not
+                    // whatever lies half a cell down.
+                    let top_of_column = centre + size_m > sample.height;
+                    let probe = if top_of_column {
+                        sample.height - 0.01
+                    } else {
+                        centre
+                    };
+                    let m = material_at(&self.surface, &sample, &column, probe);
                     if !m.is_air() {
                         self.put(&mut tree, level, IVec3::new(cx, cy, cz) * cells, m);
                     }
