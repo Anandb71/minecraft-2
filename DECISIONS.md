@@ -73,3 +73,21 @@ Measured on the integrated GPU at 960x540 over the sample terrain: the first ver
 - **Upload everything in view distance.** Predictable, but pays for surfaces behind hills and inside caves that no ray will reach.
 - **CPU visibility estimation** (frustum and occlusion culling of bricks). Duplicates the marcher's knowledge approximately, and still over-uploads occluded bricks.
 - **Marcher feedback (chosen).** A non-resident brick is shaded from its dominant material and writes its leaf word offset into a 4096-slot hash table; the table is read back asynchronously and the CPU uploads the nearest requests within a byte budget. A 12 m proximity radius covers what the player can touch before a ray sees it. Measured: after 40 frames at 96x54 over the sample terrain, 2297 of 39982 bricks were resident.
+
+## D9. Where erosion runs
+
+- **GPU compute** (the Mei et al. paper's own setting). Fastest, and we already have a device. But float results differ across vendors and drivers, and the eroded terrain is the world: two players with the same seed on different GPUs would get different mountains, and a cached world regenerated on another machine would not match its saved edits.
+- **Tile-local erosion at stream time.** Bounded cost, but erosion does not decompose: drainage at a tile edge depends on the whole upstream basin, and neighbouring tiles disagree at the seam.
+- **Whole-world CPU erosion at creation, cached (chosen).** Jacobi passes over rows with rayon are deterministic for any thread count. 1024^2 cells at 16 m, 600 iterations: 46.3 s first version, 32.8 s after buffer reuse (bit-identical output). The result is cached with a checksum and parameter fingerprint; later launches load it in 0.07 s.
+
+## D10. Detail with distance
+
+- **Everything at full detail within view distance.** A full-detail surface chunk is 1.7 MB of CPU memory and 164 KB of tree words; the 1536 m radius holds about 21 000 surface chunks.
+- **A separate far-terrain heightfield renderer.** Cheap, but a second representation that the marcher, shadows and GI would all need to understand, and it cannot show overhangs or excavations.
+- **The same tree at four levels of detail (chosen).** Full voxels within 64 m, 0.5 m cells to 192 m, uniform 2 m nodes to 512 m, uniform 8 m nodes to 1536 m, with hysteresis. Chunks wholly below the lowest possible surface of their footprint are not generated at all (no ray reaches them) except a thin layer under the player. Per surface chunk, single threaded: Full 89 ms / 1.7 MB, Cell 32 ms / 323 KB, Node2 1.5 ms / 55 KB, Node8 0.05 ms / 1.5 KB.
+
+## D11. Keeping streaming off the frame
+
+- **Generate and upload on the main thread.** Simplest; a camera turn cost seconds.
+- **Generate on workers, flatten and upload on the main thread.** Generation left the frame but flattening a 50 000-cell chunk took up to 74 ms: voxel_gpu.update averaged 12.3 ms while streaming.
+- **Generate and flatten on workers; relocate and write within a budget (chosen).** Workers attach a flattening to each new tree (invalidated by any edit). The main thread inserts finished chunks within 3 ms and uploads structure nearest-first within 4 ms. voxel_gpu.update while streaming: 2.7 ms mean, 6.0 ms p99.
