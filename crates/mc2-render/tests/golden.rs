@@ -109,6 +109,7 @@ fn world_debug_shade() {
                 voxel_words: 4 << 20,
                 upload_budget: usize::MAX,
                 proximity_m: 1.0e4,
+                structure_budget_ms: f32::INFINITY,
             },
             render_scale: 1.0,
         },
@@ -134,9 +135,24 @@ fn world_debug_shade() {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    for _ in 0..8 {
+    // Render until streaming is quiescent, so the image never depends on
+    // how many bricks one frame happened to upload.
+    let mut quiet = 0;
+    for _ in 0..200 {
         renderer.prepare(&gpu, &mut world, &camera, 1.0 / 60.0);
         renderer.render(&gpu, target.clone());
+        gpu.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        let s = renderer.world.stats;
+        quiet = if s.bricks_uploaded_last_frame == 0 && s.feedback_requests_last_frame == 0 {
+            quiet + 1
+        } else {
+            0
+        };
+        if quiet >= 3 {
+            break;
+        }
     }
     let rgba = read_rgba8(&gpu.device, &gpu.queue, &target);
     if let Err(e) = check_golden(

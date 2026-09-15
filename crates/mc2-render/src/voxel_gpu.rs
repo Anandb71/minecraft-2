@@ -38,15 +38,18 @@ pub struct GpuWorldConfig {
     pub upload_budget: usize,
     /// Bricks within this many metres of the camera are uploaded unasked.
     pub proximity_m: f64,
+    /// Main-thread time for chunk structure uploads per frame.
+    pub structure_budget_ms: f32,
 }
 
 impl Default for GpuWorldConfig {
     fn default() -> Self {
         Self {
-            tree_words: 16 << 20,
+            tree_words: 48 << 20,
             voxel_words: 96 << 20,
             upload_budget: 24 << 20,
             proximity_m: 12.0,
+            structure_budget_ms: 4.0,
         }
     }
 }
@@ -76,6 +79,8 @@ struct GpuChunk {
     leaves: Vec<(u32, u32)>,
     /// Slab slot to relative leaf word.
     slot_leaf: FxHashMap<u32, u32>,
+    /// Chunk-local brick cell of every brick, for proximity uploads.
+    brick_cells: Vec<(IVec3, u32)>,
     root: [u32; 4],
     lod: Lod,
     fully_resident: bool,
@@ -85,6 +90,8 @@ struct GpuChunk {
 #[derive(Default)]
 struct SectorBlock {
     range: Option<Range>,
+    /// Chunks of this sector currently on the GPU.
+    members: FxHashSet<ChunkPos>,
     /// Absolute offset of each chunk's root copy in the sector block.
     root_copies: FxHashMap<ChunkPos, u32>,
 }
@@ -92,6 +99,7 @@ struct SectorBlock {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GpuWorldStats {
     pub chunks: usize,
+    pub pending_chunks: usize,
     pub bricks_resident: usize,
     pub bricks_uploaded_last_frame: usize,
     pub bytes_uploaded_last_frame: usize,
@@ -123,6 +131,11 @@ pub struct GpuWorld {
     dirty_sectors: FxHashSet<usize>,
     queue: Vec<(ChunkPos, u32)>,
     config: GpuWorldConfig,
+    tree_pool_warned: bool,
+    /// Chunks changed in the world but not yet re-uploaded.
+    pending: FxHashSet<ChunkPos>,
+    /// Camera brick cell at the last proximity scan.
+    proximity_at: Option<IVec3>,
     pub stats: GpuWorldStats,
 }
 
@@ -257,6 +270,9 @@ impl GpuWorld {
             dirty_sectors: FxHashSet::default(),
             queue: Vec::new(),
             config,
+            tree_pool_warned: false,
+            pending: FxHashSet::default(),
+            proximity_at: None,
             stats: GpuWorldStats::default(),
         }
     }
@@ -281,6 +297,7 @@ impl GpuWorld {
             }
         }
         if let Some(s) = sector_index(pos) {
+            self.sector_blocks[s].members.remove(&pos);
             self.dirty_sectors.insert(s);
         }
     }
@@ -334,7 +351,13 @@ impl GpuWorld {
         Some(bytes)
     }
 
-    fn upload_structure(&mut self, queue: &wgpu::Queue, pos: ChunkPos, tree: &ChunkTree) {
+    fn upload_structure(
+        &mut self,
+        queue: &wgpu::Queue,
+        pos: ChunkPos,
+        tree: &ChunkTree,
+        prepared: Option<gl::FlatChunk>,
+    ) {
         // A different tree (regenerated at another level of detail) shares no
         // brick slots with the old one: drop its bricks before flattening.
         if self
@@ -360,7 +383,11 @@ impl GpuWorld {
                     .map(|b| (b.range.offset, b.range.words == gl::WIDE_BRICK_WORDS as u32))
             })
         };
-        let mut flat = gl::flatten_chunk(tree, &residency);
+        // A worker-prepared flattening assumes no resident bricks.
+        let mut flat = match prepared {
+            Some(f) if existing.is_none_or(|c| c.bricks.is_empty()) => f,
+            _ => gl::flatten_chunk(tree, &residency),
+        };
         let live: FxHashSet<u32> = flat.brick_leaves.iter().map(|&(_, s)| s).collect();
 
         let mut chunk = match self.chunks.remove(&pos) {
@@ -376,6 +403,7 @@ impl GpuWorld {
                 bricks: FxHashMap::default(),
                 leaves: Vec::new(),
                 slot_leaf: FxHashMap::default(),
+                brick_cells: Vec::new(),
                 root: [0; 4],
                 lod: flat.lod,
                 fully_resident: false,
@@ -403,7 +431,12 @@ impl GpuWorld {
             match self.tree_alloc.alloc(words) {
                 Some(r) => chunk.range = r,
                 None => {
-                    log::error!("voxel tree pool exhausted; chunk {:?} not uploaded", pos.0);
+                    if !self.tree_pool_warned {
+                        log::error!(
+                            "voxel tree pool exhausted; chunks beyond this are not uploaded"
+                        );
+                        self.tree_pool_warned = true;
+                    }
                     return;
                 }
             }
@@ -415,6 +448,13 @@ impl GpuWorld {
         chunk.leaves = flat.brick_leaves;
         chunk.leaves.sort_unstable();
         chunk.slot_leaf = chunk.leaves.iter().map(|&(w, s)| (s, w)).collect();
+        chunk.brick_cells = tree
+            .cells()
+            .filter_map(|(c, cell)| match cell {
+                mc2_voxel::tree::Cell::Brick(slot) => Some((c, slot)),
+                _ => None,
+            })
+            .collect();
         chunk.fully_resident = chunk
             .leaves
             .iter()
@@ -427,6 +467,7 @@ impl GpuWorld {
             Some(offset) => Self::write_words(queue, &self.tree, offset, &chunk.root),
             None => {
                 if let Some(s) = sector {
+                    self.sector_blocks[s].members.insert(pos);
                     self.dirty_sectors.insert(s);
                 }
             }
@@ -440,19 +481,14 @@ impl GpuWorld {
         let origin = IVec3::new(sx, 0, sz) * CHUNKS_PER_SECTOR;
         // Group chunks by their 128 m node.
         let mut l4: BTreeMap<u32, Vec<(u32, ChunkPos)>> = BTreeMap::new();
-        for y in 0..CHUNKS_PER_SECTOR {
-            for z in 0..CHUNKS_PER_SECTOR {
-                for x in 0..CHUNKS_PER_SECTOR {
-                    let local = IVec3::new(x, y, z);
-                    let pos = ChunkPos(origin + local);
-                    if !self.chunks.contains_key(&pos) {
-                        continue;
-                    }
-                    let a = mc2_voxel::tree::child_index(local >> 2);
-                    let c = mc2_voxel::tree::child_index(local & 3);
-                    l4.entry(a).or_default().push((c, pos));
-                }
+        for &pos in &self.sector_blocks[s].members {
+            if !self.chunks.contains_key(&pos) {
+                continue;
             }
+            let local = pos.0 - origin;
+            let a = mc2_voxel::tree::child_index(local >> 2);
+            let c = mc2_voxel::tree::child_index(local & 3);
+            l4.entry(a).or_default().push((c, pos));
         }
         let block = &mut self.sector_blocks[s];
         if let Some(r) = block.range.take() {
@@ -515,15 +551,19 @@ impl GpuWorld {
     }
 
     /// Queues up to `limit` non-resident bricks within the proximity radius.
-    fn queue_proximity(&mut self, world: &VoxelWorld, camera_m: DVec3, limit: usize) {
+    fn queue_proximity(&mut self, camera_m: DVec3, limit: usize) {
         if self.config.proximity_m <= 0.0 {
             return;
         }
         let cam_v = camera_m * VOXELS_PER_METRE;
+        let cell = (cam_v / 8.0).floor().as_ivec3();
+        if self.proximity_at == Some(cell) {
+            return;
+        }
         let r_v = self.config.proximity_m * VOXELS_PER_METRE;
         let mut found = Vec::new();
         for (pos, chunk) in &self.chunks {
-            if chunk.fully_resident || found.len() >= limit {
+            if chunk.fully_resident {
                 continue;
             }
             let min = pos.origin().as_dvec3();
@@ -531,24 +571,22 @@ impl GpuWorld {
             if cam_v.clamp(min, max).distance(cam_v) > r_v {
                 continue;
             }
-            let Some(tree) = world.chunk(*pos) else {
-                continue;
-            };
-            for (cell_pos, cell) in tree.cells() {
-                let mc2_voxel::tree::Cell::Brick(slot) = cell else {
-                    continue;
-                };
+            for &(c, slot) in &chunk.brick_cells {
                 if chunk.bricks.contains_key(&slot) {
                     continue;
                 }
-                let centre = min + (cell_pos * 8).as_dvec3() + 4.0;
+                let centre = min + (c * 8).as_dvec3() + 4.0;
                 if centre.distance(cam_v) <= r_v {
                     found.push((*pos, slot));
-                    if found.len() >= limit {
-                        break;
-                    }
                 }
             }
+            if found.len() >= limit {
+                break;
+            }
+        }
+        // Only a scan that found everything may be skipped next frame.
+        if found.len() < limit {
+            self.proximity_at = Some(cell);
         }
         self.queue.extend(found);
     }
@@ -559,15 +597,32 @@ impl GpuWorld {
         let mut uploaded = 0usize;
         let mut bytes = 0usize;
 
-        for pos in world.take_dirty() {
+        let dirty_scope = mc2_core::profiler::ScopeGuard::new("voxel_gpu.dirty");
+        self.pending.extend(world.take_dirty());
+        let mut order: Vec<ChunkPos> = self.pending.iter().copied().collect();
+        let cam_v = camera_m * VOXELS_PER_METRE;
+        order.sort_by_key(|p| {
+            let c = p.origin().as_dvec3() + f64::from(coords::CHUNK_VOXELS / 2);
+            c.distance_squared(cam_v) as u64
+        });
+        let started = std::time::Instant::now();
+        for pos in order {
+            if started.elapsed().as_secs_f32() * 1000.0 > self.config.structure_budget_ms {
+                break;
+            }
+            self.pending.remove(&pos);
             let Some(dirty) = world.take_chunk_dirty(pos) else {
                 self.free_chunk(pos);
                 continue;
             };
             let (structure, bricks) = dirty;
+            let prepared = world.chunk_untracked(pos).and_then(ChunkTree::take_flat);
             let tree = world.chunk(pos).expect("chunk has dirty state");
-            if structure || !self.chunks.contains_key(&pos) {
-                self.upload_structure(queue, pos, tree);
+            if structure
+                || !self.chunks.contains_key(&pos)
+                || self.chunks[&pos].tree_id != tree.id()
+            {
+                self.upload_structure(queue, pos, tree, prepared);
             }
             for slot in bricks {
                 let resident = self
@@ -580,7 +635,7 @@ impl GpuWorld {
                 }
             }
         }
-
+        drop(dirty_scope);
         let requests = self.harvest_feedback();
         self.stats.feedback_requests_last_frame = requests.len();
         for word in requests {
@@ -598,10 +653,13 @@ impl GpuWorld {
                 self.queue.push((pos, chunk.leaves[i].1));
             }
         }
+        let prox_scope = mc2_core::profiler::ScopeGuard::new("voxel_gpu.proximity");
         if self.queue.len() < 4096 {
-            self.queue_proximity(world, camera_m, 4096);
+            self.queue_proximity(camera_m, 4096);
         }
 
+        drop(prox_scope);
+        let bricks_scope = mc2_core::profiler::ScopeGuard::new("voxel_gpu.bricks");
         // Nearest requests first.
         let cam_v = camera_m * VOXELS_PER_METRE;
         self.queue.sort_by_key(|(pos, _)| {
@@ -641,6 +699,8 @@ impl GpuWorld {
             }
         }
         self.queue = remaining;
+        drop(bricks_scope);
+        let resident_scope = mc2_core::profiler::ScopeGuard::new("voxel_gpu.resident");
         for chunk in self.chunks.values_mut() {
             if !chunk.fully_resident {
                 chunk.fully_resident = chunk
@@ -650,11 +710,14 @@ impl GpuWorld {
             }
         }
 
+        drop(resident_scope);
+        let _sector_scope = mc2_core::profiler::ScopeGuard::new("voxel_gpu.sectors");
         for s in std::mem::take(&mut self.dirty_sectors) {
             self.rebuild_sector(queue, s);
         }
 
         self.stats.chunks = self.chunks.len();
+        self.stats.pending_chunks = self.pending.len();
         self.stats.bricks_resident = self.chunks.values().map(|c| c.bricks.len()).sum();
         self.stats.bricks_uploaded_last_frame = uploaded;
         self.stats.bytes_uploaded_last_frame = bytes;

@@ -25,6 +25,7 @@ fn gpu_hits_match_cpu_reference() {
                 voxel_words: 4 << 20,
                 upload_budget: usize::MAX,
                 proximity_m: 1.0e4,
+                structure_budget_ms: f32::INFINITY,
             },
             ..Default::default()
         },
@@ -132,6 +133,7 @@ fn feedback_streams_visible_bricks_only() {
                 voxel_words: 4 << 20,
                 upload_budget: 400 * 356,
                 proximity_m: 0.0,
+                structure_budget_ms: f32::INFINITY,
             },
             ..Default::default()
         },
