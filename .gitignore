@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+*.pdb
+/worlds
+/screenshots/*.tmp
+/captures
+/golden/out
+.vscode/
+.idea/
+*.swp
+.DS_Store
