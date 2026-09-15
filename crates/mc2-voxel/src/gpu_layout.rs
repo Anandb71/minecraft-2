@@ -179,6 +179,7 @@ impl<F: Fn(u32) -> Option<(u32, bool)>> BrickResidency for F {
 }
 
 /// A chunk flattened into tree words with pointers relative to the block start.
+#[derive(Clone, Debug)]
 pub struct FlatChunk {
     pub words: Vec<u32>,
     /// `(word index, slab slot)` of every leaf word that refers to a brick.

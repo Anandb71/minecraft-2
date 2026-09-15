@@ -155,6 +155,11 @@ impl VoxelWorld {
         Some(tree.take_dirty())
     }
 
+    /// Mutable tree access for upload bookkeeping; does not mark the chunk dirty.
+    pub fn chunk_untracked(&mut self, pos: ChunkPos) -> Option<&mut ChunkTree> {
+        self.chunks.get_mut(&pos)
+    }
+
     /// Chunks touched since the last call, in no particular order.
     pub fn take_dirty(&mut self) -> Vec<ChunkPos> {
         self.dirty.drain().collect()

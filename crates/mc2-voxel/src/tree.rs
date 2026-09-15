@@ -172,6 +172,8 @@ pub struct ChunkTree {
     dirty_bricks: Vec<u32>,
     /// Set when any node or cell kind changed.
     structure_dirty: bool,
+    /// Flattened words prepared off the main thread, valid until an edit.
+    flat_cache: Option<Box<crate::gpu_layout::FlatChunk>>,
 }
 
 /// Brick cell coordinate in `0..64` split into its three child indices.
@@ -205,6 +207,7 @@ impl Default for ChunkTree {
             free: Vec::new(),
             dirty_bricks: Vec::new(),
             structure_dirty: false,
+            flat_cache: None,
         }
     }
 }
@@ -216,6 +219,17 @@ impl ChunkTree {
 
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// Flattens now (on a worker thread) so the upload later only relocates.
+    /// Valid while no brick is resident on the GPU, i.e. for a new tree.
+    pub fn prepare_flat(&mut self) {
+        let flat = crate::gpu_layout::flatten_chunk(self, &|_| None);
+        self.flat_cache = Some(Box::new(flat));
+    }
+
+    pub fn take_flat(&mut self) -> Option<crate::gpu_layout::FlatChunk> {
+        self.flat_cache.take().map(|b| *b)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -282,6 +296,7 @@ impl ChunkTree {
     /// Replaces a brick cell. Uniform nodes on the path split as needed and
     /// the path re-collapses afterwards.
     pub fn set_cell(&mut self, b: IVec3, cell: Cell) {
+        self.flat_cache = None;
         let old = self.cell(b);
         if old == cell {
             return;
@@ -332,6 +347,7 @@ impl ChunkTree {
     /// Replaces a whole 2 m node (`level` 1, `node` in `0..16`) or 8 m node
     /// (`level` 2, `node` in `0..4`) with one material, or clears it.
     pub fn set_node(&mut self, level: u32, node: IVec3, material: MaterialId) {
+        self.flat_cache = None;
         self.structure_dirty = true;
         match level {
             2 => {
@@ -392,6 +408,7 @@ impl ChunkTree {
 
     /// Stores a brick, collapsing it to `Empty` or `Uniform` when possible.
     pub fn set_brick(&mut self, b: IVec3, brick: Brick) {
+        self.flat_cache = None;
         if brick.is_empty() {
             self.set_cell(b, Cell::Empty);
         } else if let Some(m) = brick.uniform() {
@@ -417,6 +434,7 @@ impl ChunkTree {
 
     /// Sets a voxel; returns the previous material.
     pub fn set_voxel(&mut self, v: IVec3, mat: MaterialId) -> MaterialId {
+        self.flat_cache = None;
         let b = v >> 3;
         let l = v & 7;
         match self.cell(b) {
@@ -453,6 +471,7 @@ impl ChunkTree {
     /// Mutable access to a brick cell as a full brick, materialising uniform
     /// or empty cells, then renormalising after `f` runs.
     pub fn edit_brick<R>(&mut self, b: IVec3, f: impl FnOnce(&mut Brick) -> R) -> R {
+        self.flat_cache = None;
         match self.cell(b) {
             Cell::Brick(i) => {
                 let brick = &mut self.bricks[i as usize];
