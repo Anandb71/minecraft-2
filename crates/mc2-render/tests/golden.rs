@@ -178,13 +178,9 @@ fn world_debug_shade() {
     }
 }
 
-/// Generated terrain: coarse erosion on a small grid, full-detail chunks,
-/// marched and debug shaded. Pins worldgen, streaming and the marcher at once.
-#[test]
-fn generated_terrain() {
-    let Some(gpu) = software_gpu() else {
-        return;
-    };
+/// A 3x3 patch of full-detail chunk columns of generated terrain (coarse
+/// erosion on a small grid) and a camera looking across it.
+fn generated_world() -> (mc2_voxel::world::VoxelWorld, mc2_render::camera::Camera) {
     use mc2_worldgen::chunkgen::{ChunkGenerator, Lod};
     use mc2_worldgen::erosion::ErosionParams;
     use mc2_worldgen::terrain::{CoarseTerrain, TerrainParams};
@@ -199,7 +195,6 @@ fn generated_terrain() {
     };
     let terrain = std::sync::Arc::new(CoarseTerrain::generate(7, params, &mut |_, _| {}));
     let generator = ChunkGenerator::new(terrain.clone());
-    // A 3x3 patch of full-detail chunk columns on land near the map centre.
     let (cx, cz) = (256, 258);
     let mut world = mc2_voxel::world::VoxelWorld::new();
     for z in cz - 1..=cz + 1 {
@@ -226,10 +221,12 @@ fn generated_terrain() {
         ..Default::default()
     };
     camera.look_at(glam::DVec3::new(centre_x + 10.0, ground, centre_z + 10.0));
+    (world, camera)
+}
 
-    let size = (320, 180);
-    let mut renderer = Renderer::new(
-        &gpu,
+fn world_renderer(gpu: &Gpu, size: (u32, u32)) -> Renderer {
+    Renderer::new(
+        gpu,
         FORMAT,
         size,
         RendererOptions {
@@ -246,8 +243,11 @@ fn generated_terrain() {
                 ..Default::default()
             },
         },
-    );
-    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+    )
+}
+
+fn golden_target(gpu: &Gpu, size: (u32, u32)) -> wgpu::Texture {
+    gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("golden target"),
         size: wgpu::Extent3d {
             width: size.0,
@@ -260,13 +260,22 @@ fn generated_terrain() {
         format: FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
-    });
-    renderer.debug_mode = 3;
-    renderer.frame.auto_exposure = false;
+    })
+}
+
+/// Renders until streaming is quiescent (three frames without uploads), so
+/// the image never depends on how many bricks one frame happened to upload.
+fn render_until_quiet(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    world: &mut mc2_voxel::world::VoxelWorld,
+    camera: &mc2_render::camera::Camera,
+    target: &wgpu::Texture,
+) {
     let mut quiet = 0;
     for _ in 0..300 {
-        renderer.prepare(&gpu, &mut world, &camera, 1.0 / 60.0);
-        renderer.render(&gpu, target.clone());
+        renderer.prepare(gpu, world, camera, 1.0 / 60.0);
+        renderer.render(gpu, target.clone());
         gpu.device
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("poll");
@@ -280,6 +289,22 @@ fn generated_terrain() {
             break;
         }
     }
+}
+
+/// Generated terrain: pins worldgen, streaming and the marcher at once,
+/// through the unlit material view.
+#[test]
+fn generated_terrain() {
+    let Some(gpu) = software_gpu() else {
+        return;
+    };
+    let (mut world, camera) = generated_world();
+    let size = (320, 180);
+    let mut renderer = world_renderer(&gpu, size);
+    let target = golden_target(&gpu, size);
+    renderer.debug_mode = 3;
+    renderer.frame.auto_exposure = false;
+    render_until_quiet(&gpu, &mut renderer, &mut world, &camera, &target);
     let rgba = read_rgba8(&gpu.device, &gpu.queue, &target);
     if let Err(e) = check_golden(
         &golden_dir(),
@@ -291,4 +316,77 @@ fn generated_terrain() {
     ) {
         panic!("{e}");
     }
+}
+
+/// The lit pipeline on generated terrain: streams to quiescence, then
+/// restarts the frame counter and accumulates a fixed number of frames so
+/// every random sequence and history length is the same on every run.
+fn lit_golden(name: &str, celestial: mc2_render::camera::Celestial, lantern: bool) {
+    let Some(gpu) = software_gpu() else {
+        return;
+    };
+    let (mut world, camera) = generated_world();
+    if lantern {
+        // A 6x6x6 voxel glowing block resting on the ground in view.
+        let target = glam::DVec3::new(8208.0 + 10.0, 0.0, 8272.0 + 10.0);
+        let mut y = 511;
+        let (vx, vz) = ((target.x * 16.0) as i32, (target.z * 16.0) as i32);
+        while y > 0 && world.voxel(glam::IVec3::new(vx, y * 16, vz)).is_air() {
+            y -= 1;
+        }
+        let base = glam::IVec3::new(vx, y * 16 + 16, vz);
+        world.fill_box(base, base + 5, mc2_voxel::material::ids::GLOWSTONE);
+    }
+    let size = (320, 180);
+    let mut renderer = world_renderer(&gpu, size);
+    renderer.celestial = celestial;
+    let target = golden_target(&gpu, size);
+    render_until_quiet(&gpu, &mut renderer, &mut world, &camera, &target);
+    renderer.frame.frame_index = 0;
+    for _ in 0..64 {
+        renderer.prepare(&gpu, &mut world, &camera, 1.0 / 60.0);
+        renderer.render(&gpu, target.clone());
+    }
+    let rgba = read_rgba8(&gpu.device, &gpu.queue, &target);
+    if let Err(e) = check_golden(
+        &golden_dir(),
+        name,
+        size.0,
+        size.1,
+        &rgba,
+        &GoldenTolerance::default(),
+    ) {
+        panic!("{e}");
+    }
+}
+
+/// Low afternoon sun: atmosphere LUTs, aerial perspective, traced sun and
+/// sky visibility, exposure.
+#[test]
+fn lit_terrain_afternoon() {
+    let sun_dir = glam::Vec3::new(-0.55, 0.32, 0.77).normalize();
+    lit_golden(
+        "lit_terrain_afternoon",
+        mc2_render::camera::Celestial {
+            sun_dir,
+            moon_dir: -sun_dir,
+            ..Default::default()
+        },
+        false,
+    );
+}
+
+/// Full moon night with an emissive block: moon sky LUTs, stars and ReSTIR.
+#[test]
+fn lit_terrain_night() {
+    let moon_dir = glam::Vec3::new(0.3, 0.6, 0.74).normalize();
+    lit_golden(
+        "lit_terrain_night",
+        mc2_render::camera::Celestial {
+            sun_dir: -moon_dir,
+            moon_dir,
+            ..Default::default()
+        },
+        true,
+    );
 }
