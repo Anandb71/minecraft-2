@@ -1,0 +1,44 @@
+[package]
+name = "minecraft-2"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "A voxel sandbox ray marched on the GPU"
+default-run = "minecraft-2"
+
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+wgpu = "30.0.1"
+winit = "0.30.13"
+glam = { version = "0.33.7", features = ["bytemuck"] }
+bytemuck = { version = "1.25.2", features = ["derive"] }
+rayon = "1.12.0"
+pollster = "1.0.1"
+bevy_ecs = { version = "0.19.1", default-features = false, features = ["std", "async_executor"] }
+puffin = "0.20.0"
+png = "0.18.1"
+font8x8 = { version = "0.3.1", default-features = false }
+log = "0.4"
+mc2-core = { path = "crates/mc2-core" }
+mc2-gpu = { path = "crates/mc2-gpu" }
+
+[dependencies]
+mc2-core.workspace = true
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+debug = "line-tables-only"
+codegen-units = 16
