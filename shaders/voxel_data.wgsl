@@ -34,39 +34,29 @@ const KIND_FOLIAGE: u32 = 2u;
 const KIND_TRANSPARENT: u32 = 3u;
 const KIND_LIQUID: u32 = 4u;
 
-fn node_has_child(node: u32, idx: u32) -> bool {
+// Mask helpers over a node's cached child mask halves.
+fn mask_has(lo: u32, hi: u32, idx: u32) -> bool {
     if idx < 32u {
-        return ((tree[node + 1u] >> idx) & 1u) != 0u;
+        return ((lo >> idx) & 1u) != 0u;
     }
-    return ((tree[node + 2u] >> (idx - 32u)) & 1u) != 0u;
+    return ((hi >> (idx - 32u)) & 1u) != 0u;
 }
 
-fn node_child_slot(node: u32, idx: u32) -> u32 {
-    let lo = tree[node + 1u];
+fn mask_slot(lo: u32, hi: u32, idx: u32) -> u32 {
     if idx < 32u {
         return countOneBits(lo & ((1u << idx) - 1u));
     }
-    return countOneBits(lo) + countOneBits(tree[node + 2u] & ((1u << (idx - 32u)) - 1u));
+    return countOneBits(lo) + countOneBits(hi & ((1u << (idx - 32u)) - 1u));
 }
 
-// True when every cell of the 2x2x2 group containing child `idx` is empty.
-fn node_group_empty(node: u32, idx: u32) -> bool {
+// Group bases are 0, 2, 8, 10 (low half) or 32, 34, 40, 42 (high half),
+// so the 22-bit group span never straddles the two words.
+fn mask_group_empty(lo: u32, hi: u32, idx: u32) -> bool {
     let base = idx & 0x2au;
-    let group = 0x00330033u;
-    let lo = tree[node + 1u];
-    let hi = tree[node + 2u];
-    // The 2^3 group spans bits base .. base+21; split across the halves.
-    var m: u32;
     if base >= 32u {
-        m = (hi >> (base - 32u)) & group;
-    } else if base + 21u < 32u {
-        m = (lo >> base) & group;
-    } else {
-        let lo_part = (lo >> base) & group;
-        let hi_part = (hi << (32u - base)) & group;
-        m = lo_part | hi_part;
+        return ((hi >> (base - 32u)) & 0x00330033u) == 0u;
     }
-    return m == 0u;
+    return ((lo >> base) & 0x00330033u) == 0u;
 }
 
 fn brick_occupancy(base: u32, subblock: u32) -> vec2<u32> {

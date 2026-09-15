@@ -210,6 +210,9 @@ fn march(r_in: Ray) -> Hit {
     // Active level state.
     var level = 5u;
     var node = 0u;
+    var n_w0 = 0u;
+    var n_lo = 0u;
+    var n_hi = 0u;
     var node_min = vec3<i32>(0);
     var size = SECTOR_VOXELS;
     var dims = vec3<i32>(WORLD_SECTORS_XZ, 1, WORLD_SECTORS_XZ);
@@ -223,7 +226,6 @@ fn march(r_in: Ray) -> Hit {
         if iterations > MAX_ITERATIONS {
             return miss_hit(iterations);
         }
-        let t_exit = min(min(tmax.x, tmax.y), min(tmax.z, t_end));
         var child = 0u;
         var child_min = vec3<i32>(0);
         var descend = false;
@@ -238,10 +240,10 @@ fn march(r_in: Ray) -> Hit {
             }
         } else {
             let idx = u32(cell.x + cell.z * 4 + cell.y * 16);
-            if !node_has_child(node, idx) {
-                empty_group = node_group_empty(node, idx);
+            if !mask_has(n_lo, n_hi, idx) {
+                empty_group = mask_group_empty(n_lo, n_hi, idx);
             } else {
-                let w0 = tree[node];
+                let w0 = n_w0;
                 let cell_min = node_min + cell * size;
                 let cell_max = cell_min + vec3<i32>(size - 1);
                 if (w0 & NOT_RESIDENT) != 0u {
@@ -251,7 +253,7 @@ fn march(r_in: Ray) -> Hit {
                     let lod = tree[node + 3u];
                     return Hit(HIT_LOD, t_cell, voxel_at(r, t_cell, cell_min, cell_max), axis, lod & 0xffffu, lod, iterations, 0u);
                 }
-                let slot = node_child_slot(node, idx);
+                let slot = mask_slot(n_lo, n_hi, idx);
                 let ptr = w0 & PTR_MASK;
                 if (w0 & LEAF_PARENT) != 0u {
                     let word = ptr + slot;
@@ -270,6 +272,7 @@ fn march(r_in: Ray) -> Hit {
                         let m = (voxels[(leaf & BRICK_PTR_MASK) + 17u] >> 16u) & 0xffffu;
                         return Hit(HIT_LOD, t_cell, voxel_at(r, t_cell, cell_min, cell_max), axis, m, 0u, iterations, 0u);
                     }
+                    let t_exit = min(min(tmax.x, tmax.y), min(tmax.z, t_end));
                     let h = march_brick(r, inv, step, leaf, cell_min, t_cell, t_exit, axis, &iterations);
                     if h.kind != HIT_NONE {
                         return h;
@@ -294,6 +297,9 @@ fn march(r_in: Ray) -> Hit {
             st_tmax[level] = tmax;
             level -= 1u;
             node = child;
+            n_w0 = tree[node];
+            n_lo = tree[node + 1u];
+            n_hi = tree[node + 2u];
             node_min = child_min;
             size = size >> 2u;
             if level == 4u {
@@ -352,6 +358,9 @@ fn march(r_in: Ray) -> Hit {
                 return miss_hit(iterations);
             }
             node = st_node[level];
+            n_w0 = tree[node];
+            n_lo = tree[node + 1u];
+            n_hi = tree[node + 2u];
             node_min = st_min[level];
             cell = st_cell[level];
             tmax = st_tmax[level];
