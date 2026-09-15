@@ -153,6 +153,8 @@ pub struct LightRegistry {
     by_chunk: FxHashMap<ChunkPos, Vec<u32>>,
     dirty: bool,
     built_at: Option<DVec3>,
+    /// Entries in the uploaded alias table, or 0 when no light has weight.
+    sampled: u32,
     lights: wgpu::Buffer,
     alias: wgpu::Buffer,
     capacity: usize,
@@ -178,6 +180,7 @@ impl LightRegistry {
             by_chunk: FxHashMap::default(),
             dirty: true,
             built_at: None,
+            sampled: 0,
             lights,
             alias,
             capacity,
@@ -213,6 +216,13 @@ impl LightRegistry {
 
     pub fn light_count(&self) -> usize {
         self.slots.len() - self.free.len()
+    }
+
+    /// Length of the alias table shaders must sample, 0 when no light is in
+    /// range. The GPU buffer is larger than the table, so shaders cannot use
+    /// its array length.
+    pub fn sampled_len(&self) -> u32 {
+        self.sampled
     }
 
     /// Replaces a chunk's emitters; `None` removes the chunk.
@@ -285,6 +295,11 @@ impl LightRegistry {
                 lum * area / (d_m * d_m).max(16.0)
             })
             .collect();
+        self.sampled = if weights.iter().any(|&w| w > 0.0) {
+            weights.len() as u32
+        } else {
+            0
+        };
         let mut lights = self.slots.clone();
         if lights.is_empty() {
             lights.push(GpuLight::zeroed());
