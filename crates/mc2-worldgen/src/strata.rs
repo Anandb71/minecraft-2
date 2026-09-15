@@ -44,7 +44,7 @@ impl Strata {
     pub fn new(seed: u64) -> Self {
         Self {
             fold: Perlin::new(seed ^ 0x5717_a7a0),
-            region: Perlin::new(seed ^ 0x9e6_1011),
+            region: Perlin::new(seed ^ 0x09e6_1011),
             seed,
         }
     }
