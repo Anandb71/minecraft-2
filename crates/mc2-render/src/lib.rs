@@ -2,6 +2,7 @@
 
 pub mod frame;
 pub mod hud;
+pub mod present;
 
 pub use frame::FrameCtx;
 

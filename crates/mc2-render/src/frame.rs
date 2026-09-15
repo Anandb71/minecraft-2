@@ -7,6 +7,8 @@ pub struct FrameCtx {
     pub time: f32,
     pub frame_index: u32,
     pub hud: HudCanvas,
+    pub exposure: f32,
+    pub tonemap: bool,
 }
 
 impl FrameCtx {
@@ -16,6 +18,8 @@ impl FrameCtx {
             time: 0.0,
             frame_index: 0,
             hud: HudCanvas::default(),
+            exposure: 1.0,
+            tonemap: true,
         }
     }
 }
