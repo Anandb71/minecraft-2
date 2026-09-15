@@ -44,7 +44,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Per-voxel value jitter so voxel resolution is visible in debug views.
     let h = hash_to_unit(pcg(pid.x * 73856093u ^ pid.y * 19349663u ^ pid.z * 83492791u));
     var color = mat.albedo * (0.9 + 0.2 * h) * (diffuse + ambient) + mat.emission * 0.001;
-    if frame.debug_mode == 1u {
+    if frame.debug_mode == 3u {
+        // Unlit material colours with a fixed sun, as before lighting.
+    } else if frame.debug_mode == 1u {
         color = select(vec3<f32>(0.2, 0.6, 0.2), vec3<f32>(0.9, 0.2, 0.9), kind == 3u);
     }
     let depth = textureLoad(vis_depth, id.xy, 0).r;
