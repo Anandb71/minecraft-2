@@ -34,8 +34,12 @@ mc2-render = { path = "crates/mc2-render" }
 [dependencies]
 mc2-core.workspace = true
 mc2-gpu.workspace = true
+mc2-render.workspace = true
 wgpu.workspace = true
+winit.workspace = true
+glam.workspace = true
 pollster.workspace = true
+log.workspace = true
 
 [profile.dev]
 opt-level = 1
