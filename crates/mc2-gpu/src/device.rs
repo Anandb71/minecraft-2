@@ -78,18 +78,17 @@ impl Gpu {
         let timestamps = features.contains(wgpu::Features::TIMESTAMP_QUERY);
 
         let al = adapter.limits();
-        let mut limits = wgpu::Limits::default();
         // The voxel pools are the largest buffers we bind; take what the adapter gives.
-        limits.max_buffer_size = al.max_buffer_size;
-        limits.max_storage_buffer_binding_size = al.max_storage_buffer_binding_size;
-        limits.max_storage_buffers_per_shader_stage =
-            al.max_storage_buffers_per_shader_stage.min(16);
-        limits.max_storage_textures_per_shader_stage =
-            al.max_storage_textures_per_shader_stage.min(16);
-        limits.max_sampled_textures_per_shader_stage =
-            al.max_sampled_textures_per_shader_stage.min(24);
-        limits.max_bind_groups = al.max_bind_groups.min(8);
-        limits.max_texture_dimension_3d = al.max_texture_dimension_3d;
+        let limits = wgpu::Limits {
+            max_buffer_size: al.max_buffer_size,
+            max_storage_buffer_binding_size: al.max_storage_buffer_binding_size,
+            max_storage_buffers_per_shader_stage: al.max_storage_buffers_per_shader_stage.min(16),
+            max_storage_textures_per_shader_stage: al.max_storage_textures_per_shader_stage.min(16),
+            max_sampled_textures_per_shader_stage: al.max_sampled_textures_per_shader_stage.min(24),
+            max_bind_groups: al.max_bind_groups.min(8),
+            max_texture_dimension_3d: al.max_texture_dimension_3d,
+            ..wgpu::Limits::default()
+        };
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("mc2 device"),
