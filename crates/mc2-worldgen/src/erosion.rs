@@ -148,6 +148,7 @@ pub fn erode(
     let original: Vec<f32> = st.b.clone();
     let mut scratch = vec![0.0f32; n];
     let mut scratch2 = vec![0.0f32; n];
+    let mut spare = Spare::new(n);
 
     for it in 0..p.iterations {
         if it % 25 == 0 {
@@ -161,7 +162,7 @@ pub fn erode(
                 (2.0 / (1.0 + hardness)).clamp(0.05, 2.0)
             });
         }
-        step(&mut st, &p, &mut scratch, &mut scratch2);
+        step(&mut st, &p, &mut scratch, &mut scratch2, &mut spare);
         if it % 4 == 0 {
             thermal(&mut st, &p, &mut scratch);
         }
@@ -195,7 +196,38 @@ pub fn erode(
     }
 }
 
-fn step(st: &mut State, p: &ErosionParams, scratch: &mut [f32], scratch2: &mut [f32]) {
+/// Second copies of every field a pass rewrites, swapped in after the pass.
+struct Spare {
+    fl: Vec<f32>,
+    fr: Vec<f32>,
+    fd: Vec<f32>,
+    fu: Vec<f32>,
+    u: Vec<f32>,
+    v: Vec<f32>,
+    b: Vec<f32>,
+}
+
+impl Spare {
+    fn new(n: usize) -> Self {
+        Self {
+            fl: vec![0.0; n],
+            fr: vec![0.0; n],
+            fd: vec![0.0; n],
+            fu: vec![0.0; n],
+            u: vec![0.0; n],
+            v: vec![0.0; n],
+            b: vec![0.0; n],
+        }
+    }
+}
+
+fn step(
+    st: &mut State,
+    p: &ErosionParams,
+    scratch: &mut [f32],
+    scratch2: &mut [f32],
+    spare: &mut Spare,
+) {
     let (w, h) = (st.w, st.h);
 
     // 1. Rain.
@@ -220,14 +252,11 @@ fn step(st: &mut State, p: &ErosionParams, scratch: &mut [f32], scratch2: &mut [
                 }
             });
         };
-        let mut nl = vec![0.0; w * h];
-        let mut nr = vec![0.0; w * h];
-        let mut nd = vec![0.0; w * h];
-        let mut nu = vec![0.0; w * h];
-        flux(&st.fl, &mut nl, -1, 0);
-        flux(&st.fr, &mut nr, 1, 0);
-        flux(&st.fd, &mut nd, 0, -1);
-        flux(&st.fu, &mut nu, 0, 1);
+        let (nl, nr, nd, nu) = (&mut spare.fl, &mut spare.fr, &mut spare.fd, &mut spare.fu);
+        flux(&st.fl, nl, -1, 0);
+        flux(&st.fr, nr, 1, 0);
+        flux(&st.fd, nd, 0, -1);
+        flux(&st.fu, nu, 0, 1);
         // Scale so a cell never sends more water than it holds.
         let dt = p.dt;
         (
@@ -248,10 +277,10 @@ fn step(st: &mut State, p: &ErosionParams, scratch: &mut [f32], scratch2: &mut [
                     *up *= s;
                 }
             });
-        st.fl = nl;
-        st.fr = nr;
-        st.fd = nd;
-        st.fu = nu;
+        std::mem::swap(&mut st.fl, &mut spare.fl);
+        std::mem::swap(&mut st.fr, &mut spare.fr);
+        std::mem::swap(&mut st.fd, &mut spare.fd);
+        std::mem::swap(&mut st.fu, &mut spare.fu);
     }
 
     // 3. Water surface and velocity.
@@ -276,10 +305,10 @@ fn step(st: &mut State, p: &ErosionParams, scratch: &mut [f32], scratch2: &mut [
             (s.d[i] + p.dt * (inflow - outflow)).max(0.0)
         });
         let d_new = &*scratch;
-        let mut u = vec![0.0; w * h];
-        let mut v = vec![0.0; w * h];
-        u.par_chunks_mut(w)
-            .zip(v.par_chunks_mut(w))
+        spare
+            .u
+            .par_chunks_mut(w)
+            .zip(spare.v.par_chunks_mut(w))
             .enumerate()
             .for_each(|(y, (urow, vrow))| {
                 for x in 0..w {
@@ -305,15 +334,15 @@ fn step(st: &mut State, p: &ErosionParams, scratch: &mut [f32], scratch2: &mut [
                 }
             });
         st.d.copy_from_slice(scratch);
-        st.u = u;
-        st.v = v;
+        std::mem::swap(&mut st.u, &mut spare.u);
+        std::mem::swap(&mut st.v, &mut spare.v);
     }
 
     // 4. Erosion and deposition against transport capacity.
     {
         let s = &*st;
-        let mut b_new = vec![0.0; w * h];
-        b_new
+        spare
+            .b
             .par_chunks_mut(w)
             .zip(scratch.par_chunks_mut(w))
             .enumerate()
@@ -341,7 +370,7 @@ fn step(st: &mut State, p: &ErosionParams, scratch: &mut [f32], scratch2: &mut [
                     }
                 }
             });
-        st.b = b_new;
+        std::mem::swap(&mut st.b, &mut spare.b);
         st.s.copy_from_slice(scratch);
     }
 
