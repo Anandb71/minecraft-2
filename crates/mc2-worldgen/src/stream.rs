@@ -86,7 +86,9 @@ pub struct ChunkStreamer {
     pinned: FxHashSet<ChunkPos>,
     inflight: FxHashMap<ChunkPos, Lod>,
     tx: Sender<Done>,
-    rx: Receiver<Done>,
+    /// Behind a mutex only so the streamer is `Sync` and can live in an ECS
+    /// resource; it is only ever touched from `update`.
+    rx: std::sync::Mutex<Receiver<Done>>,
     finished: Vec<Done>,
     queue: Vec<(u64, ChunkPos, Lod)>,
     targets: FxHashMap<ChunkPos, Lod>,
@@ -105,7 +107,7 @@ impl ChunkStreamer {
             pinned: FxHashSet::default(),
             inflight: FxHashMap::default(),
             tx,
-            rx,
+            rx: std::sync::Mutex::new(rx),
             finished: Vec::new(),
             queue: Vec::new(),
             targets: FxHashMap::default(),
@@ -234,7 +236,9 @@ impl ChunkStreamer {
 
         // Insert within the time budget.
         let start = Instant::now();
-        self.finished.extend(self.rx.try_iter());
+        if let Ok(rx) = self.rx.lock() {
+            self.finished.extend(rx.try_iter());
+        }
         let mut inserted = 0;
         while let Some(done) = self.finished.pop() {
             self.inflight.remove(&done.pos);
