@@ -227,6 +227,7 @@ fn march(r_in: Ray) -> Hit {
         var child = 0u;
         var child_min = vec3<i32>(0);
         var descend = false;
+        var empty_group = false;
 
         if level == 5u {
             let root = sectors[u32(cell.x + cell.z * WORLD_SECTORS_XZ)];
@@ -237,7 +238,9 @@ fn march(r_in: Ray) -> Hit {
             }
         } else {
             let idx = u32(cell.x + cell.z * 4 + cell.y * 16);
-            if node_has_child(node, idx) {
+            if !node_has_child(node, idx) {
+                empty_group = node_group_empty(node, idx);
+            } else {
                 let w0 = tree[node];
                 let cell_min = node_min + cell * size;
                 let cell_max = cell_min + vec3<i32>(size - 1);
@@ -304,17 +307,43 @@ fn march(r_in: Ray) -> Hit {
             continue;
         }
 
-        // Advance, popping levels whose grid the ray has left.
-        loop {
-            let a = min_axis(tmax);
-            let t_next = tmax[a];
-            if t_next >= t_end {
+        // Empty 2x2x2 group: leave the whole group in one step (the 64-tree
+        // guide's coalescing). Exit time comes from the group's far planes;
+        // the next cell is the exit cell clamped into the neighbouring group.
+        var advance = true;
+        if empty_group {
+            let g = (cell >> vec3<u32>(1u)) << vec3<u32>(1u);
+            let rel_min = vec3<f32>(node_min - r.base);
+            let far = select(vec3<f32>(0.0), vec3<f32>(2.0), r.dir > vec3<f32>(0.0));
+            let tb = (rel_min + (vec3<f32>(g) + far) * f32(size) - r.frac) * inv;
+            let a = min_axis(tb);
+            let t_g = max(tb[a], t_cell);
+            if t_g >= t_end {
                 return miss_hit(iterations);
             }
-            cell += axis_step(a, step);
-            t_cell = t_next;
-            tmax += axis_unit(a) * delta;
+            let exit_cell = clamp(first_cell(r, rel_min, f32(size), vec3<i32>(4), t_g), g, g + 1);
+            let beyond = g + select(vec3<i32>(-1), vec3<i32>(2), step > vec3<i32>(0));
+            cell = select(exit_cell, beyond, axis_mask(a));
+            t_cell = t_g;
             axis = a;
+            tmax = first_tmax(r, inv, rel_min, f32(size), cell);
+            advance = false;
+        }
+
+        // Advance, popping levels whose grid the ray has left.
+        loop {
+            if advance {
+                let a = min_axis(tmax);
+                let t_next = tmax[a];
+                if t_next >= t_end {
+                    return miss_hit(iterations);
+                }
+                cell += axis_step(a, step);
+                t_cell = t_next;
+                tmax += axis_unit(a) * delta;
+                axis = a;
+            }
+            advance = true;
             if all(cell >= vec3<i32>(0)) && all(cell < dims) {
                 break;
             }
