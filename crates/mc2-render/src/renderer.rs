@@ -103,6 +103,7 @@ impl Renderer {
             &frame.shaders,
             scene,
             output,
+            None,
             output_format,
         )));
         if let Some(vis) = vis {

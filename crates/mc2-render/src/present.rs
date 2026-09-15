@@ -9,16 +9,19 @@ use mc2_gpu::{HotRender, Pass, PassBuilder, PassContext, TexHandle, bind, bind_g
 struct PresentUniforms {
     exposure: f32,
     tonemap: u32,
-    _pad: [f32; 2],
+    auto_exposure: u32,
+    _pad: f32,
 }
 
 pub struct PresentPass {
     scene: TexHandle,
     output: TexHandle,
+    exposure: Option<TexHandle>,
     pipeline: HotRender,
     bgl: wgpu::BindGroupLayout,
     uniforms: wgpu::Buffer,
     sampler: wgpu::Sampler,
+    fallback: wgpu::TextureView,
     bind_group: Option<(u64, wgpu::BindGroup)>,
 }
 
@@ -28,13 +31,19 @@ impl PresentPass {
         lib: &mc2_gpu::ShaderLibrary,
         scene: TexHandle,
         output: TexHandle,
+        exposure: Option<TexHandle>,
         format: wgpu::TextureFormat,
     ) -> Self {
         let bgl = layout(
             device,
             "present",
             wgpu::ShaderStages::FRAGMENT,
-            &[bind::uniform(), bind::texture_2d(), bind::sampler(true)],
+            &[
+                bind::uniform(),
+                bind::texture_2d(),
+                bind::sampler(true),
+                bind::texture(wgpu::TextureViewDimension::D2, false),
+            ],
         );
         let pipeline = HotRender::new(
             device,
@@ -77,9 +86,22 @@ impl PresentPass {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        // A 1x1 stand-in for calibration mode, where exposure is not metered.
+        let fallback = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("unit exposure"),
+            size: wgpu::Extent3d::default(),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
         Self {
             scene,
             output,
+            exposure,
+            fallback: fallback.create_view(&Default::default()),
             pipeline,
             bgl,
             uniforms,
@@ -96,6 +118,9 @@ impl Pass<FrameCtx> for PresentPass {
 
     fn setup(&mut self, b: &mut PassBuilder<'_>) {
         b.read(self.scene);
+        if let Some(e) = self.exposure {
+            b.read(e);
+        }
         b.write(self.output);
     }
 
@@ -106,7 +131,8 @@ impl Pass<FrameCtx> for PresentPass {
             bytemuck::bytes_of(&PresentUniforms {
                 exposure: ctx.frame.exposure,
                 tonemap: u32::from(ctx.frame.tonemap),
-                _pad: [0.0; 2],
+                auto_exposure: u32::from(self.exposure.is_some() && ctx.frame.auto_exposure),
+                _pad: 0.0,
             }),
         );
         let generation = ctx.graph.generation();
@@ -123,6 +149,9 @@ impl Pass<FrameCtx> for PresentPass {
                     self.uniforms.as_entire_binding(),
                     wgpu::BindingResource::TextureView(ctx.graph.view(self.scene)),
                     wgpu::BindingResource::Sampler(&self.sampler),
+                    wgpu::BindingResource::TextureView(
+                        self.exposure.map_or(&self.fallback, |e| ctx.graph.view(e)),
+                    ),
                 ],
             );
             self.bind_group = Some((generation, bg));

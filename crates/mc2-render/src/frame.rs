@@ -12,6 +12,8 @@ pub struct FrameCtx {
     pub gizmos: crate::gizmo::Gizmos,
     pub exposure: f32,
     pub tonemap: bool,
+    /// Apply metered exposure (when the pipeline meters) on top of `exposure`.
+    pub auto_exposure: bool,
     pub uniforms: FrameUniforms,
     pub frame_buffer: wgpu::Buffer,
     pub frame_layout: wgpu::BindGroupLayout,
@@ -53,6 +55,7 @@ impl FrameCtx {
             gizmos: crate::gizmo::Gizmos::default(),
             exposure: 1.0,
             tonemap: true,
+            auto_exposure: true,
             uniforms: FrameUniforms::zeroed(),
             frame_buffer,
             frame_layout,
