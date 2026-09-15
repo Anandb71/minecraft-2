@@ -117,11 +117,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let e = vec3<f32>(0.6, 0.7, 1.0) * frame.moon_illuminance * lv.g;
         light += e * diffuse * nl_moon;
     }
-    // Sky ambient, attenuated where the sun shadow says the surface is
-    // enclosed; indirect light replaces this in the next step.
+    // Sky light scaled by traced sky visibility; bounce light is added by
+    // the indirect pass.
     let sky_e = sky_irradiance(normal) * frame.sun_illuminance;
-    let openness = 0.35 + 0.65 * lv.r * select(1.0, 0.0, frame.sun_dir.y < 0.0);
-    light += sky_e * diffuse * openness + vec3<f32>(0.004, 0.006, 0.012) * frame.moon_illuminance * albedo;
+    light += (sky_e * diffuse + vec3<f32>(0.004, 0.006, 0.012) * frame.moon_illuminance * albedo) * lv.b;
     // Emissive voxels gathered by ReSTIR.
     light += textureLoad(direct_lights, pixel, 0).rgb;
     // Emission.
