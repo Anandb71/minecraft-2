@@ -10,6 +10,7 @@ pub mod lights;
 pub mod overlay;
 pub mod present;
 pub mod renderer;
+pub mod sky;
 pub mod vis;
 pub mod voxel_gpu;
 
