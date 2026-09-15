@@ -1,10 +1,11 @@
 //! Windowed application: event loop, surface management, input, frame pacing.
 
 use crate::cli::Args;
-use crate::flycam::{FlyCam, Input};
-use crate::world::{GameWorld, spawn_camera};
+use crate::world::{TerrainLoader, spawn_camera, stream, stream_stats};
 use glam::Vec2;
 use mc2_core::RollingStats;
+use mc2_game::Game;
+use mc2_game::input::{Button, Key};
 use mc2_gpu::{Gpu, GpuOptions};
 use mc2_render::Renderer;
 use mc2_render::camera::Camera;
@@ -30,13 +31,12 @@ struct Running {
 
 pub struct App {
     running: Option<Running>,
-    world: GameWorld,
+    game: Game,
+    loader: TerrainLoader,
     camera: Camera,
-    flycam: FlyCam,
-    input: Input,
     grabbed: bool,
-    start: Instant,
     last_frame: Instant,
+    start: Instant,
     frame_ms: RollingStats,
     show_profiler: bool,
     vsync: bool,
@@ -46,17 +46,44 @@ pub struct App {
     frames: u32,
 }
 
+fn map_key(code: KeyCode) -> Option<Key> {
+    Some(match code {
+        KeyCode::KeyW => Key::Forward,
+        KeyCode::KeyS => Key::Back,
+        KeyCode::KeyA => Key::Left,
+        KeyCode::KeyD => Key::Right,
+        KeyCode::Space => Key::Jump,
+        KeyCode::ControlLeft | KeyCode::KeyC => Key::Crouch,
+        KeyCode::ShiftLeft => Key::Sprint,
+        KeyCode::KeyF => Key::ToggleFly,
+        KeyCode::F5 => Key::ToggleView,
+        KeyCode::Tab => Key::ToggleMode,
+        KeyCode::KeyE => Key::Interact,
+        KeyCode::KeyP => Key::Photo,
+        KeyCode::F2 => Key::Screenshot,
+        KeyCode::Digit1 => Key::Slot(0),
+        KeyCode::Digit2 => Key::Slot(1),
+        KeyCode::Digit3 => Key::Slot(2),
+        KeyCode::Digit4 => Key::Slot(3),
+        KeyCode::Digit5 => Key::Slot(4),
+        KeyCode::Digit6 => Key::Slot(5),
+        KeyCode::Digit7 => Key::Slot(6),
+        KeyCode::Digit8 => Key::Slot(7),
+        KeyCode::Digit9 => Key::Slot(8),
+        _ => return None,
+    })
+}
+
 impl App {
     fn new(args: &Args) -> Self {
         Self {
             running: None,
-            world: GameWorld::start(args.seed, args.world_dir.clone(), Default::default()),
+            game: Game::new(),
+            loader: TerrainLoader::start(args.seed, args.world_dir.clone(), Default::default()),
             camera: Camera::default(),
-            flycam: FlyCam::default(),
-            input: Input::default(),
             grabbed: false,
-            start: Instant::now(),
             last_frame: Instant::now(),
+            start: Instant::now(),
             frame_ms: RollingStats::default(),
             show_profiler: true,
             vsync: true,
@@ -143,8 +170,9 @@ impl App {
             let _ = r.window.set_cursor_grab(CursorGrabMode::None);
             r.window.set_cursor_visible(true);
             self.grabbed = false;
-            self.input.release_all();
+            self.game.input().release_all();
         }
+        self.game.input().captured = self.grabbed;
     }
 
     fn frame(&mut self, event_loop: &ActiveEventLoop) {
@@ -154,12 +182,17 @@ impl App {
             return;
         }
         let now = Instant::now();
-        let dt = (now - self.last_frame).as_secs_f32();
-        self.frame_ms.push(dt * 1000.0);
+        let dt = (now - self.last_frame).as_secs_f32().min(0.1);
+        self.frame_ms
+            .push((now - self.last_frame).as_secs_f32() * 1000.0);
         self.last_frame = now;
 
-        match self.world.poll() {
-            Ok(Some(terrain)) => self.camera = spawn_camera(&terrain),
+        match self.loader.poll(&mut self.game) {
+            Ok(Some(terrain)) => {
+                let spawn = spawn_camera(&terrain);
+                let feet = spawn.position - glam::DVec3::Y * mc2_game::player::EYE;
+                self.game.spawn_player(feet, spawn.yaw, spawn.pitch);
+            }
             Ok(None) => {}
             Err(e) => {
                 self.error = Some(e);
@@ -167,13 +200,13 @@ impl App {
                 return;
             }
         }
-        {
-            mc2_core::scope!("game.update");
-            self.flycam
-                .update(&mut self.camera, &self.input, dt.min(0.1), self.grabbed);
-            self.input.clear_frame();
-            self.world.update(self.camera.position);
-        }
+
+        self.game.update(dt);
+        let view = self.game.view();
+        self.camera.position = view.position;
+        self.camera.yaw = view.yaw;
+        self.camera.pitch = view.pitch;
+        stream(&mut self.game, self.camera.position);
 
         let Some(r) = &mut self.running else {
             return;
@@ -191,45 +224,43 @@ impl App {
         let renderer = &mut r.renderer;
         renderer.frame.time = self.start.elapsed().as_secs_f32();
         renderer.debug_mode = self.debug_mode;
-        renderer.prepare(&r.gpu, &mut self.world.voxels, &self.camera, dt);
+        {
+            let mut voxels = self.game.world.resource_mut::<mc2_game::Voxels>();
+            renderer.prepare(&r.gpu, &mut voxels.0, &self.camera, dt);
+        }
         renderer.frame.hud.clear();
+        let screen = renderer.output_size();
+        crate::game_hud::draw(
+            &mut self.game,
+            &mut renderer.frame.hud,
+            &mut renderer.frame.gizmos,
+            screen,
+        );
         if self.show_profiler {
             let cpu_rows = mc2_core::profiler::rows();
             let s = renderer.world.stats;
+            let st = stream_stats(&self.game).unwrap_or_default();
             let p = self.camera.position;
-            let stream = self
-                .world
-                .streamer
-                .as_ref()
-                .map(|st| st.stats)
-                .unwrap_or_default();
             let extra = [
-                self.world.loading_text().unwrap_or_else(|| {
+                self.loader.loading_text().unwrap_or_else(|| {
                     format!(
-                        "streaming: {} chunks ({} full), {} queued, {} generating, +{} this frame",
-                        stream.loaded,
-                        stream.full,
-                        stream.queued,
-                        stream.inflight,
-                        stream.inserted_last_frame
+                        "streaming: {} chunks ({} full), {} queued, {} generating",
+                        st.loaded, st.full, st.queued, st.inflight
                     )
                 }),
                 format!(
-                    "chunks {}  bricks {}  +{} ({:.1} MB)  feedback {}  tree {:.1} MB  voxels {:.1} MB",
+                    "gpu: {} chunks ({} pending), {} bricks, +{} ({:.1} MB), tree {:.0} MB, voxels {:.0} MB",
                     s.chunks,
+                    s.pending_chunks,
                     s.bricks_resident,
                     s.bricks_uploaded_last_frame,
                     s.bytes_uploaded_last_frame as f32 / 1e6,
-                    s.feedback_requests_last_frame,
                     s.tree_mb,
                     s.voxel_mb
                 ),
+                format!("pos {:.1} {:.1} {:.1}", p.x, p.y, p.z),
                 format!(
-                    "pos {:.1} {:.1} {:.1}  speed {:.1} m/s",
-                    p.x, p.y, p.z, self.flycam.speed
-                ),
-                format!(
-                    "click look  WASD fly  wheel speed  F3 HUD  F4 view {}  V vsync {}  Esc release/quit",
+                    "click capture  WASD move  space jump  ctrl crouch  shift sprint  F fly  F5 view  Tab mode  1-9 slot  F3 HUD  F4 view {}  V vsync {}",
                     self.debug_mode,
                     if self.vsync { "on" } else { "off" }
                 ),
@@ -261,13 +292,19 @@ impl App {
             return;
         };
         if event.state == ElementState::Released {
-            self.input.release(code);
+            if let Some(k) = map_key(code) {
+                self.game.input().key_up(k);
+            }
             return;
         }
         if event.repeat {
             return;
         }
-        self.input.press(code);
+        if let Some(k) = map_key(code)
+            && self.grabbed
+        {
+            self.game.input().key_down(k);
+        }
         match code {
             KeyCode::Escape => {
                 if self.grabbed {
@@ -311,13 +348,22 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Focused(false) => self.set_grab(false),
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button: MouseButton::Left,
-                ..
-            } if !self.grabbed => self.set_grab(true),
+            WindowEvent::MouseInput { state, button, .. } => {
+                let mapped = match button {
+                    MouseButton::Left => Some(Button::Primary),
+                    MouseButton::Right => Some(Button::Secondary),
+                    MouseButton::Middle => Some(Button::Middle),
+                    _ => None,
+                };
+                match (state, mapped) {
+                    (ElementState::Pressed, _) if !self.grabbed => self.set_grab(true),
+                    (ElementState::Pressed, Some(b)) => self.game.input().button_down(b),
+                    (ElementState::Released, Some(b)) => self.game.input().button_up(b),
+                    _ => {}
+                }
+            }
             WindowEvent::MouseWheel { delta, .. } => {
-                self.input.scroll += match delta {
+                self.game.input().scroll += match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
                 };
@@ -332,7 +378,7 @@ impl ApplicationHandler for App {
         if let DeviceEvent::MouseMotion { delta } = event
             && self.grabbed
         {
-            self.input.mouse_delta += Vec2::new(delta.0 as f32, delta.1 as f32);
+            self.game.input().mouse_delta += Vec2::new(delta.0 as f32, delta.1 as f32);
         }
     }
 

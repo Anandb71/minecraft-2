@@ -2,7 +2,7 @@
 
 mod app;
 mod cli;
-mod flycam;
+mod game_hud;
 mod headless;
 mod logger;
 mod world;

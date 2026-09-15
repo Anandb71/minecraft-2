@@ -36,6 +36,8 @@ mc2-worldgen = { path = "crates/mc2-worldgen" }
 
 [dependencies]
 mc2-core.workspace = true
+mc2-game.workspace = true
+bevy_ecs.workspace = true
 mc2-gpu.workspace = true
 mc2-render.workspace = true
 mc2-voxel.workspace = true

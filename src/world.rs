@@ -1,11 +1,11 @@
-//! The playable world: terrain loading in the background, chunk streaming,
+//! Terrain loading in the background, chunk streaming into the game world,
 //! and choosing where the player arrives.
 
 use glam::DVec3;
+use mc2_game::{Game, Streaming, Voxels};
 use mc2_render::camera::Camera;
-use mc2_voxel::world::VoxelWorld;
 use mc2_worldgen::chunkgen::ChunkGenerator;
-use mc2_worldgen::stream::{ChunkStreamer, StreamConfig};
+use mc2_worldgen::stream::{ChunkStreamer, StreamConfig, StreamStats};
 use mc2_worldgen::terrain::{CoarseTerrain, TerrainParams};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -13,15 +13,13 @@ use std::thread::JoinHandle;
 
 type LoadResult = Result<Arc<CoarseTerrain>, String>;
 
-pub struct GameWorld {
-    pub voxels: VoxelWorld,
-    pub streamer: Option<ChunkStreamer>,
+pub struct TerrainLoader {
     loading: Option<JoinHandle<LoadResult>>,
     progress: Arc<Mutex<(String, f32)>>,
     stream_config: StreamConfig,
 }
 
-impl GameWorld {
+impl TerrainLoader {
     /// Starts loading (or generating and caching) the world's terrain.
     pub fn start(seed: u64, dir: PathBuf, stream_config: StreamConfig) -> Self {
         let progress = Arc::new(Mutex::new(("loading terrain".to_owned(), 0.0)));
@@ -45,16 +43,15 @@ impl GameWorld {
             })
             .expect("spawn terrain thread");
         Self {
-            voxels: VoxelWorld::new(),
-            streamer: None,
             loading: Some(loading),
             progress,
             stream_config,
         }
     }
 
-    /// Returns the terrain once when loading finishes.
-    pub fn poll(&mut self) -> Result<Option<Arc<CoarseTerrain>>, String> {
+    /// Once loading finishes, installs streaming into the game and returns
+    /// the terrain (exactly once).
+    pub fn poll(&mut self, game: &mut Game) -> Result<Option<Arc<CoarseTerrain>>, String> {
         if !self.loading.as_ref().is_some_and(JoinHandle::is_finished) {
             return Ok(None);
         }
@@ -63,14 +60,18 @@ impl GameWorld {
             .join()
             .map_err(|_| "terrain thread panicked".to_owned())??;
         let generator = Arc::new(ChunkGenerator::new(terrain.clone()));
-        self.streamer = Some(ChunkStreamer::new(generator, self.stream_config));
+        game.world
+            .insert_resource(Streaming(Some(ChunkStreamer::new(
+                generator,
+                self.stream_config,
+            ))));
         Ok(Some(terrain))
     }
 
     /// Blocks until terrain is ready.
-    pub fn wait(&mut self) -> Result<Arc<CoarseTerrain>, String> {
+    pub fn wait(&mut self, game: &mut Game) -> Result<Arc<CoarseTerrain>, String> {
         loop {
-            if let Some(t) = self.poll()? {
+            if let Some(t) = self.poll(game)? {
                 return Ok(t);
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -82,12 +83,33 @@ impl GameWorld {
         let p = self.progress.lock().ok()?;
         Some(format!("generating world: {} {:.0}%", p.0, p.1 * 100.0))
     }
+}
 
-    pub fn update(&mut self, camera: DVec3) {
-        if let Some(s) = &mut self.streamer {
-            s.update(&mut self.voxels, camera);
-        }
-    }
+/// Streams chunks around `camera` into the game's voxel world.
+pub fn stream(game: &mut Game, camera: DVec3) {
+    game.world
+        .resource_scope(|world, mut streaming: bevy_ecs::prelude::Mut<Streaming>| {
+            if let Some(s) = streaming.0.as_mut() {
+                let mut voxels = world.resource_mut::<Voxels>();
+                s.update(&mut voxels.0, camera);
+            }
+        });
+}
+
+pub fn stream_stats(game: &Game) -> Option<StreamStats> {
+    game.world
+        .resource::<Streaming>()
+        .0
+        .as_ref()
+        .map(|s| s.stats)
+}
+
+pub fn stream_settled(game: &Game) -> bool {
+    game.world
+        .resource::<Streaming>()
+        .0
+        .as_ref()
+        .is_some_and(ChunkStreamer::settled)
 }
 
 /// A camera standing on open land near the middle of the map, looking at

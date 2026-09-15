@@ -2,8 +2,9 @@
 //! README screenshots are produced without a window.
 
 use crate::cli::{Args, Mode};
-use crate::world::{GameWorld, spawn_camera};
+use crate::world::{TerrainLoader, spawn_camera, stream, stream_settled, stream_stats};
 use mc2_core::RollingStats;
+use mc2_game::{Game, Voxels};
 use mc2_gpu::{Gpu, GpuOptions};
 use mc2_render::Renderer;
 use mc2_render::renderer::RendererOptions;
@@ -38,8 +39,9 @@ pub fn run(args: &Args) -> Result<(), String> {
     renderer.debug_mode = args.debug_view;
     renderer.beam = !args.no_beam;
     let t = Instant::now();
-    let mut game = GameWorld::start(args.seed, args.world_dir.clone(), Default::default());
-    let terrain = game.wait()?;
+    let mut game = Game::new();
+    let mut loader = TerrainLoader::start(args.seed, args.world_dir.clone(), Default::default());
+    let terrain = loader.wait(&mut game)?;
     let mut camera = spawn_camera(&terrain);
     if let Some((pos, look)) = args.camera {
         camera.position = glam::DVec3::from_array(pos);
@@ -57,14 +59,19 @@ pub fn run(args: &Args) -> Result<(), String> {
     let t = Instant::now();
     let mut quiet = 0;
     while quiet < 10 && t.elapsed().as_secs() < 180 {
-        game.update(camera.position);
-        renderer.prepare(&gpu, &mut game.voxels, &camera, 1.0 / 60.0);
+        stream(&mut game, camera.position);
+        renderer.prepare(
+            &gpu,
+            &mut game.world.resource_mut::<Voxels>().0,
+            &camera,
+            1.0 / 60.0,
+        );
         renderer.render(&gpu, tex_warm.clone());
         gpu.device
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|e| e.to_string())?;
         mc2_core::profiler::end_frame();
-        let settled = game.streamer.as_ref().is_some_and(|s| s.settled());
+        let settled = stream_settled(&game);
         let uploads = renderer.world.stats.bricks_uploaded_last_frame
             + renderer.world.stats.feedback_requests_last_frame;
         quiet = if settled && uploads == 0 {
@@ -73,11 +80,11 @@ pub fn run(args: &Args) -> Result<(), String> {
             0
         };
     }
-    if let Some(s) = &game.streamer {
+    if let Some(s) = stream_stats(&game) {
         eprintln!(
             "streamed {} chunks ({} full) in {:.2}s",
-            s.stats.loaded,
-            s.stats.full,
+            s.loaded,
+            s.full,
             t.elapsed().as_secs_f32()
         );
     }
@@ -87,8 +94,13 @@ pub fn run(args: &Args) -> Result<(), String> {
     let mut last = Instant::now();
     for i in 0..args.frames {
         renderer.frame.time = i as f32 / 60.0;
-        game.update(camera.position);
-        renderer.prepare(&gpu, &mut game.voxels, &camera, 1.0 / 60.0);
+        stream(&mut game, camera.position);
+        renderer.prepare(
+            &gpu,
+            &mut game.world.resource_mut::<Voxels>().0,
+            &camera,
+            1.0 / 60.0,
+        );
         renderer.frame.hud.clear();
         if args.hud {
             let cpu = mc2_core::profiler::rows();

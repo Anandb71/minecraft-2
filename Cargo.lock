@@ -1268,9 +1268,11 @@ dependencies = [
 name = "minecraft-2"
 version = "0.1.0"
 dependencies = [
+ "bevy_ecs",
  "glam 0.33.7",
  "log",
  "mc2-core",
+ "mc2-game",
  "mc2-gpu",
  "mc2-render",
  "mc2-voxel",
