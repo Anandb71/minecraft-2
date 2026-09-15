@@ -136,6 +136,8 @@ pub struct GpuWorld {
     pending: FxHashSet<ChunkPos>,
     /// Camera brick cell at the last proximity scan.
     proximity_at: Option<IVec3>,
+    /// Chunks whose content reached the GPU (or left it) since `take_changed`.
+    changed: Vec<ChunkPos>,
     pub stats: GpuWorldStats,
 }
 
@@ -273,6 +275,7 @@ impl GpuWorld {
             tree_pool_warned: false,
             pending: FxHashSet::default(),
             proximity_at: None,
+            changed: Vec::new(),
             stats: GpuWorldStats::default(),
         }
     }
@@ -611,6 +614,7 @@ impl GpuWorld {
                 break;
             }
             self.pending.remove(&pos);
+            self.changed.push(pos);
             let Some(dirty) = world.take_chunk_dirty(pos) else {
                 self.free_chunk(pos);
                 continue;
@@ -723,6 +727,11 @@ impl GpuWorld {
         self.stats.bytes_uploaded_last_frame = bytes;
         self.stats.tree_mb = self.tree_alloc.used_words() as f32 * 4.0 / 1.0e6;
         self.stats.voxel_mb = self.voxel_alloc.used_words() as f32 * 4.0 / 1.0e6;
+    }
+
+    /// Chunks uploaded or removed since the last call.
+    pub fn take_changed(&mut self) -> Vec<ChunkPos> {
+        std::mem::take(&mut self.changed)
     }
 
     /// Clears the GPU feedback table; call before dispatching marchers.
