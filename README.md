@@ -30,12 +30,22 @@ cargo run --release -- --bench --frames 600 --size 2560x1440
 
 | Key | Action |
 |---|---|
+| Left click | Capture mouse for looking |
+| W A S D | Fly |
+| Space / Ctrl | Up / down |
+| Shift | Fly faster |
+| Mouse wheel | Change fly speed |
 | F3 | Toggle profiler HUD |
+| F4 | Debug view: shaded, LOD hits, march iteration heatmap |
 | V | Toggle vsync |
-| Esc | Quit |
+| Esc | Release mouse, then quit |
 
 ## Features
 
+- The world meshes nothing: 6.25 cm voxels in 4-bit palette bricks under per-chunk sparse 64-trees, ray marched in a compute shader
+- Visibility buffer with exact world voxel ids, material, face, depth and motion vectors
+- Beam prepass and empty-space coalescing; the GPU marcher is verified pixel for pixel against a CPU reference marcher
+- Bricks stream to the GPU on demand from marcher feedback, so unseen surfaces never cost VRAM
 - Own frame graph: declared reads/writes, validation, culling, resize-aware allocation
 - GPU timestamp query on every pass, CPU scopes everywhere, rolling p99 on screen
 - WGSL hot reload in debug builds with `#import`
@@ -65,8 +75,8 @@ Physics runs on its own thread at a fixed 120 Hz with a 4 ms tick budget.
 ## Build order
 
 1. Harness: window, device, frame graph, WGSL hot reload, timestamp queries, profiler HUD, golden image rig, CI. **(v0.1-harness)**
-2. Brickmap, 64-tree, palette compression, CPU reference marcher.
-3. GPU marcher, visibility buffer, brick streaming with feedback.
+2. Brickmap, 64-tree, palette compression, CPU reference marcher. **(v0.2-brickmap)**
+3. GPU marcher, visibility buffer, brick streaming with feedback. **(v0.3-marcher)**
 4. Worldgen v1, region streaming, LOD.
 5. Player controller, collision, carve and place.
 6. Sun, sky LUTs, traced shadows, ReSTIR direct light.
@@ -87,7 +97,8 @@ Physics runs on its own thread at a fixed 120 Hz with a 4 ms tick budget.
 
 - `crates/mc2-core`: profiler, statistics
 - `crates/mc2-gpu`: device, frame graph, shader library, timestamp profiler, capture
-- `crates/mc2-render`: passes and the renderer
+- `crates/mc2-voxel`: bricks, 64-trees, materials, GPU layout, CPU reference marcher
+- `crates/mc2-render`: passes, GPU voxel residency and the renderer
 - `shaders/`: WGSL
 - `golden/`: reference images for renderer tests
 - [`DEVLOG.md`](DEVLOG.md): how each system works and what it costs
