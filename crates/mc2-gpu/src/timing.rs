@@ -209,8 +209,10 @@ impl GpuProfiler {
             let stamps: Vec<u64> = match self.slots[i].buffer.get_mapped_range(0..len) {
                 // Mapped memory carries no alignment guarantee; decode bytewise.
                 Ok(view) => view
-                    .chunks_exact(8)
-                    .map(|c| u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|c| u64::from_le_bytes(*c))
                     .collect(),
                 Err(_) => Vec::new(),
             };

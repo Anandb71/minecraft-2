@@ -48,7 +48,7 @@ pub fn read_rgba8(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Te
         let start = y * bytes_per_row as usize;
         let row = &view[start..start + 4 * w as usize];
         if bgra {
-            for px in row.chunks_exact(4) {
+            for px in row.as_chunks::<4>().0 {
                 out.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
             }
         } else {
@@ -87,7 +87,9 @@ pub fn load_png(path: &Path) -> std::io::Result<(u32, u32, Vec<u8>)> {
     let rgba = match info.color_type {
         png::ColorType::Rgba => buf,
         png::ColorType::Rgb => buf
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[1], p[2], 255])
             .collect(),
         other => return Err(std::io::Error::other(format!("unsupported png {other:?}"))),
@@ -107,7 +109,7 @@ pub fn diff(a: &[u8], b: &[u8], threshold: u8) -> ImageDiff {
     assert_eq!(a.len(), b.len(), "image sizes differ");
     let mut sum = 0u64;
     let mut bad = 0usize;
-    for (pa, pb) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+    for (pa, pb) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0) {
         let mut worst = 0u8;
         for c in 0..3 {
             let d = pa[c].abs_diff(pb[c]);
@@ -175,8 +177,10 @@ pub fn check_golden(
         let out = dir.join("../target/golden-out");
         let _ = save_png(&out.join(format!("{name}.actual.png")), w, h, rgba);
         let delta: Vec<u8> = rgba
-            .chunks_exact(4)
-            .zip(expected.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(expected.as_chunks::<4>().0)
             .flat_map(|(a, b)| {
                 let m = (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap_or(0);
                 [m.saturating_mul(4), 0, 0, 255]
