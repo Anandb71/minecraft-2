@@ -2,6 +2,7 @@
 
 pub mod brick;
 pub mod coords;
+pub mod gpu_layout;
 pub mod march;
 pub mod material;
 pub mod samples;
