@@ -48,7 +48,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         color = select(vec3<f32>(0.2, 0.6, 0.2), vec3<f32>(0.9, 0.2, 0.9), kind == 3u);
     }
     let depth = textureLoad(vis_depth, id.xy, 0).r;
-    let fog = 1.0 - exp(-depth * 0.0015);
+    let fog = 1.0 - exp(-depth * 0.0004);
     color = mix(color, sky(dir), fog);
     textureStore(out_hdr, id.xy, vec4<f32>(color, 1.0));
 }

@@ -26,6 +26,8 @@ pub struct Args {
     pub no_beam: bool,
     pub seed: u64,
     pub world_dir: PathBuf,
+    /// Headless camera override: position and look-at target, metres.
+    pub camera: Option<([f64; 3], [f64; 3])>,
 }
 
 impl Default for Args {
@@ -41,6 +43,7 @@ impl Default for Args {
             no_beam: false,
             seed: 42,
             world_dir: PathBuf::from("worlds/default"),
+            camera: None,
         }
     }
 }
@@ -56,6 +59,7 @@ usage: minecraft-2 [options]
   --no-beam              disable the beam prepass (A/B measurement)
   --seed <n>             world seed (default 42)
   --world <dir>          world directory (default worlds/default)
+  --camera x,y,z,lx,ly,lz  headless camera position and look-at target (m)
   --view <n>             debug view: 0 shaded, 1 LOD hits, 2 march iterations";
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
@@ -89,6 +93,17 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                     .map_err(|e| format!("--seed: {e}"))?
             }
             "--world" => out.world_dir = PathBuf::from(value("--world")?),
+            "--camera" => {
+                let v: Vec<f64> = value("--camera")?
+                    .split(',')
+                    .map(|s| s.trim().parse::<f64>())
+                    .collect::<Result<_, _>>()
+                    .map_err(|e| format!("--camera: {e}"))?;
+                if v.len() != 6 {
+                    return Err("--camera expects x,y,z,look_x,look_y,look_z".into());
+                }
+                out.camera = Some(([v[0], v[1], v[2]], [v[3], v[4], v[5]]));
+            }
             "--view" => {
                 out.debug_view = value("--view")?
                     .parse()

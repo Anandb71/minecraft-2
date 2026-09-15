@@ -40,7 +40,11 @@ pub fn run(args: &Args) -> Result<(), String> {
     let t = Instant::now();
     let mut game = GameWorld::start(args.seed, args.world_dir.clone(), Default::default());
     let terrain = game.wait()?;
-    let camera = spawn_camera(&terrain);
+    let mut camera = spawn_camera(&terrain);
+    if let Some((pos, look)) = args.camera {
+        camera.position = glam::DVec3::from_array(pos);
+        camera.look_at(glam::DVec3::from_array(look));
+    }
     eprintln!(
         "terrain ready in {:.2}s, spawn at {:.0} {:.0} {:.0}",
         t.elapsed().as_secs_f32(),
