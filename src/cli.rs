@@ -23,6 +23,7 @@ pub struct Args {
     pub hud: bool,
     /// Renderer debug view index.
     pub debug_view: u32,
+    pub no_beam: bool,
 }
 
 impl Default for Args {
@@ -35,6 +36,7 @@ impl Default for Args {
             software: false,
             hud: false,
             debug_view: 0,
+            no_beam: false,
         }
     }
 }
@@ -47,6 +49,7 @@ usage: minecraft-2 [options]
   --size <w>x<h>         headless resolution (default 1280x720)
   --software             use the software adapter (WARP / lavapipe)
   --hud                  draw the profiler overlay into captures
+  --no-beam              disable the beam prepass (A/B measurement)
   --view <n>             debug view: 0 shaded, 1 LOD hits, 2 march iterations";
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
@@ -73,6 +76,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             }
             "--software" => out.software = true,
             "--hud" => out.hud = true,
+            "--no-beam" => out.no_beam = true,
             "--view" => {
                 out.debug_view = value("--view")?
                     .parse()

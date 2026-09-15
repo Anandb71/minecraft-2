@@ -32,11 +32,16 @@ struct Ray {
     base: vec3<i32>,
     frac: vec3<f32>,
     dir: vec3<f32>,
+    // Distance at which traversal starts, from the beam prepass.
+    t_min: f32,
     t_max: f32,
     // Stop descending when a cell is smaller than this many voxels per unit t.
     lod_scale: f32,
     // Record non-resident data the ray touched.
     feedback: bool,
+    // Beam mode: return the entry of the first occupied brick cell instead
+    // of marching into it.
+    coarse: bool,
 }
 
 struct Hit {
@@ -196,7 +201,8 @@ fn march(r_in: Ray) -> Hit {
     var iterations = 0u;
 
     let clip = clip_world(r, inv);
-    if clip.x > clip.y {
+    let t_start = max(clip.x, r.t_min);
+    if t_start > clip.y {
         return miss_hit(0u);
     }
     let t_end = clip.y;
@@ -217,7 +223,7 @@ fn march(r_in: Ray) -> Hit {
     var size = SECTOR_VOXELS;
     var dims = vec3<i32>(WORLD_SECTORS_XZ, 1, WORLD_SECTORS_XZ);
     var delta = f32(size) * abs_inv;
-    var t_cell = clip.x;
+    var t_cell = t_start;
     var cell = first_cell(r, vec3<f32>(-r.base), f32(size), dims, t_cell);
     var tmax = first_tmax(r, inv, vec3<f32>(-r.base), f32(size), cell);
 
@@ -266,6 +272,9 @@ fn march(r_in: Ray) -> Hit {
                             request_upload(word);
                         }
                         return Hit(HIT_LOD, t_cell, voxel_at(r, t_cell, cell_min, cell_max), axis, leaf & 0xffffu, 0u, iterations, 0u);
+                    }
+                    if r.coarse {
+                        return Hit(HIT_LOD, t_cell, cell_min, axis, 0u, 0u, iterations, 0u);
                     }
                     // Sub-pixel brick: shade it from its first palette entry.
                     if f32(size) < t_cell * r.lod_scale {

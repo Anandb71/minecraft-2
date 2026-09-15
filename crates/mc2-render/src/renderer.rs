@@ -6,7 +6,7 @@ use crate::debug_shade::DebugShadePass;
 use crate::frame::FrameCtx;
 use crate::hud::HudPass;
 use crate::present::PresentPass;
-use crate::vis::{PrimaryVisPass, VisTargets};
+use crate::vis::{BeamPass, PrimaryVisPass, VisTargets};
 use crate::voxel_gpu::{GpuWorld, GpuWorldConfig};
 use glam::Vec3;
 use mc2_gpu::{FrameGraph, Gpu, GpuProfiler, TexHandle, TextureDesc};
@@ -50,6 +50,8 @@ pub struct Renderer {
     pub sun_dir: Vec3,
     pub debug_mode: u32,
     pub lod_pixels: f32,
+    /// Start primary rays from the beam prepass distances.
+    pub beam: bool,
 }
 
 pub fn render_size(output: (u32, u32), scale: f32) -> (u32, u32) {
@@ -86,6 +88,7 @@ impl Renderer {
             }
             RenderMode::World => {
                 let vis = VisTargets::create(&mut graph);
+                graph.add_pass(Box::new(BeamPass::new(dev, &frame, vis.beam)));
                 graph.add_pass(Box::new(PrimaryVisPass::new(dev, &frame, vis)));
                 graph.add_pass(Box::new(DebugShadePass::new(dev, &frame, vis, scene)));
             }
@@ -117,6 +120,7 @@ impl Renderer {
             sun_dir: Vec3::new(0.4, 0.8, 0.3),
             debug_mode: 0,
             lod_pixels: 1.0,
+            beam: true,
         }
     }
 
@@ -161,6 +165,7 @@ impl Renderer {
             debug_mode: self.debug_mode,
             quality: 0,
             lod_pixels: self.lod_pixels,
+            beam: self.beam,
         });
         self.prev_camera = Some(*camera);
     }

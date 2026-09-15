@@ -81,6 +81,8 @@ pub struct FrameUniforms {
     pub quality: u32,
     pub pixel_angle: f32,
     pub lod_pixels: f32,
+    pub beam: u32,
+    pub _pad: [u32; 3],
 }
 
 /// Halton (2,3) sequence, centred, for sub-pixel jitter.
@@ -113,6 +115,7 @@ pub struct FrameInputs {
     pub debug_mode: u32,
     pub quality: u32,
     pub lod_pixels: f32,
+    pub beam: bool,
 }
 
 impl FrameUniforms {
@@ -152,6 +155,8 @@ impl FrameUniforms {
             quality: i.quality,
             pixel_angle: 2.0 * (i.camera.fov_y * 0.5).tan() / i.render_size.1.max(1) as f32,
             lod_pixels: i.lod_pixels,
+            beam: u32::from(i.beam),
+            _pad: [0; 3],
         }
     }
 
@@ -166,8 +171,8 @@ mod tests {
 
     #[test]
     fn uniform_block_matches_wgsl_size() {
-        // 3 mat4 (192) + 3 x 16 + 4 x vec2 (32) + 16 + 16, as laid out in frame.wgsl
-        assert_eq!(std::mem::size_of::<FrameUniforms>(), 304);
+        // 3 mat4 (192) + 3 x 16 + 4 x vec2 (32) + 3 x 16, as laid out in frame.wgsl
+        assert_eq!(std::mem::size_of::<FrameUniforms>(), 320);
     }
 
     #[test]
@@ -206,6 +211,7 @@ mod tests {
             debug_mode: 0,
             quality: 0,
             lod_pixels: 1.0,
+            beam: false,
         });
         let inv = Mat4::from_cols_array_2d(&u.inv_view_proj);
         let far = inv * glam::Vec4::new(0.0, 0.0, 0.5, 1.0);

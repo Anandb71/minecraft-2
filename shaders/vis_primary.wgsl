@@ -11,6 +11,7 @@
 @group(2) @binding(0) var vis_id: texture_storage_2d<rgba32uint, write>;
 @group(2) @binding(1) var vis_depth: texture_storage_2d<r32float, write>;
 @group(2) @binding(2) var vis_motion: texture_storage_2d<rgba16float, write>;
+@group(2) @binding(3) var beam_t: texture_2d<f32>;
 
 const SKY_DEPTH: f32 = 1e9;
 
@@ -26,6 +27,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     ray.frac = frame.camera_frac;
     ray.dir = dir;
     ray.t_max = 4096.0 * VOXELS_PER_METRE;
+    ray.coarse = false;
+    ray.t_min = 0.0;
+    if frame.beam != 0u {
+        let b = vec2<i32>(id.xy / 4u);
+        let t0 = textureLoad(beam_t, b, 0).r;
+        let t1 = textureLoad(beam_t, b + vec2<i32>(1, 0), 0).r;
+        let t2 = textureLoad(beam_t, b + vec2<i32>(0, 1), 0).r;
+        let t3 = textureLoad(beam_t, b + vec2<i32>(1, 1), 0).r;
+        let tb = min(min(t0, t1), min(t2, t3));
+        // Back off one brick plus the beam's own width at that distance.
+        ray.t_min = max(tb - 8.0 - tb * frame.pixel_angle * 8.0, 0.0);
+    }
     ray.lod_scale = frame.pixel_angle * frame.lod_pixels;
     ray.feedback = true;
     let hit = march(ray);

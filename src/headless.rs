@@ -36,6 +36,7 @@ pub fn run(args: &Args) -> Result<(), String> {
     eprintln!("adapter: {}", gpu.describe());
     let mut renderer = Renderer::new(&gpu, FORMAT, args.size, RendererOptions::default());
     renderer.debug_mode = args.debug_view;
+    renderer.beam = !args.no_beam;
     let t = Instant::now();
     let (mut world, camera) = scene::demo();
     eprintln!("scene built in {:.2}s", t.elapsed().as_secs_f32());
@@ -90,7 +91,28 @@ pub fn run(args: &Args) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             eprintln!("wrote {}", path.display());
         }
-        Mode::Bench => print_report(&renderer, &frame_ms, args, elapsed),
+        Mode::Bench => {
+            print_report(&renderer, &frame_ms, args, elapsed);
+            if args.debug_view == 2
+                && let Some(tex) = renderer.graph_texture("vis depth")
+            {
+                let raw = mc2_gpu::capture::read_texture(&gpu.device, &gpu.queue, tex);
+                let mut its: Vec<f32> = raw
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|b| f32::from_le_bytes(*b))
+                    .collect();
+                its.sort_by(f32::total_cmp);
+                let mean = its.iter().sum::<f32>() / its.len() as f32;
+                println!(
+                    "march iterations per ray: mean {mean:.1}, p50 {}, p99 {}, max {}",
+                    its[its.len() / 2],
+                    its[its.len() * 99 / 100],
+                    its[its.len() - 1]
+                );
+            }
+        }
         Mode::Window => unreachable!("headless::run called in window mode"),
     }
     Ok(())
