@@ -80,16 +80,18 @@ fn voxel_at(r: Ray, t: f32, lo: vec3<i32>, hi: vec3<i32>) -> vec3<i32> {
     return clamp(r.base + vec3<i32>(floor(p)), lo, hi);
 }
 
+// Vector writes through a dynamic index are not l-values under FXC; build
+// axis vectors with select instead.
+fn axis_mask(a: u32) -> vec3<bool> {
+    return vec3<bool>(a == 0u, a == 1u, a == 2u);
+}
+
 fn axis_step(a: u32, s: vec3<i32>) -> vec3<i32> {
-    var v = vec3<i32>(0);
-    v[a] = s[a];
-    return v;
+    return select(vec3<i32>(0), s, axis_mask(a));
 }
 
 fn axis_unit(a: u32) -> vec3<f32> {
-    var v = vec3<f32>(0.0);
-    v[a] = 1.0;
-    return v;
+    return select(vec3<f32>(0.0), vec3<f32>(1.0), axis_mask(a));
 }
 
 // Marches one brick between t0 and t1. `axis_in` is the face the ray entered by.

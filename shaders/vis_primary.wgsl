@@ -47,8 +47,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    var normal = vec3<f32>(0.0);
-    normal[hit.axis] = -sign(dir[hit.axis]);
+    var normal = select(vec3<f32>(0.0), -sign(dir), axis_mask(hit.axis));
     if hit.kind == HIT_LOD && hit.lod != 0u {
         // Aggregate normal of the filtered subtree, blended toward the face
         // by how spread its distribution is.
