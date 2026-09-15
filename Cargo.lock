@@ -473,6 +473,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc2-render"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "font8x8",
+ "glam",
+ "log",
+ "mc2-core",
+ "mc2-gpu",
+ "png",
+ "wgpu",
+]
+
+[[package]]
 name = "minecraft-2"
 version = "0.1.0"
 dependencies = [

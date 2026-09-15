@@ -29,6 +29,7 @@ font8x8 = { version = "0.3.1", default-features = false }
 log = "0.4"
 mc2-core = { path = "crates/mc2-core" }
 mc2-gpu = { path = "crates/mc2-gpu" }
+mc2-render = { path = "crates/mc2-render" }
 
 [dependencies]
 mc2-core.workspace = true
