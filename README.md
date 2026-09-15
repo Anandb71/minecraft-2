@@ -1,0 +1,94 @@
+# MINECRAFT 2
+
+A voxel sandbox that meshes nothing. The world is a sparse voxel structure ray
+marched directly in compute shaders, built in Rust on wgpu. Resolution, traced
+lighting, arbitrary destruction and traced audio all come from the same
+acceleration structure.
+
+> Status: under construction. Systems land in the order listed in
+> [Build order](#build-order); each is tagged when it runs.
+
+## Build and run
+
+Requires Rust stable (edition 2024) and a GPU with Vulkan, DX12 or Metal.
+
+```bash
+cargo run --release
+```
+
+Headless modes:
+
+```bash
+cargo run --release -- --capture shot.png --frames 120 --size 2560x1440
+cargo run --release -- --bench --frames 600 --size 2560x1440
+```
+
+`--software` selects the software adapter (WARP on Windows, lavapipe on Linux).
+`MC2_BACKEND=vulkan|dx12|metal` forces a backend.
+
+## Controls
+
+| Key | Action |
+|---|---|
+| F3 | Toggle profiler HUD |
+| V | Toggle vsync |
+| Esc | Quit |
+
+## Features
+
+- Own frame graph: declared reads/writes, validation, culling, resize-aware allocation
+- GPU timestamp query on every pass, CPU scopes everywhere, rolling p99 on screen
+- WGSL hot reload in debug builds with `#import`
+- AgX display transform
+- Golden image tests on WARP in CI
+
+## Frame budget
+
+1440p, 60 fps, mid range 2024 discrete GPU. 16.6 ms. The profiler HUD shows
+each line's last and p99 cost and turns red when p99 exceeds its budget.
+
+| Line | Budget |
+|---|---|
+| Primary visibility march | 2.5 ms |
+| Direct light (ReSTIR) | 2.0 ms |
+| Indirect light | 2.5 ms |
+| Reflections | 1.0 ms |
+| Denoise and upsample | 2.0 ms |
+| Volumetrics and clouds | 2.0 ms |
+| Atmosphere and sky | 0.5 ms |
+| Fluid and fire (amortized) | 1.5 ms |
+| Post and present | 1.0 ms |
+| Headroom | 1.6 ms |
+
+Physics runs on its own thread at a fixed 120 Hz with a 4 ms tick budget.
+
+## Build order
+
+1. Harness: window, device, frame graph, WGSL hot reload, timestamp queries, profiler HUD, golden image rig, CI. **(v0.1-harness)**
+2. Brickmap, 64-tree, palette compression, CPU reference marcher.
+3. GPU marcher, visibility buffer, brick streaming with feedback.
+4. Worldgen v1, region streaming, LOD.
+5. Player controller, collision, carve and place.
+6. Sun, sky LUTs, traced shadows, ReSTIR direct light.
+7. Indirect light, denoise, temporal upsample.
+8. Reflections, volumetrics, clouds, post stack, photo mode.
+9. Rigid bodies, contacts, destruction.
+10. Structural integrity and collapse.
+11. Fluids.
+12. Fire, heat, materials, wind, weather.
+13. Worldgen v2: tectonics, erosion, climate, hydrology, caves, ecology.
+14. Animation, motion matching, IK, ragdolls.
+15. NPCs, settlements, economy, vehicles.
+16. Traced audio.
+17. Inventory, crafting, tools, UI, settings, persistence.
+18. Optimisation and content pass.
+
+## Repository
+
+- `crates/mc2-core`: profiler, statistics
+- `crates/mc2-gpu`: device, frame graph, shader library, timestamp profiler, capture
+- `crates/mc2-render`: passes and the renderer
+- `shaders/`: WGSL
+- `golden/`: reference images for renderer tests
+- [`DEVLOG.md`](DEVLOG.md): how each system works and what it costs
+- [`DECISIONS.md`](DECISIONS.md): architectural forks and the measurements behind them
