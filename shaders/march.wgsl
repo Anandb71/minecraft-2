@@ -288,6 +288,10 @@ fn march(r_in: Ray) -> Hit {
                     }
                 } else {
                     let c = ptr + slot * 4u;
+                    let cw0 = tree[c];
+                    if (cw0 & UNIFORM_NODE) != 0u {
+                        return Hit(HIT_VOXEL, t_cell, voxel_at(r, t_cell, cell_min, cell_max), axis, cw0 & 0xffffu, 0u, iterations, 0u);
+                    }
                     if f32(size) < t_cell * r.lod_scale {
                         let lod = tree[c + 3u];
                         return Hit(HIT_LOD, t_cell, voxel_at(r, t_cell, cell_min, cell_max), axis, lod & 0xffffu, lod, iterations, 0u);

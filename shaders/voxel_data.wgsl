@@ -20,7 +20,8 @@ struct Material {
 
 const LEAF_PARENT: u32 = 0x80000000u;
 const NOT_RESIDENT: u32 = 0x40000000u;
-const PTR_MASK: u32 = 0x3fffffffu;
+const UNIFORM_NODE: u32 = 0x20000000u;
+const PTR_MASK: u32 = 0x1fffffffu;
 const UNIFORM: u32 = 0x80000000u;
 const WIDE: u32 = 0x20000000u;
 const BRICK_PTR_MASK: u32 = 0x1fffffffu;
