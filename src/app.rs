@@ -41,6 +41,7 @@ pub struct App {
     show_profiler: bool,
     vsync: bool,
     debug_mode: u32,
+    quality: mc2_render::quality::Preset,
     error: Option<String>,
     exit_after: Option<u32>,
     frames: u32,
@@ -88,6 +89,7 @@ impl App {
             show_profiler: true,
             vsync: true,
             debug_mode: 0,
+            quality: args.quality,
             error: None,
             exit_after: args.exit_after,
             frames: 0,
@@ -130,7 +132,10 @@ impl App {
             &gpu,
             format,
             (config.width, config.height),
-            RendererOptions::default(),
+            RendererOptions {
+                quality: self.quality.settings(),
+                ..Default::default()
+            },
         );
         self.running = Some(Running {
             window,
@@ -258,7 +263,13 @@ impl App {
                     s.tree_mb,
                     s.voxel_mb
                 ),
-                format!("pos {:.1} {:.1} {:.1}", p.x, p.y, p.z),
+                format!(
+                    "pos {:.1} {:.1} {:.1}  quality {} (F6)",
+                    p.x,
+                    p.y,
+                    p.z,
+                    self.quality.name()
+                ),
                 format!(
                     "click capture  WASD move  space jump  ctrl crouch  shift sprint  F fly  F5 view  Tab mode  1-9 slot  F3 HUD  F4 view {}  V vsync {}",
                     self.debug_mode,
@@ -314,7 +325,13 @@ impl App {
                 }
             }
             KeyCode::F3 => self.show_profiler = !self.show_profiler,
-            KeyCode::F4 => self.debug_mode = (self.debug_mode + 1) % 3,
+            KeyCode::F4 => self.debug_mode = (self.debug_mode + 1) % 4,
+            KeyCode::F6 => {
+                self.quality = self.quality.next();
+                if let Some(r) = &mut self.running {
+                    r.renderer.set_quality(self.quality.settings());
+                }
+            }
             KeyCode::KeyV => {
                 self.vsync = !self.vsync;
                 self.reconfigure();

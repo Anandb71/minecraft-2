@@ -35,7 +35,15 @@ pub fn run(args: &Args) -> Result<(), String> {
     })
     .map_err(|e| e.to_string())?;
     eprintln!("adapter: {}", gpu.describe());
-    let mut renderer = Renderer::new(&gpu, FORMAT, args.size, RendererOptions::default());
+    let mut renderer = Renderer::new(
+        &gpu,
+        FORMAT,
+        args.size,
+        RendererOptions {
+            quality: args.quality.settings(),
+            ..Default::default()
+        },
+    );
     renderer.debug_mode = args.debug_view;
     renderer.beam = !args.no_beam;
     let t = Instant::now();

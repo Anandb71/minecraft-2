@@ -30,6 +30,7 @@ pub struct Args {
     pub camera: Option<([f64; 3], [f64; 3])>,
     /// Scripted play before a headless capture.
     pub demo: Option<crate::demo::Demo>,
+    pub quality: mc2_render::quality::Preset,
 }
 
 impl Default for Args {
@@ -47,6 +48,7 @@ impl Default for Args {
             world_dir: PathBuf::from("worlds/default"),
             camera: None,
             demo: None,
+            quality: mc2_render::quality::Preset::UltraRealistic,
         }
     }
 }
@@ -64,6 +66,8 @@ usage: minecraft-2 [options]
   --world <dir>          world directory (default worlds/default)
   --camera x,y,z,lx,ly,lz  headless camera position and look-at target (m)
   --demo build           scripted building before a headless capture
+  --quality <tier>       0 Realistic, 1 Hyper Realistic, 2 Ultra Realistic
+                         (default), 3 Super Ultra Crazy Duper Realistic
   --view <n>             debug view: 0 shaded, 1 LOD hits, 2 march iterations";
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
@@ -113,6 +117,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 }
                 out.camera = Some(([v[0], v[1], v[2]], [v[3], v[4], v[5]]));
             }
+            "--quality" => {
+                let v = value("--quality")?;
+                out.quality = mc2_render::quality::Preset::parse(&v)
+                    .ok_or(format!("unknown quality `{v}`"))?;
+            }
             "--view" => {
                 out.debug_view = value("--view")?
                     .parse()
@@ -140,6 +149,20 @@ mod tests {
         assert_eq!(a.frames, 30);
         assert_eq!(a.size, (640, 360));
         assert!(a.software);
+    }
+
+    #[test]
+    fn parses_quality_tiers() {
+        use mc2_render::quality::Preset;
+        assert_eq!(p("").unwrap().quality, Preset::UltraRealistic);
+        assert_eq!(p("--quality 0").unwrap().quality, Preset::Realistic);
+        assert_eq!(
+            p("--quality super-ultra-crazy-duper-realistic")
+                .unwrap()
+                .quality,
+            Preset::SuperUltraCrazyDuperRealistic
+        );
+        assert!(p("--quality low").is_err());
     }
 
     #[test]
