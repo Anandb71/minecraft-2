@@ -8,7 +8,8 @@
 //! |------|--------|-------------------------------------------------------|
 //! | 0    | 31     | `LEAF_PARENT`: children are brick-cell leaf words     |
 //! | 0    | 30     | `NOT_RESIDENT`: children are not on the GPU           |
-//! | 0    | 0..30  | absolute word offset of the compact child block       |
+//! | 0    | 29     | `UNIFORM_NODE`: one material throughout (bits 0..16)  |
+//! | 0    | 0..29  | absolute word offset of the compact child block       |
 //! | 1, 2 |        | child mask, low and high halves                       |
 //! | 3    | 0..16  | LOD material                                          |
 //! | 3    | 16..28 | LOD normal, octahedral 6+6 bits                       |
@@ -34,7 +35,8 @@ use glam::Vec3;
 pub const NODE_WORDS: usize = 4;
 pub const LEAF_PARENT: u32 = 1 << 31;
 pub const NOT_RESIDENT: u32 = 1 << 30;
-pub const PTR_MASK: u32 = (1 << 30) - 1;
+pub const UNIFORM_NODE: u32 = 1 << 29;
+pub const PTR_MASK: u32 = (1 << 29) - 1;
 pub const UNIFORM: u32 = 1 << 31;
 pub const WIDE: u32 = 1 << 29;
 pub const BRICK_PTR_MASK: u32 = (1 << 29) - 1;
@@ -191,7 +193,7 @@ impl FlatChunk {
         let mut stack = vec![0usize];
         while let Some(n) = stack.pop() {
             let w0 = self.words[n];
-            if w0 & NOT_RESIDENT != 0 {
+            if w0 & (NOT_RESIDENT | UNIFORM_NODE) != 0 {
                 continue;
             }
             let rel = (w0 & PTR_MASK) as usize;
@@ -239,6 +241,27 @@ pub fn flatten_chunk(tree: &ChunkTree, bricks: &impl BrickResidency) -> FlatChun
     }
 }
 
+fn uniform_node(material: MaterialId, voxels: u32) -> ([u32; 4], f32, Histogram) {
+    let lod = Lod {
+        material,
+        normal: Vec3::Y,
+        spread: 1.0,
+        coverage: 1.0,
+    };
+    let mut hist = Histogram::default();
+    hist.add(material, voxels);
+    (
+        [
+            UNIFORM_NODE | u32::from(material.0),
+            u32::MAX,
+            u32::MAX,
+            pack_lod(&lod),
+        ],
+        1.0,
+        hist,
+    )
+}
+
 fn flatten_l2(
     tree: &ChunkTree,
     l2: &L2,
@@ -246,17 +269,21 @@ fn flatten_l2(
     leaves: &mut Vec<(u32, u32)>,
     bricks: &impl BrickResidency,
 ) -> ([u32; 4], f32, Histogram) {
+    let nodes = match l2 {
+        L2::Uniform(m) => return uniform_node(*m, 128 * 128 * 128),
+        L2::Nodes(nodes) => nodes,
+    };
     let block = words.len();
-    words.resize(block + l2.items.len() * NODE_WORDS, 0);
-    let mut summaries = Vec::with_capacity(l2.items.len());
-    for (k, (i1, l1)) in l2.iter().enumerate() {
+    words.resize(block + nodes.items.len() * NODE_WORDS, 0);
+    let mut summaries = Vec::with_capacity(nodes.items.len());
+    for (k, (i1, l1)) in nodes.iter().enumerate() {
         let (w, cov, hist) = flatten_l1(tree, l1, words, leaves, bricks);
         words[block + k * NODE_WORDS..block + (k + 1) * NODE_WORDS].copy_from_slice(&w);
         summaries.push((i1, cov, hist));
     }
     let s = summarise(summaries.into_iter());
     (
-        node_words(block as u32, 0, l2.mask, &s.lod),
+        node_words(block as u32, 0, nodes.mask, &s.lod),
         s.coverage,
         s.hist,
     )
@@ -269,9 +296,13 @@ fn flatten_l1(
     leaves: &mut Vec<(u32, u32)>,
     bricks: &impl BrickResidency,
 ) -> ([u32; 4], f32, Histogram) {
+    let cells = match l1 {
+        L1::Uniform(m) => return uniform_node(*m, 32 * 32 * 32),
+        L1::Cells(cells) => cells,
+    };
     let block = words.len();
-    let mut summaries = Vec::with_capacity(l1.items.len());
-    for (i, &cell) in l1.iter() {
+    let mut summaries = Vec::with_capacity(cells.items.len());
+    for (i, &cell) in cells.iter() {
         let word = match cell {
             Cell::Empty => unreachable!("empty cells are absent from the mask"),
             Cell::Uniform(m) => UNIFORM | u32::from(m.0),
@@ -292,7 +323,7 @@ fn flatten_l1(
     }
     let s = summarise(summaries.into_iter());
     (
-        node_words(block as u32, LEAF_PARENT, l1.mask, &s.lod),
+        node_words(block as u32, LEAF_PARENT, cells.mask, &s.lod),
         s.coverage,
         s.hist,
     )
@@ -368,6 +399,9 @@ mod tests {
                 return 0;
             }
             let slot = (mask & ((1u64 << idx) - 1)).count_ones() as usize;
+            if tree[node] & UNIFORM_NODE != 0 {
+                return tree[node] as u16;
+            }
             let ptr = (tree[node] & PTR_MASK) as usize;
             if tree[node] & LEAF_PARENT != 0 {
                 let leaf = tree[ptr + slot];
@@ -385,6 +419,9 @@ mod tests {
                 return (voxels[base + 17 + p as usize / 2] >> (16 * (p & 1))) as u16;
             }
             node = ptr + slot * NODE_WORDS;
+            if tree[node] & UNIFORM_NODE != 0 {
+                return tree[node] as u16;
+            }
             shift -= 2;
         }
     }
@@ -402,6 +439,8 @@ mod tests {
             t.set_voxel(v, MaterialId(1 + (rng.next_f64() * 40.0) as u16));
         }
         t.set_cell(IVec3::new(3, 3, 3), Cell::Uniform(ids::BASALT));
+        t.set_node(2, IVec3::new(3, 3, 3), ids::GRANITE);
+        t.set_node(1, IVec3::new(0, 12, 0), ids::SAND);
         // A wide brick.
         for i in 0..512 {
             let l = IVec3::new(i & 7, (i >> 6) & 7, (i >> 3) & 7);
@@ -422,7 +461,11 @@ mod tests {
         let mut tree = vec![0u32; base as usize];
         tree.extend_from_slice(&flat.words);
 
-        for (b, _) in t.cells() {
+        let uniform_probes = t
+            .uniform_nodes()
+            .into_iter()
+            .map(|n| n.min_cell + IVec3::splat(n.cells - 1));
+        for b in t.cells().map(|(b, _)| b).chain(uniform_probes) {
             for probe in [IVec3::ZERO, IVec3::splat(7), IVec3::new(3, 1, 6)] {
                 let v = (b << 3) + probe;
                 assert_eq!(

@@ -15,7 +15,7 @@
 use crate::brick::subblock_bit;
 use crate::coords::{self, CHUNK_VOXELS, ChunkPos};
 use crate::material::MaterialId;
-use crate::tree::{Cell, ChunkTree, child_index};
+use crate::tree::{Cell, ChunkTree, L1, L2, child_index};
 use crate::world::VoxelWorld;
 use glam::{DVec3, IVec3};
 
@@ -131,18 +131,41 @@ impl<F: Fn(MaterialId) -> bool> Ray<F> {
     ) -> Option<RayHit> {
         let root = &tree.root;
         self.dda(grid(origin, 128, 4), t0, t1, axis, |r, c, a0, a1, ax| {
-            let l2 = root.get(child_index(c))?;
             let l2_min = origin + c * 128;
+            let nodes = match root.get(child_index(c))? {
+                L2::Uniform(m) => return r.uniform(*m, l2_min, 128, a0, ax),
+                L2::Nodes(n) => n,
+            };
             r.dda(grid(l2_min, 32, 4), a0, a1, ax, |r, c, b0, b1, bx| {
-                let l1 = l2.get(child_index(c))?;
                 let l1_min = l2_min + c * 32;
+                let cells = match nodes.get(child_index(c))? {
+                    L1::Uniform(m) => return r.uniform(*m, l1_min, 32, b0, bx),
+                    L1::Cells(cells) => cells,
+                };
                 r.dda(grid(l1_min, 8, 4), b0, b1, bx, |r, c, c0, c1, cx| {
-                    let cell = *l1.get(child_index(c))?;
+                    let cell = *cells.get(child_index(c))?;
                     let brick_min = l1_min + c * 8;
                     r.cell(tree, cell, brick_min, c0, c1, cx)
                 })
             })
         })
+    }
+
+    /// Hit at the entry of a solid cube of one material.
+    fn uniform(
+        &self,
+        m: MaterialId,
+        min: IVec3,
+        size: i32,
+        t0: f64,
+        axis: usize,
+    ) -> Option<RayHit> {
+        if !(self.accept)(m) {
+            return None;
+        }
+        let p = self.o + self.d * t0;
+        let v = p.floor().as_ivec3().clamp(min, min + (size - 1));
+        Some(self.hit(v, t0, axis, m))
     }
 
     fn cell(
@@ -156,14 +179,7 @@ impl<F: Fn(MaterialId) -> bool> Ray<F> {
     ) -> Option<RayHit> {
         match cell {
             Cell::Empty => None,
-            Cell::Uniform(m) => {
-                if !(self.accept)(m) {
-                    return None;
-                }
-                let p = self.o + self.d * t0;
-                let v = p.floor().as_ivec3().clamp(min, min + 7);
-                Some(self.hit(v, t0, axis, m))
-            }
+            Cell::Uniform(m) => self.uniform(m, min, 8, t0, axis),
             Cell::Brick(i) => {
                 let brick = tree.brick(i);
                 let occ = brick.occupancy();

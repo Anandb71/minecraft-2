@@ -3,10 +3,14 @@
 //! Three levels of 4^3 fan-out sit above the bricks: the chunk root (children
 //! are 8 m L2 nodes), L2 (children are 2 m L1 nodes) and L1 (children are
 //! 0.5 m brick cells). Every node stores a 64-bit child mask and a compact
-//! child array: child `i` lives at `popcount(mask & ((1 << i) - 1))`. A brick
-//! cell is empty (absent from the mask), uniform (one material reference, no
-//! brick allocated) or a full palette brick. An intact block of stone is
-//! eight uniform cells: a few bytes.
+//! child array: child `i` lives at `popcount(mask & ((1 << i) - 1))`.
+//!
+//! Solid regions collapse at every level. A brick cell is empty (absent from
+//! the mask), uniform (one material reference, no brick allocated) or a
+//! palette brick. An L1 or L2 node whose every child is the same uniform
+//! material is itself stored as a single uniform node, so a chunk of solid
+//! rock deep underground is 64 material references rather than a quarter of
+//! a million cells.
 //!
 //! Child index convention (shared with the GPU): `x + z*4 + y*16`.
 
@@ -54,6 +58,17 @@ impl<T> Default for Sparse64<T> {
 }
 
 impl<T> Sparse64<T> {
+    /// All 64 children set to clones of `item`.
+    pub fn full(item: T) -> Self
+    where
+        T: Clone,
+    {
+        Self {
+            mask: u64::MAX,
+            items: vec![item; 64],
+        }
+    }
+
     pub fn get(&self, i: u32) -> Option<&T> {
         (self.mask >> i & 1 != 0).then(|| &self.items[slot(self.mask, i)])
     }
@@ -87,6 +102,10 @@ impl<T> Sparse64<T> {
         self.mask == 0
     }
 
+    pub fn is_full(&self) -> bool {
+        self.mask == u64::MAX
+    }
+
     /// `(child index, item)` in ascending index order.
     pub fn iter(&self) -> impl Iterator<Item = (u32, &T)> {
         let mut m = self.mask;
@@ -103,8 +122,43 @@ impl<T> Sparse64<T> {
     }
 }
 
-pub type L1 = Sparse64<Cell>;
-pub type L2 = Sparse64<L1>;
+/// 2 m node: brick cells, or one material throughout.
+#[derive(Clone, Debug)]
+pub enum L1 {
+    Uniform(MaterialId),
+    Cells(Sparse64<Cell>),
+}
+
+/// 8 m node: 2 m nodes, or one material throughout.
+#[derive(Clone, Debug)]
+pub enum L2 {
+    Uniform(MaterialId),
+    Nodes(Sparse64<L1>),
+}
+
+impl L1 {
+    fn uniform(&self) -> Option<MaterialId> {
+        match self {
+            L1::Uniform(m) => Some(*m),
+            L1::Cells(_) => None,
+        }
+    }
+}
+
+/// Material shared by every item of a full child array, if any.
+fn common_uniform<T>(
+    s: &Sparse64<T>,
+    uniform: impl Fn(&T) -> Option<MaterialId>,
+) -> Option<MaterialId> {
+    if !s.is_full() {
+        return None;
+    }
+    let first = uniform(&s.items[0])?;
+    s.items
+        .iter()
+        .all(|it| uniform(it) == Some(first))
+        .then_some(first)
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct ChunkTree {
@@ -128,6 +182,16 @@ fn path(b: IVec3) -> (u32, u32, u32) {
     )
 }
 
+/// A region of one material stored as a single node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UniformNode {
+    /// Minimum corner in brick cells.
+    pub min_cell: IVec3,
+    /// Edge length in brick cells: 4 for a 2 m node, 16 for an 8 m node.
+    pub cells: i32,
+    pub material: MaterialId,
+}
+
 impl ChunkTree {
     pub fn new() -> Self {
         Self::default()
@@ -147,12 +211,15 @@ impl ChunkTree {
 
     pub fn cell(&self, b: IVec3) -> Cell {
         let (a, m, c) = path(b);
-        self.root
-            .get(a)
-            .and_then(|l2| l2.get(m))
-            .and_then(|l1| l1.get(c))
-            .copied()
-            .unwrap_or(Cell::Empty)
+        match self.root.get(a) {
+            None => Cell::Empty,
+            Some(L2::Uniform(u)) => Cell::Uniform(*u),
+            Some(L2::Nodes(n)) => match n.get(m) {
+                None => Cell::Empty,
+                Some(L1::Uniform(u)) => Cell::Uniform(*u),
+                Some(L1::Cells(cells)) => cells.get(c).copied().unwrap_or(Cell::Empty),
+            },
+        }
     }
 
     fn alloc_brick(&mut self, brick: Brick) -> u32 {
@@ -175,8 +242,24 @@ impl ChunkTree {
         }
     }
 
-    /// Replaces a brick cell. Bricks passed in are normalised: an empty brick
-    /// becomes `Empty`, a single-material brick becomes `Uniform`.
+    fn release_l1(&mut self, l1: &L1) {
+        if let L1::Cells(cells) = l1 {
+            for &c in &cells.items {
+                self.release(c);
+            }
+        }
+    }
+
+    fn release_l2(&mut self, l2: &L2) {
+        if let L2::Nodes(nodes) = l2 {
+            for n in &nodes.items {
+                self.release_l1(n);
+            }
+        }
+    }
+
+    /// Replaces a brick cell. Uniform nodes on the path split as needed and
+    /// the path re-collapses afterwards.
     pub fn set_cell(&mut self, b: IVec3, cell: Cell) {
         let old = self.cell(b);
         if old == cell {
@@ -184,29 +267,106 @@ impl ChunkTree {
         }
         let (a, m, c) = path(b);
         self.structure_dirty = true;
+
+        let l2 = self
+            .root
+            .get_or_insert_with(a, || L2::Nodes(Sparse64::default()));
+        if let L2::Uniform(u) = *l2 {
+            *l2 = L2::Nodes(Sparse64::full(L1::Uniform(u)));
+        }
+        let L2::Nodes(nodes) = l2 else {
+            unreachable!("split above");
+        };
+        let l1 = nodes.get_or_insert_with(m, || L1::Cells(Sparse64::default()));
+        if let L1::Uniform(u) = *l1 {
+            *l1 = L1::Cells(Sparse64::full(Cell::Uniform(u)));
+        }
+        let L1::Cells(cells) = l1 else {
+            unreachable!("split above");
+        };
         match cell {
             Cell::Empty => {
-                if let Some(l2) = self.root.get_mut(a) {
-                    if let Some(l1) = l2.get_mut(m) {
-                        l1.remove(c);
-                        if l1.is_empty() {
-                            l2.remove(m);
-                        }
-                    }
-                    if l2.is_empty() {
-                        self.root.remove(a);
-                    }
-                }
+                cells.remove(c);
             }
-            _ => {
-                let l1 = self
-                    .root
-                    .get_or_insert_with(a, Sparse64::default)
-                    .get_or_insert_with(m, Sparse64::default);
-                *l1.get_or_insert_with(c, || Cell::Empty) = cell;
-            }
+            _ => *cells.get_or_insert_with(c, || Cell::Empty) = cell,
+        }
+
+        // Collapse upward.
+        if cells.is_empty() {
+            nodes.remove(m);
+        } else if let Some(u) = common_uniform(cells, |c| match c {
+            Cell::Uniform(u) => Some(*u),
+            _ => None,
+        }) {
+            *l1 = L1::Uniform(u);
+        }
+        if nodes.is_empty() {
+            self.root.remove(a);
+        } else if let Some(u) = common_uniform(nodes, L1::uniform) {
+            *l2 = L2::Uniform(u);
         }
         self.release(old);
+    }
+
+    /// Replaces a whole 2 m node (`level` 1, `node` in `0..16`) or 8 m node
+    /// (`level` 2, `node` in `0..4`) with one material, or clears it.
+    pub fn set_node(&mut self, level: u32, node: IVec3, material: MaterialId) {
+        self.structure_dirty = true;
+        match level {
+            2 => {
+                let a = child_index(node);
+                if let Some(old) = self.root.remove(a) {
+                    self.release_l2(&old);
+                }
+                if !material.is_air() {
+                    *self.root.get_or_insert_with(a, || L2::Uniform(material)) =
+                        L2::Uniform(material);
+                }
+            }
+            1 => {
+                let a = child_index(node >> 2);
+                let m = child_index(node & 3);
+                let mut removed = None;
+                if let Some(l2) = self.root.get_mut(a) {
+                    if let L2::Uniform(u) = *l2 {
+                        if u == material {
+                            return;
+                        }
+                        *l2 = L2::Nodes(Sparse64::full(L1::Uniform(u)));
+                    }
+                    if let L2::Nodes(nodes) = l2 {
+                        removed = nodes.remove(m);
+                    }
+                }
+                if let Some(old) = &removed {
+                    self.release_l1(old);
+                }
+                if !material.is_air() {
+                    let l2 = self
+                        .root
+                        .get_or_insert_with(a, || L2::Nodes(Sparse64::default()));
+                    if let L2::Nodes(nodes) = l2 {
+                        *nodes.get_or_insert_with(m, || L1::Uniform(material)) =
+                            L1::Uniform(material);
+                    }
+                }
+                let collapse = match self.root.get(a) {
+                    Some(L2::Nodes(nodes)) if nodes.is_empty() => Some(None),
+                    Some(L2::Nodes(nodes)) => common_uniform(nodes, L1::uniform).map(Some),
+                    _ => None,
+                };
+                match collapse {
+                    Some(None) => {
+                        self.root.remove(a);
+                    }
+                    Some(Some(u)) => {
+                        *self.root.get_mut(a).expect("present") = L2::Uniform(u);
+                    }
+                    None => {}
+                }
+            }
+            _ => panic!("set_node supports levels 1 and 2, got {level}"),
+        }
     }
 
     /// Stores a brick, collapsing it to `Empty` or `Uniform` when possible.
@@ -299,18 +459,57 @@ impl ChunkTree {
         }
     }
 
-    /// All non-empty brick cells as `(brick coordinate, cell)`.
+    /// Explicit brick cells as `(brick coordinate, cell)`. Regions stored as
+    /// uniform nodes are reported by `uniform_nodes` instead.
     pub fn cells(&self) -> impl Iterator<Item = (IVec3, Cell)> + '_ {
         self.root.iter().flat_map(|(a, l2)| {
-            l2.iter().flat_map(move |(m, l1)| {
-                l1.iter().map(move |(c, &cell)| {
-                    (
-                        (child_coord(a) << 4) + (child_coord(m) << 2) + child_coord(c),
-                        cell,
-                    )
+            let nodes = match l2 {
+                L2::Nodes(n) => Some(n),
+                L2::Uniform(_) => None,
+            };
+            nodes.into_iter().flat_map(move |nodes| {
+                nodes.iter().flat_map(move |(m, l1)| {
+                    let cells = match l1 {
+                        L1::Cells(c) => Some(c),
+                        L1::Uniform(_) => None,
+                    };
+                    cells.into_iter().flat_map(move |cells| {
+                        cells.iter().map(move |(c, &cell)| {
+                            (
+                                (child_coord(a) << 4) + (child_coord(m) << 2) + child_coord(c),
+                                cell,
+                            )
+                        })
+                    })
                 })
             })
         })
+    }
+
+    /// Every uniform 2 m and 8 m node.
+    pub fn uniform_nodes(&self) -> Vec<UniformNode> {
+        let mut out = Vec::new();
+        for (a, l2) in self.root.iter() {
+            match l2 {
+                L2::Uniform(m) => out.push(UniformNode {
+                    min_cell: child_coord(a) << 4,
+                    cells: 16,
+                    material: *m,
+                }),
+                L2::Nodes(nodes) => {
+                    for (i, l1) in nodes.iter() {
+                        if let L1::Uniform(m) = l1 {
+                            out.push(UniformNode {
+                                min_cell: (child_coord(a) << 4) + (child_coord(i) << 2),
+                                cells: 4,
+                                material: *m,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Takes the dirty state: (structure changed, changed brick slab indices).
@@ -327,9 +526,13 @@ impl ChunkTree {
         let mut n = std::mem::size_of::<Self>();
         n += self.root.items.capacity() * std::mem::size_of::<L2>();
         for (_, l2) in self.root.iter() {
-            n += l2.items.capacity() * std::mem::size_of::<L1>();
-            for (_, l1) in l2.iter() {
-                n += l1.items.capacity() * std::mem::size_of::<Cell>();
+            if let L2::Nodes(nodes) = l2 {
+                n += nodes.items.capacity() * std::mem::size_of::<L1>();
+                for (_, l1) in nodes.iter() {
+                    if let L1::Cells(c) = l1 {
+                        n += c.items.capacity() * std::mem::size_of::<Cell>();
+                    }
+                }
             }
         }
         n + self.bricks.iter().map(Brick::memory_bytes).sum::<usize>()
@@ -410,5 +613,69 @@ mod tests {
         assert_eq!(bricks.len(), 1);
         let (structure, bricks) = t.take_dirty();
         assert!(!structure && bricks.is_empty());
+    }
+
+    #[test]
+    fn filling_a_node_cell_by_cell_collapses_it() {
+        let mut t = ChunkTree::new();
+        for z in 0..4 {
+            for y in 0..4 {
+                for x in 0..4 {
+                    t.set_cell(
+                        IVec3::new(x, y, z) + IVec3::new(8, 0, 4),
+                        Cell::Uniform(ids::GRANITE),
+                    );
+                }
+            }
+        }
+        let nodes = t.uniform_nodes();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].cells, 4);
+        assert_eq!(nodes[0].min_cell, IVec3::new(8, 0, 4));
+        assert_eq!(t.cells().count(), 0);
+        assert_eq!(t.voxel(IVec3::new(70, 3, 40)), ids::GRANITE);
+    }
+
+    #[test]
+    fn uniform_nodes_split_on_edit_and_recollapse() {
+        let mut t = ChunkTree::new();
+        for z in 0..4 {
+            for y in 0..4 {
+                for x in 0..4 {
+                    t.set_node(2, IVec3::new(x, y, z), ids::BASALT);
+                }
+            }
+        }
+        assert_eq!(t.root.items.len(), 64);
+        assert!(
+            t.memory_bytes() < 4096,
+            "solid chunk costs {} bytes",
+            t.memory_bytes()
+        );
+        let v = IVec3::new(200, 100, 300);
+        assert_eq!(t.set_voxel(v, ids::AIR), ids::BASALT);
+        assert_eq!(t.voxel(v), ids::AIR);
+        assert_eq!(t.voxel(v + IVec3::X), ids::BASALT);
+        assert_eq!(t.brick_count(), 1);
+        t.set_voxel(v, ids::BASALT);
+        assert_eq!(t.brick_count(), 0);
+        assert_eq!(
+            t.uniform_nodes().iter().filter(|n| n.cells == 16).count(),
+            64
+        );
+    }
+
+    #[test]
+    fn set_node_level_one_inside_uniform_parent() {
+        let mut t = ChunkTree::new();
+        t.set_node(2, IVec3::ZERO, ids::GRANITE);
+        t.set_node(1, IVec3::new(1, 2, 3), ids::SAND);
+        assert_eq!(t.voxel(IVec3::new(32, 64, 96)), ids::SAND);
+        assert_eq!(t.voxel(IVec3::new(0, 0, 0)), ids::GRANITE);
+        t.set_node(1, IVec3::new(1, 2, 3), ids::GRANITE);
+        assert_eq!(t.uniform_nodes().len(), 1, "parent collapses back");
+        t.set_node(1, IVec3::new(0, 0, 0), ids::AIR);
+        assert_eq!(t.voxel(IVec3::new(5, 5, 5)), ids::AIR);
+        assert_eq!(t.voxel(IVec3::new(40, 5, 5)), ids::GRANITE);
     }
 }
