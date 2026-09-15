@@ -32,6 +32,9 @@ mc2-gpu = { path = "crates/mc2-gpu" }
 
 [dependencies]
 mc2-core.workspace = true
+mc2-gpu.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
 
 [profile.dev]
 opt-level = 1
