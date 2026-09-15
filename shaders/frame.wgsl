@@ -20,13 +20,16 @@ struct Frame {
     sun_dir: vec3<f32>,
     exposure: f32,
     debug_mode: u32,
-    quality: u32,
+    // Initial ReSTIR candidates per pixel.
+    restir_candidates: u32,
     pixel_angle: f32,
     lod_pixels: f32,
     beam: u32,
+    // Visibility rays trace one pixel in trace_stride^2 once history settles.
+    trace_stride: u32,
+    // Active emitters; zero lets passes skip light sampling.
+    light_count: u32,
     _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
     // Sun illuminance at the top of the atmosphere, linear RGB.
     sun_illuminance: vec3<f32>,
     sun_angular_radius: f32,
