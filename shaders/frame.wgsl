@@ -35,7 +35,17 @@ struct Frame {
     sun_angular_radius: f32,
     moon_dir: vec3<f32>,
     moon_illuminance: f32,
+    // 0 new moon, 0.5 full.
+    moon_phase: f32,
+    // Star field rotation about the celestial pole, and the observer
+    // latitude that tilts the pole, radians.
+    star_rotation: f32,
+    latitude: f32,
+    sky_flags: u32,
 }
+
+// sky_flags bit: moon-lit sky LUTs were rendered this frame.
+const SKY_MOON: u32 = 1u;
 
 @group(0) @binding(0) var<uniform> frame: Frame;
 
