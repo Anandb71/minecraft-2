@@ -487,3 +487,115 @@ impl Pass<FrameCtx> for ComposePass {
         );
     }
 }
+
+/// Copies this frame's results into history textures for the next frame.
+pub struct HistoryPass {
+    copies: Vec<(TexHandle, TexHandle)>,
+}
+
+impl HistoryPass {
+    pub fn new(copies: Vec<(TexHandle, TexHandle)>) -> Self {
+        Self { copies }
+    }
+}
+
+impl Pass<FrameCtx> for HistoryPass {
+    fn name(&self) -> &'static str {
+        "post.history"
+    }
+
+    fn setup(&mut self, b: &mut PassBuilder<'_>) {
+        for &(src, dst) in &self.copies {
+            b.read(src);
+            b.write(dst);
+        }
+    }
+
+    fn execute(&mut self, ctx: &mut PassContext<'_, FrameCtx>) {
+        for &(src, dst) in &self.copies {
+            let s = ctx.graph.texture(src);
+            let d = ctx.graph.texture(dst);
+            ctx.encoder
+                .copy_texture_to_texture(s.as_image_copy(), d.as_image_copy(), s.size());
+        }
+    }
+}
+
+/// Metered exposure with temporal adaptation.
+pub struct ExposurePass {
+    scene: TexHandle,
+    previous: TexHandle,
+    out: TexHandle,
+    pipeline: HotCompute,
+    bgl: wgpu::BindGroupLayout,
+    group: Option<(u64, wgpu::BindGroup)>,
+}
+
+impl ExposurePass {
+    pub fn targets(graph: &mut FrameGraph<FrameCtx>) -> (TexHandle, TexHandle) {
+        let desc = |label| TextureDesc {
+            size: mc2_gpu::SizePolicy::Fixed(1, 1, 1),
+            ..history_desc(label, RGBA16F)
+        };
+        (
+            graph.create_texture(desc("exposure")),
+            graph.create_history(desc("exposure prev")),
+        )
+    }
+
+    pub fn new(
+        device: &wgpu::Device,
+        ctx: &FrameCtx,
+        scene: TexHandle,
+        (out, previous): (TexHandle, TexHandle),
+    ) -> Self {
+        let bgl = layout(
+            device,
+            "exposure",
+            wgpu::ShaderStages::COMPUTE,
+            &[unfilterable(), unfilterable(), bind::write_2d(RGBA16F)],
+        );
+        let pipeline = HotCompute::new(
+            device,
+            &ctx.shaders,
+            "exposure.wgsl",
+            "main",
+            &[&ctx.frame_layout, &bgl],
+        );
+        Self {
+            scene,
+            previous,
+            out,
+            pipeline,
+            bgl,
+            group: None,
+        }
+    }
+}
+
+impl Pass<FrameCtx> for ExposurePass {
+    fn name(&self) -> &'static str {
+        "post.exposure"
+    }
+
+    fn setup(&mut self, b: &mut PassBuilder<'_>) {
+        b.read(self.scene);
+        b.read(self.previous);
+        b.write(self.out);
+    }
+
+    fn execute(&mut self, ctx: &mut PassContext<'_, FrameCtx>) {
+        let generation = ctx.graph.generation();
+        if self.group.as_ref().is_none_or(|(g, _)| *g != generation) {
+            let r = views(ctx, &[self.scene, self.previous, self.out]);
+            self.group = Some((
+                generation,
+                bind_group(ctx.device, "exposure", &self.bgl, &r),
+            ));
+        }
+        let group = self.group.as_ref().expect("group").1.clone();
+        let fg = ctx.frame.frame_bind_group.clone();
+        let p = self.pipeline.get(ctx.device, &ctx.frame.shaders).clone();
+        dispatch_all(ctx, "post.exposure", &[(&p, &[&fg, &group], (1, 1, 1))]);
+    }
+}
