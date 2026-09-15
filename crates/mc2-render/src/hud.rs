@@ -218,7 +218,7 @@ impl HudPass {
 
 impl Pass<FrameCtx> for HudPass {
     fn name(&self) -> &'static str {
-        "hud"
+        "post.hud"
     }
 
     fn setup(&mut self, b: &mut PassBuilder<'_>) {

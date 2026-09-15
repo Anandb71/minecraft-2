@@ -50,7 +50,7 @@ impl CalibrationPass {
 
 impl Pass<FrameCtx> for CalibrationPass {
     fn name(&self) -> &'static str {
-        "calibration"
+        "debug.calibration"
     }
 
     fn setup(&mut self, b: &mut PassBuilder<'_>) {

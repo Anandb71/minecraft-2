@@ -91,7 +91,7 @@ impl PresentPass {
 
 impl Pass<FrameCtx> for PresentPass {
     fn name(&self) -> &'static str {
-        "present"
+        "post.present"
     }
 
     fn setup(&mut self, b: &mut PassBuilder<'_>) {

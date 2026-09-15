@@ -76,6 +76,7 @@ pub struct GpuProfiler {
     frame_names: Vec<&'static str>,
     frame_active: bool,
     rows: Vec<GpuRow>,
+    groups: Vec<GpuRow>,
     period_ns: f32,
     frame_total: RollingStats,
 }
@@ -119,6 +120,7 @@ impl GpuProfiler {
             frame_names: Vec::new(),
             frame_active: false,
             rows: Vec::new(),
+            groups: Vec::new(),
             period_ns: queue.get_timestamp_period(),
             frame_total: RollingStats::default(),
         }
@@ -228,25 +230,47 @@ impl GpuProfiler {
                 }
             }
             self.frame_total.push(summed.iter().map(|(_, ms)| ms).sum());
+            // Budget groups: "vis.march" and "vis.resolve" both add to "vis".
+            let mut grouped: Vec<(&'static str, f32)> = Vec::new();
+            for &(name, ms) in &summed {
+                let group = name.split_once('.').map_or(name, |(g, _)| g);
+                match grouped.iter_mut().find(|(g, _)| *g == group) {
+                    Some((_, acc)) => *acc += ms,
+                    None => grouped.push((group, ms)),
+                }
+            }
             for (name, ms) in summed {
-                self.push_row(name, ms);
+                Self::push_into(&mut self.rows, name, ms);
+            }
+            for row in &mut self.groups {
+                if !grouped.iter().any(|(g, _)| *g == row.name) {
+                    row.stats.push(0.0);
+                }
+            }
+            for (group, ms) in grouped {
+                Self::push_into(&mut self.groups, group, ms);
             }
         }
     }
 
-    fn push_row(&mut self, name: &'static str, ms: f32) {
-        match self.rows.iter_mut().find(|r| r.name == name) {
+    fn push_into(rows: &mut Vec<GpuRow>, name: &'static str, ms: f32) {
+        match rows.iter_mut().find(|r| r.name == name) {
             Some(row) => row.stats.push(ms),
             None => {
                 let mut stats = RollingStats::default();
                 stats.push(ms);
-                self.rows.push(GpuRow { name, stats });
+                rows.push(GpuRow { name, stats });
             }
         }
     }
 
     pub fn rows(&self) -> &[GpuRow] {
         &self.rows
+    }
+
+    /// Per-frame sums over pass name prefixes (text before the first dot).
+    pub fn groups(&self) -> &[GpuRow] {
+        &self.groups
     }
 
     /// Sum of all timed passes per frame.
@@ -289,10 +313,19 @@ mod tests {
             prof.begin_frame();
             let mut enc = gpu.device.create_command_encoder(&Default::default());
             let scope = prof.scope("test.noop");
+            let scope2 = prof.scope("test.noop2");
             {
                 let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("noop"),
                     timestamp_writes: scope.compute(),
+                });
+                pass.set_pipeline(&pipeline);
+                pass.dispatch_workgroups(1, 1, 1);
+            }
+            {
+                let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("noop2"),
+                    timestamp_writes: scope2.compute(),
                 });
                 pass.set_pipeline(&pipeline);
                 pass.dispatch_workgroups(1, 1, 1);
