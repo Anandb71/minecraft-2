@@ -10,12 +10,16 @@ use mc2_game::interact::Interaction;
 pub enum Demo {
     /// Stand, build a small wall with a window and a torch, carve a crater.
     Build,
+    /// Ring the player with lanterns and torches on the ground: emitters
+    /// for ReSTIR, meant to be captured at night.
+    Lights,
 }
 
 impl Demo {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "build" => Some(Self::Build),
+            "lights" => Some(Self::Lights),
             _ => None,
         }
     }
@@ -32,6 +36,13 @@ fn click(game: &mut Game, button: Button) {
     game.input().button_down(button);
     tick(game, 1);
     game.input().button_up(button);
+    tick(game, 1);
+}
+
+fn select(game: &mut Game, slot: u8) {
+    game.input().key_down(Key::Slot(slot));
+    tick(game, 1);
+    game.input().key_up(Key::Slot(slot));
     tick(game, 1);
 }
 
@@ -71,6 +82,17 @@ pub fn run(game: &mut Game, demo: Demo) {
             game.input().button_up(Button::Primary);
             tick(game, 2);
             look(game, -280.0, -20.0);
+        }
+        Demo::Lights => {
+            // Place on the ground a few metres out, turning between each.
+            look(game, 0.0, 140.0);
+            for (i, slot) in [4u8, 3, 4, 3, 4, 3].into_iter().enumerate() {
+                select(game, slot);
+                click(game, Button::Secondary);
+                look(game, if i % 2 == 0 { 170.0 } else { 150.0 }, 0.0);
+            }
+            // Face the first lantern again, looking down the row.
+            look(game, 120.0, -110.0);
         }
     }
     mc2_core::profiler::end_frame();
