@@ -41,3 +41,13 @@ writing the thing ourselves.
 - **Reinhard.** Cheap, but desaturates and hue-shifts bright saturated emitters toward white along the wrong path, and has no toe.
 - **ACES fitted (Narkowicz).** Popular, but its RRT skews saturated blues toward purple and oranges toward yellow at high exposure: exactly the lava and torch colours this world is full of.
 - **AgX (chosen).** Log-encoded inset/outset with a polynomial contrast fit. Saturated emitters path to white without hue skew; the calibration bars in `golden/calibration.png` show it across 14 stops.
+
+## D5. World acceleration structure
+
+- **Flat brickmap.** A dense grid of brick pointers over the loaded area. VoxelRT measures XBrickMap at 165.6 Mrays/s against 182.6 for Tree64 on primary rays, with the simplest edits. But a dense pointer grid over a 16 km world at 0.5 m is 32000^2 x 1024 cells; even sparse sector grids of it cost a pointer per empty cell, and it offers no LOD.
+- **Single giant 64-tree.** Best empty space skipping and natural LOD, but the dubiousconst282 guide itself recommends "many smaller trees at a top-level grid rather than a single giant tree" because streaming and memory management of one tree across a 16 km world is painful: every edit rewrites a path from the root.
+- **Brickmap leaves under per-chunk 64-trees, under a sector grid (chosen).** Bricks (8^3 voxels, 4-bit palettes, a 64-bit occupancy mask per 4^3 subblock) remain the authoritative storage and upload unit. Each 32 m chunk is a three-level 64-tree whose leaves are brick cells: empty, uniform (one material reference, no brick allocated) or a palette brick. Chunks sit under 128 m and 512 m tree levels per sector. A chunk edit rewrites that chunk's small node block; brick edits upload single bricks. Upper levels carry LOD.
+
+Measured with the CPU reference marcher on the sample terrain (64 m x 37.5 m of carved terrain, 17 MB): 569 ns/ray and 20.8 DDA iterations per hit, against 6349 ns/ray and 105.9 iterations for a voxel walk. 11x.
+
+Also from the paper, adopted: robust stepping clamps the entry point into the next cell's bounds rather than biasing t (guide, "getting stuck in place"), and child index `x + z*4 + y*16` so the 2x2x2 coalescing mask `0x00330033` from the guide applies unchanged on the GPU.
