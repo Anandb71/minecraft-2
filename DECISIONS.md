@@ -53,3 +53,23 @@ Measured with the CPU reference marcher on the sample terrain (64 m x 37.5 m of 
 Also from the paper, adopted: robust stepping clamps the entry point into the next cell's bounds rather than biasing t (guide, "getting stuck in place"), and child index `x + z*4 + y*16` so the 2x2x2 coalescing mask `0x00330033` from the guide applies unchanged on the GPU.
 
 `naga` (dev-dependency only): already compiled as part of wgpu; the test suite uses it directly to validate every entry-point shader without a GPU, so a broken WGSL edit fails CI on every platform.
+
+## D6. GPU traversal state
+
+- **Recursive-style re-initialisation** (the CPU marcher's approach, re-deriving each level's DDA from the entry point on every pop). Simple, but repeats floor and clamp work on every ascent.
+- **Mantissa bit tricks in [1,2)** (the 64-tree guide). Fastest on its author's hardware, but `f32` leaves 23 mantissa bits for a tree spanning 13 bits of sector plus 3 of brick, and the robustness argument relies on exact float layouts across three shader compilers.
+- **Integer cells with per-level stacks (chosen).** Each level is an Amanatides-Woo DDA; descending pushes (node, min, cell, tMax), leaving pops them so the parent resumes exactly. Cell bounds come from integer subtraction relative to the camera voxel, so precision is independent of world position.
+
+Measured on the integrated GPU at 960x540 over the sample terrain: the first version kept the stack as an array of `Dda` structs written through element chains and took 132.4 ms; moving the active level into plain locals with per-field stacks took 46.5 ms for identical iterations. The struct-chain version also failed FXC compilation on DX12. Removing wgpu's injected loop bounding made the Intel Vulkan driver 3.4x slower (446 ms), so runtime checks stay on.
+
+## D7. Primary ray start distance
+
+- **March every ray from the camera.** 42.8 mean iterations per ray after coalescing, 34.8 ms.
+- **Reproject last frame's depth as a start distance.** Cheap, but disocclusion makes it non-conservative exactly when the camera moves fast.
+- **Beam prepass (chosen, after Laine and Karras).** Coarse rays through every 4x4 block corner stop at the first occupied brick cell or at a node twice the beam width; each primary ray starts at its block's minimum corner distance less one brick and the beam width. 17.6 mean iterations, vis.beam 2.2 ms + vis.march 16.3 ms = 18.5 ms. Verified against the CPU marcher (0 of 1620 pixels differ) and the golden image.
+
+## D8. Brick residency
+
+- **Upload everything in view distance.** Predictable, but pays for surfaces behind hills and inside caves that no ray will reach.
+- **CPU visibility estimation** (frustum and occlusion culling of bricks). Duplicates the marcher's knowledge approximately, and still over-uploads occluded bricks.
+- **Marcher feedback (chosen).** A non-resident brick is shaded from its dominant material and writes its leaf word offset into a 4096-slot hash table; the table is read back asynchronously and the CPU uploads the nearest requests within a byte budget. A 12 m proximity radius covers what the player can touch before a ray sees it. Measured: after 40 frames at 96x54 over the sample terrain, 2297 of 39982 bricks were resident.
