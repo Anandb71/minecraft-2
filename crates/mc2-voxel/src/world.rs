@@ -144,6 +144,17 @@ impl VoxelWorld {
         changed
     }
 
+    /// Takes a chunk tree's own dirty state without marking the chunk dirty
+    /// again. `None` when the chunk is gone or empty.
+    pub fn take_chunk_dirty(&mut self, pos: ChunkPos) -> Option<(bool, Vec<u32>)> {
+        let tree = self.chunks.get_mut(&pos)?;
+        if tree.is_empty() {
+            self.chunks.remove(&pos);
+            return None;
+        }
+        Some(tree.take_dirty())
+    }
+
     /// Chunks touched since the last call, in no particular order.
     pub fn take_dirty(&mut self) -> Vec<ChunkPos> {
         self.dirty.drain().collect()
