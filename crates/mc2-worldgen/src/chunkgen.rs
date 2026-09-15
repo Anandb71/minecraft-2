@@ -16,7 +16,7 @@ use glam::IVec3;
 use mc2_voxel::brick::Brick;
 use mc2_voxel::coords::{CHUNK_VOXELS, ChunkPos};
 use mc2_voxel::material::{MaterialId, ids};
-use mc2_voxel::tree::{Cell, ChunkTree};
+use mc2_voxel::tree::ChunkTree;
 use std::sync::Arc;
 
 const VOXEL_M: f32 = 1.0 / 16.0;
@@ -42,6 +42,37 @@ pub struct ChunkGenerator {
     pub surface: Surface,
     pub strata: Strata,
     seed: u64,
+}
+
+/// Dense generation target turned into a tree in one pass.
+struct Builder {
+    /// Material per brick cell, 0 for air, `x + z*64 + y*4096`.
+    cells: Vec<u16>,
+    bricks: Vec<(u32, Brick)>,
+}
+
+impl Builder {
+    fn new() -> Self {
+        Self {
+            cells: vec![0; 64 * 64 * 64],
+            bricks: Vec::new(),
+        }
+    }
+
+    fn index(c: IVec3) -> u32 {
+        (c.x + c.z * 64 + c.y * 4096) as u32
+    }
+
+    /// Fills a node (`level` 2: 16 cells, 1: 4 cells, 0: one cell).
+    fn fill(&mut self, level: u32, min_cell: IVec3, m: MaterialId) {
+        let n = 1 << (2 * level);
+        for y in min_cell.y..min_cell.y + n {
+            for z in min_cell.z..min_cell.z + n {
+                let row = (y * 4096 + z * 64) as usize;
+                self.cells[row + min_cell.x as usize..row + (min_cell.x + n) as usize].fill(m.0);
+            }
+        }
+    }
 }
 
 /// Per-chunk samples on the brick grid.
@@ -197,31 +228,44 @@ impl ChunkGenerator {
 
     /// Generates a chunk at the given level of detail.
     pub fn generate(&self, pos: ChunkPos, lod: Lod) -> ChunkTree {
-        let mut tree = ChunkTree::new();
         let bottom_m = pos.origin().y as f32 * VOXEL_M;
         if bottom_m > self.max_height_over(pos) {
-            return tree;
+            return ChunkTree::new();
         }
-        if lod != Lod::Full {
-            return self.generate_coarse(pos, lod);
+        if matches!(lod, Lod::Node2 | Lod::Node8) {
+            return self.generate_nodes(pos, lod);
+        }
+        let mut b = Builder::new();
+        if lod == Lod::Cell {
+            self.generate_coarse(&mut b, pos, lod);
+            return ChunkTree::from_dense(&b.cells, b.bricks);
         }
         let s = self.samples(pos);
         let base_y = pos.origin().y;
         for l2 in 0..64u32 {
             let c2 = IVec3::new((l2 & 3) as i32, (l2 >> 4 & 3) as i32, (l2 >> 2 & 3) as i32);
-            self.node(&mut tree, &s, 2, c2 * 16, 16, base_y);
+            self.node(&mut b, &s, 2, c2 * 16, 16, base_y);
         }
-        if lod == Lod::Full {
-            self.stamp_ores(&mut tree, pos);
-        }
+        let mut tree = ChunkTree::from_dense(&b.cells, b.bricks);
+        self.stamp_ores(&mut tree, pos);
         tree
     }
 
     /// Coarse levels sample one surface column per node or cell and give
     /// every vertical cell the material at its centre. Cost scales with the
     /// number of columns: 4096 for `Cell`, 256 for `Node2`, 16 for `Node8`.
-    fn generate_coarse(&self, pos: ChunkPos, lod: Lod) -> ChunkTree {
-        let mut tree = ChunkTree::new();
+    fn generate_coarse(&self, b: &mut Builder, pos: ChunkPos, lod: Lod) {
+        self.coarse_columns(pos, lod, &mut |level, min_cell, m| {
+            b.fill(level, min_cell, m)
+        });
+    }
+
+    fn coarse_columns(
+        &self,
+        pos: ChunkPos,
+        lod: Lod,
+        emit: &mut dyn FnMut(u32, IVec3, MaterialId),
+    ) {
         let (cells, level) = match lod {
             Lod::Cell => (1, 0),
             Lod::Node2 => (4, 1),
@@ -255,18 +299,28 @@ impl ChunkGenerator {
                     };
                     let m = material_at(&self.surface, &sample, &column, probe);
                     if !m.is_air() {
-                        self.put(&mut tree, level, IVec3::new(cx, cy, cz) * cells, m);
+                        emit(level, IVec3::new(cx, cy, cz) * cells, m);
                     }
                 }
             }
         }
+    }
+
+    /// 2 m and 8 m levels touch at most 256 columns: set nodes directly
+    /// rather than paying for a dense 64^3 scan.
+    fn generate_nodes(&self, pos: ChunkPos, lod: Lod) -> ChunkTree {
+        let mut tree = ChunkTree::new();
+        let cells = if lod == Lod::Node2 { 4 } else { 16 };
+        self.coarse_columns(pos, lod, &mut |level, min_cell, m| {
+            tree.set_node(level, min_cell / cells, m);
+        });
         tree
     }
 
     /// Fills a node covering `cells` brick cells from `min_cell`.
     fn node(
         &self,
-        tree: &mut ChunkTree,
+        b: &mut Builder,
         s: &ChunkSamples<'_>,
 
         level: u32,
@@ -285,7 +339,7 @@ impl ChunkGenerator {
         if y1 <= rock
             && let Some(m) = s.strata_uniform(x0, z0, n, y0, y1 - 0.01)
         {
-            self.put(tree, level, min_cell, m);
+            b.fill(level, min_cell, m);
             return;
         }
         // Layer boundaries buried under metres of rock are invisible until
@@ -299,19 +353,20 @@ impl ChunkGenerator {
             let column = &s.columns[cz.min(63) * 64 + cx.min(63)];
             let m = material_at(&self.surface, sample, column, centre);
             if !m.is_air() {
-                self.put(tree, level, min_cell, m);
+                b.fill(level, min_cell, m);
             }
             return;
         }
         if cells == 1 {
-            self.brick(tree, s, min_cell, base_y);
+            let brick = self.brick(s, min_cell, base_y);
+            b.bricks.push((Builder::index(min_cell), brick));
             return;
         }
         let child = cells / 4;
         for i in 0..64u32 {
             let c = IVec3::new((i & 3) as i32, (i >> 4 & 3) as i32, (i >> 2 & 3) as i32);
             self.node(
-                tree,
+                b,
                 s,
                 level.saturating_sub(1),
                 min_cell + c * child,
@@ -325,32 +380,10 @@ impl ChunkGenerator {
     /// produce at full detail, for edits into cells stored coarsely.
     pub fn detail_brick(&self, pos: ChunkPos, cell: IVec3) -> Brick {
         let s = self.samples(pos);
-        let mut tree = ChunkTree::new();
-        self.brick(&mut tree, &s, cell, pos.origin().y);
-        let mut out = Brick::empty();
-        for i in 0..512 {
-            let l = IVec3::new(i & 7, (i >> 6) & 7, (i >> 3) & 7);
-            let m = tree.voxel((cell << 3) + l);
-            if !m.is_air() {
-                out.set(l, m);
-            }
-        }
-        out
+        self.brick(&s, cell, pos.origin().y)
     }
 
-    fn put(&self, tree: &mut ChunkTree, level: u32, min_cell: IVec3, m: MaterialId) {
-        match level {
-            2 if min_cell.x % 16 == 0 && min_cell.y % 16 == 0 && min_cell.z % 16 == 0 => {
-                tree.set_node(2, min_cell / 16, m);
-            }
-            1 if min_cell.x % 4 == 0 && min_cell.y % 4 == 0 && min_cell.z % 4 == 0 => {
-                tree.set_node(1, min_cell / 4, m);
-            }
-            _ => tree.set_cell(min_cell, Cell::Uniform(m)),
-        }
-    }
-
-    fn brick(&self, tree: &mut ChunkTree, s: &ChunkSamples<'_>, cell: IVec3, base_y: i32) {
+    fn brick(&self, s: &ChunkSamples<'_>, cell: IVec3, base_y: i32) -> Brick {
         let (bx, bz) = (cell.x as usize, cell.z as usize);
         let c00 = s.corner(bx, bz);
         let c10 = s.corner(bx + 1, bz);
@@ -387,7 +420,7 @@ impl ChunkGenerator {
                 }
             }
         }
-        tree.set_brick(cell, brick);
+        brick
     }
 
     /// Ore bodies placed by the geology they belong to: coal seams in shale,
