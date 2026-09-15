@@ -287,6 +287,10 @@ impl Pass<FrameCtx> for RestirPass {
     }
 
     fn execute(&mut self, ctx: &mut PassContext<'_, FrameCtx>) {
+        // No emitter in range: composition ignores the output, skip it all.
+        if ctx.frame.uniforms.light_count == 0 {
+            return;
+        }
         let generation = ctx.graph.generation();
         if self.groups.as_ref().is_none_or(|(g, _)| *g != generation) {
             let v = self.vis;
