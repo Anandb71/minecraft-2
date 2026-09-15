@@ -51,6 +51,8 @@ pub struct Renderer {
     pub debug_mode: u32,
     /// Start primary rays from the beam prepass distances.
     pub beam: bool,
+    /// Sub-pixel camera jitter for temporal upsampling; on in world mode.
+    pub jitter: bool,
 }
 
 pub fn render_size(output: (u32, u32), scale: f32) -> (u32, u32) {
@@ -92,6 +94,9 @@ impl Renderer {
             1.0,
         ));
         let mut exposure = None;
+        // What the present pass shows: the render-resolution scene, or its
+        // temporally upsampled display-resolution version.
+        let mut presented = scene;
         let vis = match opts.mode {
             RenderMode::Calibration => {
                 graph.add_pass(Box::new(CalibrationPass::new(dev, &frame.shaders, scene)));
@@ -127,7 +132,18 @@ impl Renderer {
                     exposure_targets,
                 )));
                 exposure = Some(exposure_targets.0);
+                let taa = crate::upsample::UpsampleTargets::create(&mut graph);
+                graph.add_pass(Box::new(crate::upsample::TemporalUpsamplePass::new(
+                    dev,
+                    &frame,
+                    scene,
+                    vis,
+                    taa,
+                    exposure_targets.1,
+                )));
+                presented = taa.color;
                 graph.add_pass(Box::new(HistoryPass::new(vec![
+                    (taa.color, taa.history),
                     (exposure_targets.0, exposure_targets.1),
                     (vis.id, direct.vis_id_prev),
                     (direct.light_vis, direct.light_vis_prev),
@@ -140,7 +156,7 @@ impl Renderer {
         graph.add_pass(Box::new(PresentPass::new(
             dev,
             &frame.shaders,
-            scene,
+            presented,
             output,
             exposure,
             output_format,
@@ -175,6 +191,7 @@ impl Renderer {
             celestial: Celestial::default(),
             debug_mode: 0,
             beam: true,
+            jitter: opts.mode == RenderMode::World,
         }
     }
 
@@ -237,7 +254,8 @@ impl Renderer {
             frame_index: self.frame.frame_index,
             time: self.frame.time,
             dt,
-            jitter: false,
+            // Jittered sub-pixel samples feed temporal upsampling.
+            jitter: self.jitter,
             celestial: self.celestial,
             exposure: self.frame.exposure,
             debug_mode: self.debug_mode,

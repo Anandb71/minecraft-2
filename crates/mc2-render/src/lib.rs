@@ -15,6 +15,7 @@ pub mod renderer;
 pub mod sky;
 pub mod skymap;
 pub mod svgf;
+pub mod upsample;
 pub mod vis;
 pub mod voxel_gpu;
 

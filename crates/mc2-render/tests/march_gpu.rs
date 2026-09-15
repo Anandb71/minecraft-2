@@ -38,6 +38,8 @@ fn gpu_hits_match_cpu_reference() {
             ..Default::default()
         },
     );
+    // Unjittered rays, so pixel centres match the CPU reference.
+    renderer.jitter = false;
     let mut world = rolling_terrain(&mut Rng(0x9e37_79b9_7f4a_7c15));
     let mut camera = Camera {
         position: DVec3::new(6.3, 19.1, 4.7),
@@ -149,6 +151,7 @@ fn feedback_streams_visible_bricks_only() {
         },
     );
     renderer.beam = false;
+    renderer.jitter = false;
     let mut world = rolling_terrain(&mut Rng(0x9e37_79b9_7f4a_7c15));
     let total_bricks: usize = world.chunks().map(|(_, t)| t.brick_count()).sum();
     let mut camera = Camera {
