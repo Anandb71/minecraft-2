@@ -13,6 +13,7 @@ use std::path::Path;
 
 const MAGIC: &[u8; 8] = b"MC2TERR\0";
 const VERSION: u32 = 1;
+const HEADER: usize = 40;
 
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
@@ -85,7 +86,7 @@ pub fn load(path: &Path, seed: u64, params: &TerrainParams) -> io::Result<Option
         Err(e) => return Err(e),
     };
     let n = params.size * params.size;
-    let expected = 44 + n * 12 + 8;
+    let expected = HEADER + n * 12 + 8;
     if buf.len() != expected || &buf[..8] != MAGIC {
         return Ok(None);
     }
@@ -98,13 +99,13 @@ pub fn load(path: &Path, seed: u64, params: &TerrainParams) -> io::Result<Option
     }
     let u32_at = |o: usize| u32::from_le_bytes(body[o..o + 4].try_into().expect("4 bytes"));
     let u64_at = |o: usize| u64::from_le_bytes(body[o..o + 8].try_into().expect("8 bytes"));
-    if u32_at(8) != VERSION || u64_at(12) != seed || u64_at(36) != fingerprint(params) {
+    if u32_at(8) != VERSION || u64_at(12) != seed || u64_at(32) != fingerprint(params) {
         return Ok(None);
     }
     let grid = |k: usize| Grid2 {
         w: params.size,
         h: params.size,
-        data: body[44 + k * n * 4..44 + (k + 1) * n * 4]
+        data: body[HEADER + k * n * 4..HEADER + (k + 1) * n * 4]
             .as_chunks::<4>()
             .0
             .iter()
