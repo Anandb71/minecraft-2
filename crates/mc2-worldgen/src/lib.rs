@@ -1,5 +1,6 @@
 //! World generation: geology first, then the voxels it implies.
 
+pub mod cache;
 pub mod erosion;
 pub mod grid;
 pub mod noise;
