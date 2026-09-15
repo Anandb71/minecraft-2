@@ -292,3 +292,106 @@ schedule and finds 4096 voxels of sandstone in the inventory.
 - Physics-thread player movement: the player joins the 120 Hz physics thread
   with rigid bodies in step 9; until then the same fixed clock runs on the
   main thread.
+
+## Step 6: Sun, sky LUTs, traced shadows, ReSTIR direct light (`v0.6-lighting`)
+
+**Read first.** Hillaire 2020, "A Scalable and Production Ready Sky and
+Atmosphere Rendering Technique" (LUT set, sky-view parameterisation, the
+multiple scattering approximation); Bruneton and Neyret 2008 for the
+transmittance parameterisation; Bitterli et al. 2020, "Spatiotemporal
+reservoir resampling for real-time ray tracing with dynamic direct
+lighting" (Algorithms 3-5, the M = 32 initial candidates, the 20x temporal M
+clamp, k = 5 spatial neighbours within 30 px, the 10% depth and 25 degree
+normal rejection, visibility before reuse); Lagarde and de Rousiers 2014 for
+photometric units and EV100; Krawczyk et al. 2005 for a luminance-dependent
+exposure key.
+
+**Built.**
+
+- Atmosphere (`sky.rs`, `atmosphere.wgsl`): Earth-like Rayleigh, Mie and
+  ozone media in kilometres. Transmittance (256x64) and multiple scattering
+  (32x32) LUTs are built once and rebuilt after a shader reload; the sky-view
+  LUT (200x100, horizon-dense latitudes, longitude from the light) and a
+  32^3 aerial perspective volume reaching 8 km along quadratic slices are
+  rendered every frame. Everything is per unit illuminance, so the sun
+  (127.5 klx above the atmosphere) and the moon share passes: the moon's
+  copies render only while moonlight matters.
+- Traced visibility (`visibility_trace.wgsl`, `visibility_resolve.wgsl`):
+  per pixel, a shadow ray toward a random point on the sun's or moon's disc
+  (the penumbra widened 4x) and a cosine-weighted sky visibility ray to 96 m,
+  through the same marcher as primary rays with 8x coarser LOD. Rays are
+  traced for one pixel per stride x stride block (a disocclusion first,
+  otherwise the scheduled pixel) and resolved into per-pixel history, which
+  is reused only where the reprojected pixel saw the exact same world voxel:
+  voxel ids make that test exact instead of a depth heuristic.
+- ReSTIR (`lights.rs`, `restir_*.wgsl`): every emissive brick cluster or
+  uniform node is a spherical light in a stable slot; a Vose alias table
+  over luminance x area / max(d^2, 16 m^2) within 192 m is the source
+  distribution. Candidates, visibility of the survivor, temporal reuse at the
+  reprojected pixel (exact voxel match, history M clamped to 20x),
+  two spatial rounds, then shading with a final visibility ray. The pass is
+  skipped when no light is in range.
+- Composition (`shade_compose.wgsl`): sun and moon through transmittance and
+  traced visibility with GGX specular, sky irradiance from both sky LUTs
+  scaled by sky visibility, ReSTIR emitters, emission, then aerial
+  perspective. Sky pixels add a limb-darkened sun, a Lambert-lit moon disc,
+  about 8000 stars on a cube map rotated by sidereal time, and airglow.
+- Exposure (`exposure.wgsl`): centre-weighted log average to EV100, adapted
+  exponentially, with a key that falls with luminance so moonlight reads as
+  night.
+- World clock (`mc2-game::clock`): solar declination and hour angle, a moon
+  that trails the sun by its synodic phase, illuminance by phase. `--time`,
+  `T`, `[` and `]`.
+- Quality presets (`quality.rs`): Realistic, Hyper Realistic, Ultra
+  Realistic and Super Ultra Crazy Duper Realistic set render scale, LOD
+  threshold, visibility trace stride and ReSTIR candidates. `--quality`, `F6`.
+- `--demo lights` places lanterns and torches through the interaction code;
+  `MC2_DUMP=1` writes the lighting intermediates next to a capture.
+- Golden tests `lit_terrain_afternoon` and `lit_terrain_night` stream to
+  quiescence, restart the frame counter and accumulate 64 frames, so every
+  random sequence is the same on every run.
+
+**Measured** (integrated GPU, 1280x720 output, 120 frames, static camera;
+GPU timestamps per pass):
+
+| Scene, preset (internal size) | Frame mean / p99 | vis.beam + vis.march | direct.sun | direct.restir mean / p99 | sky.frame | compose + exposure + present |
+|---|---|---|---|---|---|---|
+| Day terrain, Realistic (640x360, stride 2) | 30.4 / 38.7 ms | 1.4 + 10.9 ms | 5.4 ms | skipped | 0.74 ms | 2.7 ms |
+| Day terrain, Hyper Realistic (854x480, stride 2) | 37.5 / 39.9 ms | 2.4 + 17.6 ms | 9.4 ms | skipped | 0.70 ms | 3.6 ms |
+| Day terrain, Ultra Realistic (960x540) | 76.0 / 92.9 ms | 3.0 + 20.5 ms | 42.3 ms | skipped | 0.69 ms | 4.3 ms |
+| Day terrain, Super Ultra Crazy Duper Realistic (1280x720) | 130.8 / 139.0 ms | 5.2 + 31.5 ms | 75.7 ms | skipped | 0.69 ms | 6.6 ms |
+| Night, lights demo, Realistic | 95.3 / 209.3 ms | 1.4 + 11.2 ms | 10.2 ms | 22.2 / 52.4 ms | 1.39 ms | 3.0 ms |
+| Night, lights demo, Ultra Realistic | 259.0 / 356.9 ms | 2.9 + 22.3 ms | 83.2 ms | 52.7 / 118.6 ms | 1.39 ms | 5.0 ms |
+
+The LUTs cost 1.04 ms on the frame they rebuild. Two optimisation passes:
+
+- ReSTIR with no emitter in range: 44.6 ms -> skipped.
+- Hyper Realistic visibility: 21.3 ms skipping untraced pixels inside the
+  full-resolution dispatch -> 9.0 ms dispatching over blocks. The first
+  version saved a third instead of three quarters because each 8x8
+  workgroup still held a tracing pixel, and a SIMD group pays for its
+  slowest lane.
+
+**Budget.** Direct light's line is 2.0 ms at 1440p on the target GPU. Ultra
+at 1440p is 4x these pixels on a GPU roughly 10x faster, so day direct light
+extrapolates to about 17 ms and night to about 54 ms: an 8-27x violation,
+logged as the open bug for this line. The fixes are structural and belong to
+the next step: lighting at half the render resolution under the SVGF
+reconstruction and temporal upsampler, and one visibility ray shared by
+ReSTIR's candidate test and final shading.
+
+Bugs found by looking: the sky-view uv halves were swapped (a flat grey
+sky); an LOD normal flipped the hit face so distant shadow rays started
+inside nodes; the multiple scattering LUT ignored the planet's shadow and
+kept the night sky orange at 127 klx; `arrayLength` on an over-allocated
+light buffer sent most candidates to slot 0; Vose's loop popped an entry it
+then lost (caught by the alias unit test); FXC rejected dynamic vector
+writes and a `vec3<u32>` pad made a uniform 32 bytes.
+
+**Rejected.**
+- Preetham or Hosek-Wilkie analytic skies: no aerial perspective, no night,
+  no altitude (D13).
+- Shadow maps: a second representation of a world that changes per voxel,
+  and wrong for 6.25 cm detail at kilometre range (D14).
+- One shadow ray per light per pixel: a lava field is thousands of lights
+  (D15).
