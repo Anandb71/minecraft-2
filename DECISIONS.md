@@ -91,3 +91,11 @@ Measured on the integrated GPU at 960x540 over the sample terrain: the first ver
 - **Generate and upload on the main thread.** Simplest; a camera turn cost seconds.
 - **Generate on workers, flatten and upload on the main thread.** Generation left the frame but flattening a 50 000-cell chunk took up to 74 ms: voxel_gpu.update averaged 12.3 ms while streaming.
 - **Generate and flatten on workers; relocate and write within a budget (chosen).** Workers attach a flattening to each new tree (invalidated by any edit). The main thread inserts finished chunks within 3 ms and uploads structure nearest-first within 4 ms. voxel_gpu.update while streaming: 2.7 ms mean, 6.0 ms p99.
+
+## D12. The macro layer
+
+- **Dense block ids per chunk, authoritative.** Familiar, but 32 768 ids per chunk that restate the voxels for natural terrain, and every micro edit has to decide what the block has become.
+- **Voxels only, no blocks.** Simplest, but inventory, crafting and building want identity: a torch is not "some planks and some flame".
+- **Implicit blocks plus explicit placements (chosen).** A block with no explicit entry is its dominant material, sampled from eight interior voxels on demand; placed blocks with identity are recorded in a sparse map. Breaking returns voxel volumes by material, so macro and micro interaction share one economy (4096 voxels to a block).
+
+`bevy_ecs` (game crate): archetype storage, change detection and system scheduling for the game state; writing an ECS is not the product, and taking only the ECS (not Bevy's renderer) is what the brief asks.
