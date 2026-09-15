@@ -82,17 +82,19 @@ impl Renderer {
             wgpu::TextureFormat::Rgba16Float,
             1.0,
         ));
-        match opts.mode {
+        let vis = match opts.mode {
             RenderMode::Calibration => {
                 graph.add_pass(Box::new(CalibrationPass::new(dev, &frame.shaders, scene)));
+                None
             }
             RenderMode::World => {
                 let vis = VisTargets::create(&mut graph);
                 graph.add_pass(Box::new(BeamPass::new(dev, &frame, vis.beam)));
                 graph.add_pass(Box::new(PrimaryVisPass::new(dev, &frame, vis)));
                 graph.add_pass(Box::new(DebugShadePass::new(dev, &frame, vis, scene)));
+                Some(vis)
             }
-        }
+        };
         graph.add_pass(Box::new(PresentPass::new(
             dev,
             &frame.shaders,
@@ -100,6 +102,15 @@ impl Renderer {
             output,
             output_format,
         )));
+        if let Some(vis) = vis {
+            graph.add_pass(Box::new(crate::gizmo::GizmoPass::new(
+                dev,
+                &frame,
+                vis.depth,
+                output,
+                output_format,
+            )));
+        }
         graph.add_pass(Box::new(HudPass::new(
             dev,
             &gpu.queue,

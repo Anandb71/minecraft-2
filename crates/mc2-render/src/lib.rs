@@ -4,6 +4,7 @@ pub mod calibration;
 pub mod camera;
 pub mod debug_shade;
 pub mod frame;
+pub mod gizmo;
 pub mod hud;
 pub mod overlay;
 pub mod present;
