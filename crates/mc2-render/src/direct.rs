@@ -3,7 +3,7 @@
 //! history copies that make next frame's temporal reuse possible.
 
 use crate::frame::FrameCtx;
-use crate::sky::dispatch_all;
+use crate::sky::{SkyTargets, dispatch_all, linear_clamp};
 use crate::vis::VisTargets;
 use mc2_gpu::{
     FrameGraph, HotCompute, Pass, PassBuilder, PassContext, TexHandle, TextureDesc, bind,
@@ -363,6 +363,127 @@ impl Pass<FrameCtx> for RestirPass {
                 (&ps, &[&fg, &wg, &groups[3], &lg], work),
                 (&pd, &[&fg, &wg, &groups[4], &lg], work),
             ],
+        );
+    }
+}
+
+pub struct ComposePass {
+    vis: VisTargets,
+    t: DirectTargets,
+    sky: SkyTargets,
+    out: TexHandle,
+    pipeline: HotCompute,
+    bgl: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    group: Option<(u64, wgpu::BindGroup)>,
+}
+
+impl ComposePass {
+    pub fn new(
+        device: &wgpu::Device,
+        ctx: &FrameCtx,
+        vis: VisTargets,
+        t: DirectTargets,
+        sky: SkyTargets,
+        out: TexHandle,
+    ) -> Self {
+        let bgl = layout(
+            device,
+            "shade compose",
+            wgpu::ShaderStages::COMPUTE,
+            &[
+                bind::utexture_2d(),
+                unfilterable(),
+                unfilterable(),
+                unfilterable(),
+                unfilterable(),
+                bind::texture_2d(),
+                bind::texture_2d(),
+                bind::texture(wgpu::TextureViewDimension::D3, true),
+                bind::sampler(true),
+                bind::write_2d(RGBA16F),
+            ],
+        );
+        let pipeline = HotCompute::new(
+            device,
+            &ctx.shaders,
+            "shade_compose.wgsl",
+            "main",
+            &[&ctx.frame_layout, &ctx.world_layout, &bgl],
+        );
+        Self {
+            vis,
+            t,
+            sky,
+            out,
+            pipeline,
+            bgl,
+            sampler: linear_clamp(device),
+            group: None,
+        }
+    }
+}
+
+impl Pass<FrameCtx> for ComposePass {
+    fn name(&self) -> &'static str {
+        "direct.compose"
+    }
+
+    fn setup(&mut self, b: &mut PassBuilder<'_>) {
+        for h in [
+            self.vis.id,
+            self.vis.depth,
+            self.vis.motion,
+            self.t.light_vis,
+            self.t.direct_lights,
+        ] {
+            b.read(h);
+        }
+        b.read(self.sky.transmittance);
+        b.read(self.sky.sky_view);
+        b.read(self.sky.aerial);
+        b.write(self.out);
+    }
+
+    fn execute(&mut self, ctx: &mut PassContext<'_, FrameCtx>) {
+        let generation = ctx.graph.generation();
+        if self.group.as_ref().is_none_or(|(g, _)| *g != generation) {
+            let v = self.vis;
+            let mut r = views(
+                ctx,
+                &[
+                    v.id,
+                    v.depth,
+                    v.motion,
+                    self.t.light_vis,
+                    self.t.direct_lights,
+                    self.sky.transmittance,
+                    self.sky.sky_view,
+                    self.sky.aerial,
+                ],
+            );
+            r.push(wgpu::BindingResource::Sampler(&self.sampler));
+            r.push(wgpu::BindingResource::TextureView(ctx.graph.view(self.out)));
+            self.group = Some((
+                generation,
+                bind_group(ctx.device, "shade compose", &self.bgl, &r),
+            ));
+        }
+        let group = self.group.as_ref().expect("group").1.clone();
+        let (fg, wg) = (
+            ctx.frame.frame_bind_group.clone(),
+            ctx.frame.world_bind_group.clone(),
+        );
+        let p = self.pipeline.get(ctx.device, &ctx.frame.shaders).clone();
+        let e = ctx.graph.extent(self.out);
+        dispatch_all(
+            ctx,
+            "direct.compose",
+            &[(
+                &p,
+                &[&fg, &wg, &group],
+                (e.width.div_ceil(8), e.height.div_ceil(8), 1),
+            )],
         );
     }
 }
