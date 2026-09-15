@@ -333,75 +333,24 @@ pub fn raycast_brute(world: &VoxelWorld, origin: DVec3, dir: DVec3, max_t: f64) 
 mod tests {
     use super::*;
     use crate::material::ids;
-
-    /// Deterministic xorshift so the test world and rays are reproducible.
-    struct Rng(u64);
-    impl Rng {
-        fn next(&mut self) -> f64 {
-            self.0 ^= self.0 << 13;
-            self.0 ^= self.0 >> 7;
-            self.0 ^= self.0 << 17;
-            (self.0 >> 11) as f64 / (1u64 << 53) as f64
-        }
-    }
-
-    fn test_world(rng: &mut Rng) -> VoxelWorld {
-        let mut w = VoxelWorld::new();
-        // Rolling terrain across four chunks with a strata boundary.
-        for x in 0..1024 {
-            for z in 0..600 {
-                let h = 200.0 + 40.0 * (x as f64 * 0.013).sin() + 25.0 * (z as f64 * 0.021).cos();
-                let top = h as i32;
-                let mat = if (x / 16 + z / 16) % 5 == 0 {
-                    ids::SANDSTONE
-                } else {
-                    ids::GRANITE
-                };
-                for y in (top - 6).max(150)..=top {
-                    w.set_voxel(
-                        IVec3::new(x, y, z),
-                        if y > top - 2 { ids::GRASS } else { mat },
-                    );
-                }
-            }
-        }
-        w.fill_box(
-            IVec3::new(0, 100, 0),
-            IVec3::new(1023, 149, 599),
-            ids::BASALT,
-        );
-        // Carved caves and floating debris.
-        for _ in 0..40 {
-            let c = DVec3::new(
-                rng.next() * 1024.0,
-                120.0 + rng.next() * 120.0,
-                rng.next() * 600.0,
-            );
-            w.fill_sphere(c, 4.0 + rng.next() * 20.0, ids::AIR);
-        }
-        for _ in 0..200 {
-            let v = IVec3::new(
-                (rng.next() * 1024.0) as i32,
-                240 + (rng.next() * 60.0) as i32,
-                (rng.next() * 600.0) as i32,
-            );
-            w.set_voxel(v, ids::IRON_ORE);
-        }
-        w
-    }
+    use crate::samples::{self, Rng};
 
     #[test]
     fn hierarchical_matches_brute_force() {
         let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
-        let w = test_world(&mut rng);
+        let w = samples::rolling_terrain(&mut rng);
         let mut hits = 0;
         for i in 0..3000 {
             let o = DVec3::new(
-                rng.next() * 64.0,
-                6.0 + rng.next() * 16.0,
-                rng.next() * 37.5,
+                rng.next_f64() * 64.0,
+                6.0 + rng.next_f64() * 16.0,
+                rng.next_f64() * 37.5,
             );
-            let mut d = DVec3::new(rng.next() - 0.5, rng.next() - 0.5, rng.next() - 0.5);
+            let mut d = DVec3::new(
+                rng.next_f64() - 0.5,
+                rng.next_f64() - 0.5,
+                rng.next_f64() - 0.5,
+            );
             // A share of axis-aligned and planar rays, the classic failure cases.
             match i % 7 {
                 0 => d = DVec3::new(0.0, -1.0, 0.0),
