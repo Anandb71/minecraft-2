@@ -99,3 +99,33 @@ Measured on the integrated GPU at 960x540 over the sample terrain: the first ver
 - **Implicit blocks plus explicit placements (chosen).** A block with no explicit entry is its dominant material, sampled from eight interior voxels on demand; placed blocks with identity are recorded in a sparse map. Breaking returns voxel volumes by material, so macro and micro interaction share one economy (4096 voxels to a block).
 
 `bevy_ecs` (game crate): archetype storage, change detection and system scheduling for the game state; writing an ECS is not the product, and taking only the ECS (not Bevy's renderer) is what the brief asks.
+
+## D13. Sky and atmosphere
+
+- **Analytic sky (Preetham, Hosek-Wilkie).** Microseconds per frame, but only a sky dome seen from the ground in daylight: no aerial perspective over a 16 km world, no view from a mountain top, nothing after sunset.
+- **Bruneton and Neyret precomputed scattering.** Physically complete, but 4D scattering tables that rebuild slowly when media change, and weather will change them.
+- **Hillaire 2020 LUTs (chosen).** A fixed transmittance and multiple scattering pair built once (1.04 ms), then a 200x100 sky-view LUT and a 32^3 aerial perspective volume per frame (0.71 ms by day, 1.37 ms at night when the moon gets its own pair). Per unit illuminance, so the moon is the same pipeline with a different light.
+
+## D14. Sun and moon shadows
+
+- **Cascaded shadow maps.** The standard, but it needs a rasterised depth representation of a world that is not meshed, and at 6.25 cm detail and kilometre view distances cascades either alias the voxels or miss the mountains.
+- **Screen-space shadows plus a coarse heightfield.** Cheap, but wrong for anything off screen or overhanging, which is most of a voxel world once people dig.
+- **Traced shadow rays through the marcher (chosen).** One ray per pixel toward a random point on a widened disc, temporally accumulated with exact voxel id reuse. The same structure that renders the world shadows it, edits included, with no second representation. It is the most expensive line of the frame (see D16).
+
+## D15. Emissive voxel lighting
+
+- **A shadow ray per light per pixel, or clustered forward lights.** Correct for a handful of torches; a lava lake is thousands of emissive bricks.
+- **Light BVH with one importance-sampled light per pixel.** Bounded cost, but noisy for many similar lights and needs a BVH refit whenever voxels change.
+- **ReSTIR (chosen).** 32 candidates from an alias table over distance-weighted power, then reservoir reuse across frames and neighbours: effectively hundreds of candidates for two visibility rays per pixel. Lights are emissive clusters per brick in stable slots, rebuilt only for chunks the GPU world reports changed (lights.update 0.08 ms mean while streaming).
+
+## D16. Scheduling visibility rays
+
+- **Trace every pixel every frame.** 41.2 ms at 960x540 on the integrated GPU.
+- **Skip pixels with settled history inside the full-resolution dispatch.** 21.3 ms at 854x480 with a 2x2 stride where a quarter of the rays should have cost about 10 ms: every 8x8 workgroup still contains tracing pixels, and SIMD lanes run until the slowest ray finishes.
+- **Dispatch over blocks, resolve per pixel (chosen).** One invocation per 2x2 block traces its most starved pixel; a full-resolution resolve accumulates, carries or borrows. 9.0 ms. Stride is a quality knob: 1 at Ultra and above, 2 below.
+
+## D17. Quality presets
+
+- **A few global levels read by each pass.** Compact, but every pass interprets "high" separately and the budget table cannot say what a level costs.
+- **Hundreds of independent settings.** Maximal control and an untestable matrix.
+- **Four named presets that are plain settings structs (chosen).** Realistic, Hyper Realistic, Ultra Realistic and Super Ultra Crazy Duper Realistic each fill a `Quality` struct; knobs join the struct as the systems they scale land, and a test keeps each knob monotonic across tiers. The budget table is measured at Ultra Realistic.

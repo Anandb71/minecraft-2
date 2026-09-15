@@ -25,7 +25,19 @@ cargo run --release -- --bench --frames 600 --size 2560x1440
 
 The first launch erodes the whole world (about 30 s on a laptop) and caches it
 under `worlds/default`; later launches load it instantly. `--seed <n>` picks
-another world, `--camera x,y,z,lx,ly,lz` places a headless camera.
+another world, `--camera x,y,z,lx,ly,lz` places a headless camera, `--time 21.5`
+sets the hour and `--demo build|lights` plays a scripted scene before capturing.
+
+### Graphics quality
+
+`--quality <tier>` or `F6` in game:
+
+| Tier | Render scale | Visibility rays | ReSTIR candidates |
+|---|---|---|---|
+| 0 Realistic | 50% | 1 per 2x2 block | 8 |
+| 1 Hyper Realistic | 67% | 1 per 2x2 block | 16 |
+| 2 Ultra Realistic (default) | 75% | every pixel | 32 |
+| 3 Super Ultra Crazy Duper Realistic | 100% | every pixel | 64 |
 
 `--software` selects the software adapter (WARP on Windows, lavapipe on Linux).
 `MC2_BACKEND=vulkan|dx12|metal` forces a backend.
@@ -46,7 +58,10 @@ another world, `--camera x,y,z,lx,ly,lz` places a headless camera.
 | Tab | Block mode / carve mode |
 | 1-9, mouse wheel | Hotbar slot (carve mode: wheel changes radius) |
 | F3 | Toggle profiler HUD |
-| F4 | Debug view: shaded, LOD hits, march iteration heatmap |
+| F4 | Debug view: shaded, LOD hits, march iteration heatmap, unlit materials |
+| F6 | Cycle graphics quality |
+| T | Pause or resume time |
+| [ ] | One hour back or forward |
 | V | Toggle vsync |
 | Esc | Release mouse, then quit |
 
@@ -55,6 +70,12 @@ another world, `--camera x,y,z,lx,ly,lz` places a headless camera.
 - A 16 km world grown from geology: continents and ridged mountain belts eroded once by a virtual-pipe hydraulic model, stratified rock (basement, cyclic sediments, folds, volcanic provinces) exposed by that erosion, ores that follow their host rock
 - Four levels of detail streamed around the camera on worker threads; buried rock is never generated until someone digs
 - The world meshes nothing: 6.25 cm voxels in 4-bit palette bricks under per-chunk sparse 64-trees, ray marched in a compute shader
+- Physically based atmosphere (Hillaire 2020): sky-view and aerial perspective LUTs in photometric units, sunsets, moonlit nights with a phased moon, stars rotating with sidereal time
+- Sun and moon positions from latitude, season and time of day
+- Traced soft shadows and sky visibility through the same marcher that draws the world, accumulated with exact voxel-id reprojection
+- ReSTIR direct light from every emissive voxel cluster: torches, lanterns, lava
+- Auto exposure in EV100 with a night-aware key
+- Four quality tiers up to Super Ultra Crazy Duper Realistic
 - Visibility buffer with exact world voxel ids, material, face, depth and motion vectors
 - First and third person player with voxel collision, automatic step-up, crouch and fly
 - Build on the 1 m block grid or carve and deposit 6.25 cm voxels; digging restores generated detail so tunnels show real strata
@@ -93,7 +114,7 @@ Physics runs on its own thread at a fixed 120 Hz with a 4 ms tick budget.
 3. GPU marcher, visibility buffer, brick streaming with feedback. **(v0.3-marcher)**
 4. Worldgen v1, region streaming, LOD. **(v0.4-worldgen)**
 5. Player controller, collision, carve and place. **(v0.5-player)**
-6. Sun, sky LUTs, traced shadows, ReSTIR direct light.
+6. Sun, sky LUTs, traced shadows, ReSTIR direct light. **(v0.6-lighting)**
 7. Indirect light, denoise, temporal upsample.
 8. Reflections, volumetrics, clouds, post stack, photo mode.
 9. Rigid bodies, contacts, destruction.
