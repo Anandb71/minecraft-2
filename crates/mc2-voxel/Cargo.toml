@@ -1,0 +1,9 @@
+[package]
+name = "mc2-voxel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+glam.workspace = true
+rayon.workspace = true
