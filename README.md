@@ -34,11 +34,17 @@ another world, `--camera x,y,z,lx,ly,lz` places a headless camera.
 
 | Key | Action |
 |---|---|
-| Left click | Capture mouse for looking |
-| W A S D | Fly |
-| Space / Ctrl | Up / down |
-| Shift | Fly faster |
-| Mouse wheel | Change fly speed |
+| Left click | Capture mouse; then break block / carve |
+| Right click | Place block / deposit material |
+| Middle click (held) | Preview the targeted block instead of the placement |
+| W A S D | Move |
+| Space | Jump (fly: up) |
+| Ctrl or C | Crouch (fly: down) |
+| Shift | Sprint |
+| F | Toggle flying |
+| F5 | First / third person |
+| Tab | Block mode / carve mode |
+| 1-9, mouse wheel | Hotbar slot (carve mode: wheel changes radius) |
 | F3 | Toggle profiler HUD |
 | F4 | Debug view: shaded, LOD hits, march iteration heatmap |
 | V | Toggle vsync |
@@ -50,6 +56,8 @@ another world, `--camera x,y,z,lx,ly,lz` places a headless camera.
 - Four levels of detail streamed around the camera on worker threads; buried rock is never generated until someone digs
 - The world meshes nothing: 6.25 cm voxels in 4-bit palette bricks under per-chunk sparse 64-trees, ray marched in a compute shader
 - Visibility buffer with exact world voxel ids, material, face, depth and motion vectors
+- First and third person player with voxel collision, automatic step-up, crouch and fly
+- Build on the 1 m block grid or carve and deposit 6.25 cm voxels; digging restores generated detail so tunnels show real strata
 - Beam prepass and empty-space coalescing; the GPU marcher is verified pixel for pixel against a CPU reference marcher
 - Bricks stream to the GPU on demand from marcher feedback, so unseen surfaces never cost VRAM
 - Own frame graph: declared reads/writes, validation, culling, resize-aware allocation
@@ -84,7 +92,7 @@ Physics runs on its own thread at a fixed 120 Hz with a 4 ms tick budget.
 2. Brickmap, 64-tree, palette compression, CPU reference marcher. **(v0.2-brickmap)**
 3. GPU marcher, visibility buffer, brick streaming with feedback. **(v0.3-marcher)**
 4. Worldgen v1, region streaming, LOD. **(v0.4-worldgen)**
-5. Player controller, collision, carve and place.
+5. Player controller, collision, carve and place. **(v0.5-player)**
 6. Sun, sky LUTs, traced shadows, ReSTIR direct light.
 7. Indirect light, denoise, temporal upsample.
 8. Reflections, volumetrics, clouds, post stack, photo mode.
@@ -104,6 +112,7 @@ Physics runs on its own thread at a fixed 120 Hz with a 4 ms tick budget.
 - `crates/mc2-core`: profiler, statistics
 - `crates/mc2-gpu`: device, frame graph, shader library, timestamp profiler, capture
 - `crates/mc2-voxel`: bricks, 64-trees, materials, GPU layout, CPU reference marcher
+- `crates/mc2-game`: ECS game state, player, collision, blocks, interaction
 - `crates/mc2-worldgen`: noise, strata, erosion, amplification, chunk generation, streaming
 - `crates/mc2-render`: passes, GPU voxel residency and the renderer
 - `shaders/`: WGSL
