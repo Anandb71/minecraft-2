@@ -1,5 +1,10 @@
 //! The renderer: frame graph passes over the voxel acceleration structure.
 
+pub mod frame;
+pub mod hud;
+
+pub use frame::FrameCtx;
+
 pub mod shaders {
     include!(concat!(env!("OUT_DIR"), "/shaders.rs"));
 
