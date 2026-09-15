@@ -6,6 +6,7 @@ pub mod debug_shade;
 pub mod frame;
 pub mod gizmo;
 pub mod hud;
+pub mod lights;
 pub mod overlay;
 pub mod present;
 pub mod renderer;
