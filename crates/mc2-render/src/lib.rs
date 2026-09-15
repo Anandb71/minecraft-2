@@ -13,6 +13,7 @@ pub mod present;
 pub mod quality;
 pub mod renderer;
 pub mod sky;
+pub mod svgf;
 pub mod vis;
 pub mod voxel_gpu;
 
