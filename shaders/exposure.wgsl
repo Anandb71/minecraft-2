@@ -12,6 +12,8 @@ const MIN_EV: f32 = -6.0;
 const MAX_EV: f32 = 17.0;
 const ADAPT_UP: f32 = 2.5;
 const ADAPT_DOWN: f32 = 1.2;
+// Key value at an average luminance of 4000 cd/m^2.
+const DAYLIGHT_KEY: f32 = 0.6730;
 
 @compute @workgroup_size(1)
 fn main() {
@@ -39,6 +41,13 @@ fn main() {
         let speed = select(ADAPT_DOWN, ADAPT_UP, target_ev > prev.r);
         ev = mix(prev.r, target_ev, 1.0 - exp(-frame.dt * speed));
     }
-    let exposure = 1.0 / (1.2 * pow(2.0, ev));
+    // Dim scenes keep looking dim: the key value falls with adaptation
+    // luminance (Krawczyk et al. 2005), relative to its daylight value, so
+    // moonlight exposes like night rather than an overcast afternoon.
+    let adapted_luminance = pow(2.0, ev) * 12.5 / 100.0;
+    let key = 1.03 - 2.0 / (2.0 + log(adapted_luminance + 1.0) / log(10.0));
+    // Softened: the full curve darkens moonlight by 4.4 EV, which hides the
+    // landscape a dark-adapted eye still makes out.
+    let exposure = pow(min(key / DAYLIGHT_KEY, 1.0), 0.7) / (1.2 * pow(2.0, ev));
     textureStore(out_exposure, vec2<i32>(0), vec4<f32>(ev, exposure, target_ev, 1.0));
 }
