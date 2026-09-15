@@ -1,5 +1,5 @@
 // Shared by the visibility trace and resolve passes. Expects vis_id,
-// vis_motion, prev_id and history bindings declared before import.
+// vis_depth, vis_motion, prev_id and history bindings declared before import.
 
 // Shadow penumbra widened beyond the true 0.27 degree sun disc.
 const SOFTNESS: f32 = 4.0;
@@ -20,7 +20,7 @@ fn interleave_slot(frame_index: u32, stride: u32) -> u32 {
 }
 
 // Last frame's accumulated visibility (rgb) and sample count (a) for a pixel,
-// or zero when the reprojected pixel saw a different voxel.
+// or zero when the reprojected pixel saw a different surface.
 fn reproject_history(pixel: vec2<i32>, id: vec4<u32>) -> vec4<f32> {
     let size = vec2<i32>(frame.render_size);
     let mv = textureLoad(vis_motion, pixel, 0).rg;
@@ -30,7 +30,7 @@ fn reproject_history(pixel: vec2<i32>, id: vec4<u32>) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
     let pid = textureLoad(prev_id, prev_pixel, 0);
-    if any(pid.xyz != id.xyz) || (pid.w >> 30u) == 0u {
+    if !same_surface(id, pid, textureLoad(vis_depth, pixel, 0).r) {
         return vec4<f32>(0.0);
     }
     return textureLoad(history, prev_pixel, 0);

@@ -41,7 +41,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var have_prev = false;
     if all(prev_pixel >= vec2<i32>(0)) && all(prev_pixel < vec2<i32>(size)) {
         let pid = textureLoad(prev_id, prev_pixel, 0);
-        if all(pid.xyz == id.xyz) && (pid.w >> 30u) != 0u {
+        if same_surface(id, pid, textureLoad(vis_depth, pixel, 0).r) {
             prev = unpack(textureLoad(prev_a, prev_pixel, 0), textureLoad(prev_b, prev_pixel, 0));
             have_prev = prev.light != 0xffffffffu;
         }

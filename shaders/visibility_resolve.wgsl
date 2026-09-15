@@ -11,6 +11,7 @@
 @group(2) @binding(3) var history: texture_2d<f32>;
 @group(2) @binding(4) var trace: texture_2d<f32>;
 @group(2) @binding(5) var out_vis: texture_storage_2d<rgba16float, write>;
+@group(2) @binding(6) var vis_depth: texture_2d<f32>;
 #import "visibility_common.wgsl"
 
 @compute @workgroup_size(8, 8)
