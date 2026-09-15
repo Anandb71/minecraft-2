@@ -9,6 +9,11 @@
 //! the torches in the room.
 
 use bytemuck::{Pod, Zeroable};
+use glam::{IVec3, Vec3};
+use mc2_voxel::brick::VOXELS;
+use mc2_voxel::coords::{BRICK_VOXELS, ChunkPos};
+use mc2_voxel::material::MaterialId;
+use mc2_voxel::tree::{Cell, ChunkTree};
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, Debug, PartialEq)]
@@ -26,6 +31,70 @@ pub struct GpuAlias {
     pub alias: u32,
     pub pdf: f32,
     pub _pad: f32,
+}
+
+/// Emitters of one chunk.
+pub fn chunk_emitters(pos: ChunkPos, tree: &ChunkTree) -> Vec<GpuLight> {
+    let origin = pos.origin();
+    let mut out = Vec::new();
+    let emission = |m: MaterialId| Vec3::from_array(m.get().emission);
+    for (cell, c) in tree.cells() {
+        let min = origin + cell * BRICK_VOXELS;
+        match c {
+            Cell::Uniform(m) if m.is_emissive() => out.push(GpuLight {
+                voxel: (min + 4).to_array(),
+                count: 512,
+                emission: emission(m).to_array(),
+                radius_voxels: 4.0,
+            }),
+            Cell::Brick(slot) => {
+                let brick = tree.brick(slot);
+                for (m, _) in brick.materials() {
+                    if !m.is_emissive() {
+                        continue;
+                    }
+                    let mut sum = Vec3::ZERO;
+                    let mut count = 0u32;
+                    let mut points = Vec::new();
+                    for i in 0..VOXELS as i32 {
+                        let l = IVec3::new(i & 7, (i >> 6) & 7, (i >> 3) & 7);
+                        if brick.get(l) == m {
+                            let p = l.as_vec3() + 0.5;
+                            sum += p;
+                            count += 1;
+                            points.push(p);
+                        }
+                    }
+                    let centre = sum / count.max(1) as f32;
+                    let radius = points
+                        .iter()
+                        .map(|p| p.distance(centre))
+                        .fold(0.5f32, f32::max);
+                    let voxel = min + centre.floor().as_ivec3();
+                    out.push(GpuLight {
+                        voxel: voxel.to_array(),
+                        count,
+                        emission: emission(m).to_array(),
+                        radius_voxels: radius + 0.5,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    for node in tree.uniform_nodes() {
+        if !node.material.is_emissive() {
+            continue;
+        }
+        let half = node.cells * BRICK_VOXELS / 2;
+        out.push(GpuLight {
+            voxel: (origin + node.min_cell * BRICK_VOXELS + half).to_array(),
+            count: (node.cells * node.cells * node.cells) as u32 * 512,
+            emission: emission(node.material).to_array(),
+            radius_voxels: half as f32,
+        });
+    }
+    out
 }
 
 /// Vose's alias method: O(n) construction, O(1) sampling.
@@ -79,6 +148,7 @@ pub fn build_alias(weights: &[f32]) -> Vec<GpuAlias> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mc2_voxel::material::ids;
 
     #[test]
     fn alias_table_reproduces_weights() {
@@ -108,5 +178,26 @@ mod tests {
             );
             assert!((f64::from(table[i].pdf) - expect).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn emitters_from_cells_bricks_and_nodes() {
+        let mut t = ChunkTree::new();
+        // A torch flame: 4x3x4 emissive voxels in one brick.
+        for x in 2..6 {
+            for y in 1..4 {
+                for z in 2..6 {
+                    t.set_voxel(IVec3::new(x, y, z), ids::TORCH_FLAME);
+                }
+            }
+        }
+        t.set_cell(IVec3::new(10, 0, 0), Cell::Uniform(ids::LAVA));
+        t.set_node(1, IVec3::new(4, 0, 4), ids::LAVA);
+        let e = chunk_emitters(ChunkPos(IVec3::ZERO), &t);
+        assert_eq!(e.len(), 3);
+        let flame = e.iter().find(|l| l.count == 48).expect("flame cluster");
+        assert_eq!(flame.voxel, [4, 2, 4]);
+        assert!(flame.radius_voxels > 2.0 && flame.radius_voxels < 4.0);
+        assert!(e.iter().any(|l| l.count == 512 * 64));
     }
 }
