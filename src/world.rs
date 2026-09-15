@@ -1,0 +1,137 @@
+//! The playable world: terrain loading in the background, chunk streaming,
+//! and choosing where the player arrives.
+
+use glam::DVec3;
+use mc2_render::camera::Camera;
+use mc2_voxel::world::VoxelWorld;
+use mc2_worldgen::chunkgen::ChunkGenerator;
+use mc2_worldgen::stream::{ChunkStreamer, StreamConfig};
+use mc2_worldgen::terrain::{CoarseTerrain, TerrainParams};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+
+type LoadResult = Result<Arc<CoarseTerrain>, String>;
+
+pub struct GameWorld {
+    pub voxels: VoxelWorld,
+    pub streamer: Option<ChunkStreamer>,
+    loading: Option<JoinHandle<LoadResult>>,
+    progress: Arc<Mutex<(String, f32)>>,
+    stream_config: StreamConfig,
+}
+
+impl GameWorld {
+    /// Starts loading (or generating and caching) the world's terrain.
+    pub fn start(seed: u64, dir: PathBuf, stream_config: StreamConfig) -> Self {
+        let progress = Arc::new(Mutex::new(("loading terrain".to_owned(), 0.0)));
+        let report = progress.clone();
+        let loading = std::thread::Builder::new()
+            .name("terrain".into())
+            .spawn(move || {
+                let path = dir.join(format!("terrain_{seed}.bin"));
+                mc2_worldgen::cache::load_or_generate(
+                    &path,
+                    seed,
+                    TerrainParams::world(),
+                    &mut |stage, f| {
+                        if let Ok(mut p) = report.lock() {
+                            *p = (stage.to_owned(), f);
+                        }
+                    },
+                )
+                .map(Arc::new)
+                .map_err(|e| format!("terrain cache {}: {e}", path.display()))
+            })
+            .expect("spawn terrain thread");
+        Self {
+            voxels: VoxelWorld::new(),
+            streamer: None,
+            loading: Some(loading),
+            progress,
+            stream_config,
+        }
+    }
+
+    /// Returns the terrain once when loading finishes.
+    pub fn poll(&mut self) -> Result<Option<Arc<CoarseTerrain>>, String> {
+        if !self.loading.as_ref().is_some_and(JoinHandle::is_finished) {
+            return Ok(None);
+        }
+        let handle = self.loading.take().expect("checked above");
+        let terrain = handle
+            .join()
+            .map_err(|_| "terrain thread panicked".to_owned())??;
+        let generator = Arc::new(ChunkGenerator::new(terrain.clone()));
+        self.streamer = Some(ChunkStreamer::new(generator, self.stream_config));
+        Ok(Some(terrain))
+    }
+
+    /// Blocks until terrain is ready.
+    pub fn wait(&mut self) -> Result<Arc<CoarseTerrain>, String> {
+        loop {
+            if let Some(t) = self.poll()? {
+                return Ok(t);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    pub fn loading_text(&self) -> Option<String> {
+        self.loading.as_ref()?;
+        let p = self.progress.lock().ok()?;
+        Some(format!("generating world: {} {:.0}%", p.0, p.1 * 100.0))
+    }
+
+    pub fn update(&mut self, camera: DVec3) {
+        if let Some(s) = &mut self.streamer {
+            s.update(&mut self.voxels, camera);
+        }
+    }
+}
+
+/// A camera standing on open land near the middle of the map, looking at
+/// the highest ground within a few kilometres.
+pub fn spawn_camera(terrain: &CoarseTerrain) -> Camera {
+    let extent = terrain.params.extent_m();
+    let sea = terrain.params.sea_level;
+    let centre = extent * 0.5;
+    let mut best = None;
+    'search: for ring in 0..200 {
+        let r = ring as f32 * 64.0;
+        let steps = (ring * 8).max(1);
+        for k in 0..steps {
+            let a = k as f32 / steps as f32 * std::f32::consts::TAU;
+            let (x, z) = (centre + r * a.cos(), centre + r * a.sin());
+            let h = terrain.height_at(x, z);
+            let slope =
+                (terrain.height_at(x + 16.0, z) - terrain.height_at(x - 16.0, z)).abs() / 32.0;
+            if h > sea + 12.0 && h < 300.0 && slope < 0.25 {
+                best = Some((x, z, h));
+                break 'search;
+            }
+        }
+    }
+    let (x, z, h) = best.unwrap_or((centre, centre, terrain.height_at(centre, centre)));
+    let mut view = (x + 1.0, z, h);
+    for k in 0..64 {
+        let a = k as f32 / 64.0 * std::f32::consts::TAU;
+        for d in [800.0, 1600.0, 2400.0] {
+            let (vx, vz) = (x + d * a.cos(), z + d * a.sin());
+            let vh = terrain.height_at(vx, vz);
+            if vh > view.2 {
+                view = (vx, vz, vh);
+            }
+        }
+    }
+    let mut camera = Camera {
+        position: DVec3::new(f64::from(x), f64::from(h) + 6.0, f64::from(z)),
+        ..Default::default()
+    };
+    camera.look_at(DVec3::new(
+        f64::from(view.0),
+        f64::from(h) + 40.0,
+        f64::from(view.1),
+    ));
+    camera
+}

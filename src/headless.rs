@@ -2,7 +2,7 @@
 //! README screenshots are produced without a window.
 
 use crate::cli::{Args, Mode};
-use crate::scene;
+use crate::world::{GameWorld, spawn_camera};
 use mc2_core::RollingStats;
 use mc2_gpu::{Gpu, GpuOptions};
 use mc2_render::Renderer;
@@ -38,15 +38,53 @@ pub fn run(args: &Args) -> Result<(), String> {
     renderer.debug_mode = args.debug_view;
     renderer.beam = !args.no_beam;
     let t = Instant::now();
-    let (mut world, camera) = scene::demo();
-    eprintln!("scene built in {:.2}s", t.elapsed().as_secs_f32());
+    let mut game = GameWorld::start(args.seed, args.world_dir.clone(), Default::default());
+    let terrain = game.wait()?;
+    let camera = spawn_camera(&terrain);
+    eprintln!(
+        "terrain ready in {:.2}s, spawn at {:.0} {:.0} {:.0}",
+        t.elapsed().as_secs_f32(),
+        camera.position.x,
+        camera.position.y,
+        camera.position.z
+    );
+    // Stream until the neighbourhood is generated and uploaded.
+    let tex_warm = target(&gpu, args.size);
+    let t = Instant::now();
+    let mut quiet = 0;
+    while quiet < 10 && t.elapsed().as_secs() < 180 {
+        game.update(camera.position);
+        renderer.prepare(&gpu, &mut game.voxels, &camera, 1.0 / 60.0);
+        renderer.render(&gpu, tex_warm.clone());
+        gpu.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| e.to_string())?;
+        mc2_core::profiler::end_frame();
+        let settled = game.streamer.as_ref().is_some_and(|s| s.settled());
+        let uploads = renderer.world.stats.bricks_uploaded_last_frame
+            + renderer.world.stats.feedback_requests_last_frame;
+        quiet = if settled && uploads == 0 {
+            quiet + 1
+        } else {
+            0
+        };
+    }
+    if let Some(s) = &game.streamer {
+        eprintln!(
+            "streamed {} chunks ({} full) in {:.2}s",
+            s.stats.loaded,
+            s.stats.full,
+            t.elapsed().as_secs_f32()
+        );
+    }
     let tex = target(&gpu, args.size);
     let mut frame_ms = RollingStats::default();
     let start = Instant::now();
     let mut last = Instant::now();
     for i in 0..args.frames {
         renderer.frame.time = i as f32 / 60.0;
-        renderer.prepare(&gpu, &mut world, &camera, 1.0 / 60.0);
+        game.update(camera.position);
+        renderer.prepare(&gpu, &mut game.voxels, &camera, 1.0 / 60.0);
         renderer.frame.hud.clear();
         if args.hud {
             let cpu = mc2_core::profiler::rows();

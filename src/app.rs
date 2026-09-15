@@ -1,7 +1,8 @@
 //! Windowed application: event loop, surface management, input, frame pacing.
 
+use crate::cli::Args;
 use crate::flycam::{FlyCam, Input};
-use crate::scene;
+use crate::world::{GameWorld, spawn_camera};
 use glam::Vec2;
 use mc2_core::RollingStats;
 use mc2_gpu::{Gpu, GpuOptions};
@@ -9,7 +10,6 @@ use mc2_render::Renderer;
 use mc2_render::camera::Camera;
 use mc2_render::overlay::{OverlayInput, draw_profiler};
 use mc2_render::renderer::RendererOptions;
-use mc2_voxel::world::VoxelWorld;
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
@@ -30,7 +30,7 @@ struct Running {
 
 pub struct App {
     running: Option<Running>,
-    world: VoxelWorld,
+    world: GameWorld,
     camera: Camera,
     flycam: FlyCam,
     input: Input,
@@ -47,12 +47,11 @@ pub struct App {
 }
 
 impl App {
-    fn new(exit_after: Option<u32>) -> Self {
-        let (world, camera) = scene::demo();
+    fn new(args: &Args) -> Self {
         Self {
             running: None,
-            world,
-            camera,
+            world: GameWorld::start(args.seed, args.world_dir.clone(), Default::default()),
+            camera: Camera::default(),
             flycam: FlyCam::default(),
             input: Input::default(),
             grabbed: false,
@@ -63,7 +62,7 @@ impl App {
             vsync: true,
             debug_mode: 0,
             error: None,
-            exit_after,
+            exit_after: args.exit_after,
             frames: 0,
         }
     }
@@ -159,11 +158,21 @@ impl App {
         self.frame_ms.push(dt * 1000.0);
         self.last_frame = now;
 
+        match self.world.poll() {
+            Ok(Some(terrain)) => self.camera = spawn_camera(&terrain),
+            Ok(None) => {}
+            Err(e) => {
+                self.error = Some(e);
+                event_loop.exit();
+                return;
+            }
+        }
         {
             mc2_core::scope!("game.update");
             self.flycam
                 .update(&mut self.camera, &self.input, dt.min(0.1), self.grabbed);
             self.input.clear_frame();
+            self.world.update(self.camera.position);
         }
 
         let Some(r) = &mut self.running else {
@@ -182,13 +191,29 @@ impl App {
         let renderer = &mut r.renderer;
         renderer.frame.time = self.start.elapsed().as_secs_f32();
         renderer.debug_mode = self.debug_mode;
-        renderer.prepare(&r.gpu, &mut self.world, &self.camera, dt);
+        renderer.prepare(&r.gpu, &mut self.world.voxels, &self.camera, dt);
         renderer.frame.hud.clear();
         if self.show_profiler {
             let cpu_rows = mc2_core::profiler::rows();
             let s = renderer.world.stats;
             let p = self.camera.position;
+            let stream = self
+                .world
+                .streamer
+                .as_ref()
+                .map(|st| st.stats)
+                .unwrap_or_default();
             let extra = [
+                self.world.loading_text().unwrap_or_else(|| {
+                    format!(
+                        "streaming: {} chunks ({} full), {} queued, {} generating, +{} this frame",
+                        stream.loaded,
+                        stream.full,
+                        stream.queued,
+                        stream.inflight,
+                        stream.inserted_last_frame
+                    )
+                }),
                 format!(
                     "chunks {}  bricks {}  +{} ({:.1} MB)  feedback {}  tree {:.1} MB  voxels {:.1} MB",
                     s.chunks,
@@ -318,10 +343,10 @@ impl ApplicationHandler for App {
     }
 }
 
-pub fn run(exit_after: Option<u32>) -> Result<(), String> {
+pub fn run(args: &Args) -> Result<(), String> {
     let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
     event_loop.set_control_flow(ControlFlow::Poll);
-    let mut app = App::new(exit_after);
+    let mut app = App::new(args);
     event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
     match app.error {
         Some(e) => Err(e),

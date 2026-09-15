@@ -5,7 +5,7 @@ mod cli;
 mod flycam;
 mod headless;
 mod logger;
-mod scene;
+mod world;
 
 fn main() {
     logger::init();
@@ -17,7 +17,7 @@ fn main() {
         }
     };
     let result = match args.mode {
-        cli::Mode::Window => app::run(args.exit_after),
+        cli::Mode::Window => app::run(&args),
         _ => headless::run(&args),
     };
     if let Err(e) = result {

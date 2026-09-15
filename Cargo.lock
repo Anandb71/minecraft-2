@@ -889,6 +889,7 @@ dependencies = [
  "glam",
  "mc2-core",
  "mc2-voxel",
+ "png",
  "rayon",
 ]
 
@@ -917,6 +918,7 @@ dependencies = [
  "mc2-gpu",
  "mc2-render",
  "mc2-voxel",
+ "mc2-worldgen",
  "pollster",
  "wgpu",
  "winit",

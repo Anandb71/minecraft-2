@@ -24,6 +24,8 @@ pub struct Args {
     /// Renderer debug view index.
     pub debug_view: u32,
     pub no_beam: bool,
+    pub seed: u64,
+    pub world_dir: PathBuf,
 }
 
 impl Default for Args {
@@ -37,6 +39,8 @@ impl Default for Args {
             hud: false,
             debug_view: 0,
             no_beam: false,
+            seed: 42,
+            world_dir: PathBuf::from("worlds/default"),
         }
     }
 }
@@ -50,6 +54,8 @@ usage: minecraft-2 [options]
   --software             use the software adapter (WARP / lavapipe)
   --hud                  draw the profiler overlay into captures
   --no-beam              disable the beam prepass (A/B measurement)
+  --seed <n>             world seed (default 42)
+  --world <dir>          world directory (default worlds/default)
   --view <n>             debug view: 0 shaded, 1 LOD hits, 2 march iterations";
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
@@ -77,6 +83,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--software" => out.software = true,
             "--hud" => out.hud = true,
             "--no-beam" => out.no_beam = true,
+            "--seed" => {
+                out.seed = value("--seed")?
+                    .parse()
+                    .map_err(|e| format!("--seed: {e}"))?
+            }
+            "--world" => out.world_dir = PathBuf::from(value("--world")?),
             "--view" => {
                 out.debug_view = value("--view")?
                     .parse()
