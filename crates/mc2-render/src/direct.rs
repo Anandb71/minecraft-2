@@ -109,6 +109,7 @@ impl SunPass {
                 unfilterable(),
                 unfilterable(),
                 bind::write_2d(RGBA16F),
+                unfilterable(),
             ],
         );
         let trace = HotCompute::new(
@@ -180,6 +181,7 @@ impl Pass<FrameCtx> for SunPass {
                     t.light_vis_prev,
                     t.light_trace,
                     t.light_vis,
+                    v.depth,
                 ],
             );
             self.groups = Some((
