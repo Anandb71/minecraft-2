@@ -3,3 +3,4 @@
 pub mod brick;
 pub mod coords;
 pub mod material;
+pub mod tree;
