@@ -103,16 +103,7 @@ const GLYPH: f32 = crate::hud::GLYPH_PX;
 /// Draws the overlay in the top-left corner. Returns the bottom y.
 pub fn draw_profiler(c: &mut HudCanvas, input: &OverlayInput<'_>, scale: f32) -> f32 {
     let line = GLYPH * scale + 2.0;
-    let rows =
-        6 + BUDGETS.len() + input.gpu.rows().len() + input.cpu.len().min(24) + input.extra.len();
-    let width = 52.0 * GLYPH * scale;
-    c.rect(
-        0.0,
-        0.0,
-        width,
-        rows as f32 * line + 12.0,
-        rgba(0, 0, 0, 170),
-    );
+    let background_at = c.len();
 
     let mut y = 6.0;
     let fps = 1000.0 / input.frame_ms.mean().max(0.001);
@@ -201,5 +192,7 @@ pub fn draw_profiler(c: &mut HudCanvas, input: &OverlayInput<'_>, scale: f32) ->
         c.text(8.0, y, scale, DIM, e);
         y += line;
     }
+    let width = 52.0 * GLYPH * scale;
+    c.rect_behind(background_at, 0.0, 0.0, width, y + 6.0, rgba(0, 0, 0, 170));
     y
 }
