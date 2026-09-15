@@ -16,4 +16,4 @@ png.workspace = true
 log.workspace = true
 
 [dev-dependencies]
-naga = { version = "30.0.1", features = ["wgsl-in"] }
+naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out"] }
