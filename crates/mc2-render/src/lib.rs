@@ -29,6 +29,45 @@ pub mod shaders {
 
 #[cfg(test)]
 mod tests {
+    /// Every shader with an entry point must pass naga validation, so a
+    /// broken WGSL edit fails `cargo test` without needing a GPU.
+    #[test]
+    fn every_entry_shader_validates() {
+        let lib = super::shaders::library();
+        let mut failures = Vec::new();
+        for (name, raw) in super::shaders::EMBEDDED {
+            if !["@compute", "@vertex", "@fragment"]
+                .iter()
+                .any(|e| raw.contains(e))
+            {
+                continue;
+            }
+            let src = lib.source(name).expect("imports resolve");
+            let module = match naga::front::wgsl::parse_str(&src) {
+                Ok(m) => m,
+                Err(e) => {
+                    failures.push(format!("{name}: {}", e.emit_to_string(&src)));
+                    continue;
+                }
+            };
+            let mut validator = naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            );
+            if let Err(e) = validator.validate(&module) {
+                failures.push(format!("{name}: {}", e.emit_to_string(&src)));
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{}",
+            failures.join(
+                "
+"
+            )
+        );
+    }
+
     #[test]
     fn every_embedded_shader_parses() {
         let lib = super::shaders::library();

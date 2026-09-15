@@ -51,3 +51,5 @@ writing the thing ourselves.
 Measured with the CPU reference marcher on the sample terrain (64 m x 37.5 m of carved terrain, 17 MB): 569 ns/ray and 20.8 DDA iterations per hit, against 6349 ns/ray and 105.9 iterations for a voxel walk. 11x.
 
 Also from the paper, adopted: robust stepping clamps the entry point into the next cell's bounds rather than biasing t (guide, "getting stuck in place"), and child index `x + z*4 + y*16` so the 2x2x2 coalescing mask `0x00330033` from the guide applies unchanged on the GPU.
+
+`naga` (dev-dependency only): already compiled as part of wgpu; the test suite uses it directly to validate every entry-point shader without a GPU, so a broken WGSL edit fails CI on every platform.

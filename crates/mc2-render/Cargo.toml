@@ -13,3 +13,6 @@ glam.workspace = true
 font8x8.workspace = true
 png.workspace = true
 log.workspace = true
+
+[dev-dependencies]
+naga = { version = "30.0.1", features = ["wgsl-in"] }
