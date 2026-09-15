@@ -9,3 +9,6 @@ mc2-core.workspace = true
 mc2-voxel.workspace = true
 glam.workspace = true
 rayon.workspace = true
+
+[dev-dependencies]
+png.workspace = true
