@@ -47,7 +47,7 @@ usage: minecraft-2 [options]
   --size <w>x<h>         headless resolution (default 1280x720)
   --software             use the software adapter (WARP / lavapipe)
   --hud                  draw the profiler overlay into captures
-  --view <n>             debug view: 0 shaded, 1 LOD hits";
+  --view <n>             debug view: 0 shaded, 1 LOD hits, 2 march iterations";
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut out = Args::default();

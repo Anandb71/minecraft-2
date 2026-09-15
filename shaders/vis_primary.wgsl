@@ -29,6 +29,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     ray.lod_scale = frame.pixel_angle * frame.lod_pixels;
     ray.feedback = true;
     let hit = march(ray);
+    // Debug view 2 visualises traversal cost instead of depth.
+    if frame.debug_mode == 2u {
+        textureStore(vis_id, id.xy, vec4<u32>(0u, 0u, 0u, hit.kind << 30u));
+        textureStore(vis_depth, id.xy, vec4<f32>(f32(hit.iterations)));
+        textureStore(vis_motion, id.xy, vec4<f32>(0.0, 0.0, 0.5, 0.5));
+        return;
+    }
 
     if hit.kind == HIT_NONE {
         textureStore(vis_id, id.xy, vec4<u32>(0u));

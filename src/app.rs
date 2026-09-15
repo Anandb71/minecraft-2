@@ -252,7 +252,7 @@ impl App {
                 }
             }
             KeyCode::F3 => self.show_profiler = !self.show_profiler,
-            KeyCode::F4 => self.debug_mode = (self.debug_mode + 1) % 2,
+            KeyCode::F4 => self.debug_mode = (self.debug_mode + 1) % 3,
             KeyCode::KeyV => {
                 self.vsync = !self.vsync;
                 self.reconfigure();

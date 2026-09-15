@@ -22,6 +22,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let pid = textureLoad(vis_id, id.xy, 0);
+    if frame.debug_mode == 2u {
+        // Iterations: 0 black, 64 blue, 128 green, 256 yellow, 512+ red.
+        let it = textureLoad(vis_depth, id.xy, 0).r;
+        let x = clamp(log2(max(it, 1.0)) / 9.0, 0.0, 1.0);
+        let heat = vec3<f32>(smoothstep(0.55, 0.85, x), smoothstep(0.4, 0.7, x) * (1.0 - smoothstep(0.85, 1.0, x)), smoothstep(0.0, 0.5, x) * (1.0 - smoothstep(0.5, 0.75, x)));
+        textureStore(out_hdr, id.xy, vec4<f32>(heat, 1.0));
+        return;
+    }
     let dir = camera_ray_dir(vec2<f32>(id.xy));
     let kind = pid.w >> 30u;
     if kind == 0u {
