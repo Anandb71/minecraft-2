@@ -221,6 +221,77 @@ impl ChunkTree {
         self.id
     }
 
+    /// Builds a tree in one pass from a dense 64^3 array of brick cells
+    /// (material per cell, 0 for empty, indexed `x + z*64 + y*4096`) plus
+    /// palette bricks for the cells that need voxel detail. Uniform 2 m and
+    /// 8 m regions collapse as they are built; no incremental splitting.
+    pub fn from_dense(cells: &[u16], mut bricks: Vec<(u32, Brick)>) -> Self {
+        assert_eq!(cells.len(), 64 * 64 * 64, "dense chunk must be 64^3 cells");
+        let mut tree = Self::default();
+        bricks.sort_unstable_by_key(|(i, _)| *i);
+        let mut brick_iter = bricks.into_iter().peekable();
+        let cell_at = |c: IVec3| (c.x + c.z * 64 + c.y * 4096) as usize;
+        for a in 0..64u32 {
+            let ca = child_coord(a) << 4;
+            let mut nodes: Sparse64<L1> = Sparse64::default();
+            for m in 0..64u32 {
+                let cm = ca + (child_coord(m) << 2);
+                let mut cells_sparse: Sparse64<Cell> = Sparse64::default();
+                let mut uniform = None;
+                let mut mixed = false;
+                for c in 0..64u32 {
+                    let cc = cm + child_coord(c);
+                    let index = cell_at(cc) as u32;
+                    let brick = match brick_iter.peek() {
+                        Some((i, _)) if *i == index => brick_iter.next().map(|(_, b)| b),
+                        _ => None,
+                    };
+                    let cell = match brick {
+                        Some(b) if b.is_empty() => Cell::Empty,
+                        Some(b) => match b.uniform() {
+                            Some(u) => Cell::Uniform(u),
+                            None => Cell::Brick(tree.alloc_brick(b)),
+                        },
+                        None => match cells[index as usize] {
+                            0 => Cell::Empty,
+                            v => Cell::Uniform(MaterialId(v)),
+                        },
+                    };
+                    match (cell, uniform) {
+                        (Cell::Uniform(u), None) if c == 0 => uniform = Some(u),
+                        (Cell::Uniform(u), Some(v)) if u == v => {}
+                        _ => mixed = true,
+                    }
+                    if cell != Cell::Empty {
+                        // Children arrive in index order: push, never insert.
+                        cells_sparse.mask |= 1 << c;
+                        cells_sparse.items.push(cell);
+                    }
+                }
+                if cells_sparse.is_empty() {
+                    continue;
+                }
+                let l1 = match uniform {
+                    Some(u) if !mixed && cells_sparse.is_full() => L1::Uniform(u),
+                    _ => L1::Cells(cells_sparse),
+                };
+                nodes.mask |= 1 << m;
+                nodes.items.push(l1);
+            }
+            if nodes.is_empty() {
+                continue;
+            }
+            let l2 = match common_uniform(&nodes, L1::uniform) {
+                Some(u) => L2::Uniform(u),
+                None => L2::Nodes(nodes),
+            };
+            tree.root.mask |= 1 << a;
+            tree.root.items.push(l2);
+        }
+        tree.structure_dirty = true;
+        tree
+    }
+
     /// Flattens now (on a worker thread) so the upload later only relocates.
     /// Valid while no brick is resident on the GPU, i.e. for a new tree.
     pub fn prepare_flat(&mut self) {
@@ -703,6 +774,64 @@ mod tests {
             t.uniform_nodes().iter().filter(|n| n.cells == 16).count(),
             64
         );
+    }
+
+    #[test]
+    fn from_dense_matches_incremental_construction() {
+        let mut dense = vec![0u16; 64 * 64 * 64];
+        let mut incremental = ChunkTree::new();
+        let mut rng = 12345u64;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        // A solid floor, scattered cells, and one fully uniform 8 m node.
+        for y in 0..20 {
+            for z in 0..64 {
+                for x in 0..64 {
+                    let m = if y < 16 {
+                        ids::GRANITE.0
+                    } else if next() % 3 == 0 {
+                        ids::DIRT.0
+                    } else {
+                        0
+                    };
+                    dense[(x + z * 64 + y * 4096) as usize] = m;
+                    if m != 0 {
+                        incremental.set_cell(IVec3::new(x, y, z), Cell::Uniform(MaterialId(m)));
+                    }
+                }
+            }
+        }
+        let mut brick = Brick::filled(ids::SAND);
+        brick.set(IVec3::ONE, ids::IRON_ORE);
+        let at = IVec3::new(10, 30, 40);
+        incremental.set_brick(at, brick.clone());
+        let built = ChunkTree::from_dense(
+            &dense,
+            vec![((at.x + at.z * 64 + at.y * 4096) as u32, brick)],
+        );
+        for i in 0..20000 {
+            let v = IVec3::new(
+                (next() % 512) as i32,
+                (next() % 512) as i32,
+                (next() % 512) as i32,
+            );
+            assert_eq!(
+                built.voxel(v),
+                incremental.voxel(v),
+                "voxel {v} (probe {i})"
+            );
+        }
+        let v = (at << 3) + IVec3::ONE;
+        assert_eq!(built.voxel(v), ids::IRON_ORE);
+        assert_eq!(
+            built.uniform_nodes().len(),
+            incremental.uniform_nodes().len()
+        );
+        assert_eq!(built.cells().count(), incremental.cells().count());
     }
 
     #[test]
