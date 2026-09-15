@@ -30,6 +30,27 @@ impl HudCanvas {
         self.instances.clear();
     }
 
+    pub fn len(&self) -> usize {
+        self.instances.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.instances.is_empty()
+    }
+
+    /// Inserts a rectangle beneath everything drawn after index `at`, for
+    /// backgrounds sized after their contents are laid out.
+    pub fn rect_behind(&mut self, at: usize, x: f32, y: f32, w: f32, h: f32, color: u32) {
+        self.instances.insert(
+            at.min(self.instances.len()),
+            GlyphInstance {
+                rect: [x, y, w, h],
+                glyph: FILLED_CELL,
+                color,
+            },
+        );
+    }
+
     pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32) {
         self.instances.push(GlyphInstance {
             rect: [x, y, w, h],

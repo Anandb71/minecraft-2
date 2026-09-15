@@ -257,6 +257,14 @@ impl<C> FrameGraph<C> {
         entry.texture = Some(texture);
     }
 
+    /// Drops the graph's reference to an imported texture, e.g. before the
+    /// swapchain image is presented and the surface possibly reconfigured.
+    pub fn release_import(&mut self, t: TexHandle) {
+        let entry = &mut self.res.textures[t.0 as usize];
+        entry.view = None;
+        entry.texture = None;
+    }
+
     pub fn add_pass(&mut self, mut pass: Box<dyn Pass<C>>) {
         let mut reads = Vec::new();
         let mut writes = Vec::new();

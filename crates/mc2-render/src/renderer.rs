@@ -106,6 +106,7 @@ impl Renderer {
             gpu.queue.submit([encoder.finish()]);
         }
         self.profiler.after_submit();
+        self.graph.release_import(self.output);
         self.frame.frame_index = self.frame.frame_index.wrapping_add(1);
     }
 }
