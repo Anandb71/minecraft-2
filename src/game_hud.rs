@@ -32,7 +32,7 @@ pub fn draw(game: &mut Game, hud: &mut HudCanvas, gizmos: &mut Gizmos, screen: (
     }
 
     // Hotbar.
-    let slot_w = 150.0;
+    let slot_w = (w / HOTBAR.len() as f32).min(150.0);
     let total = slot_w * HOTBAR.len() as f32;
     let x0 = (w - total) * 0.5;
     let y0 = h - 44.0;

@@ -28,6 +28,8 @@ pub struct Args {
     pub world_dir: PathBuf,
     /// Headless camera override: position and look-at target, metres.
     pub camera: Option<([f64; 3], [f64; 3])>,
+    /// Scripted play before a headless capture.
+    pub demo: Option<crate::demo::Demo>,
 }
 
 impl Default for Args {
@@ -44,6 +46,7 @@ impl Default for Args {
             seed: 42,
             world_dir: PathBuf::from("worlds/default"),
             camera: None,
+            demo: None,
         }
     }
 }
@@ -60,6 +63,7 @@ usage: minecraft-2 [options]
   --seed <n>             world seed (default 42)
   --world <dir>          world directory (default worlds/default)
   --camera x,y,z,lx,ly,lz  headless camera position and look-at target (m)
+  --demo build           scripted building before a headless capture
   --view <n>             debug view: 0 shaded, 1 LOD hits, 2 march iterations";
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
@@ -93,6 +97,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                     .map_err(|e| format!("--seed: {e}"))?
             }
             "--world" => out.world_dir = PathBuf::from(value("--world")?),
+            "--demo" => {
+                let name = value("--demo")?;
+                out.demo =
+                    Some(crate::demo::Demo::parse(&name).ok_or(format!("unknown demo `{name}`"))?);
+            }
             "--camera" => {
                 let v: Vec<f64> = value("--camera")?
                     .split(',')

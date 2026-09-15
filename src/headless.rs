@@ -80,6 +80,15 @@ pub fn run(args: &Args) -> Result<(), String> {
             0
         };
     }
+    if let Some(demo) = args.demo {
+        let feet = camera.position - glam::DVec3::Y * mc2_game::player::EYE;
+        game.spawn_player(feet, camera.yaw, camera.pitch);
+        crate::demo::run(&mut game, demo);
+        let view = game.view();
+        camera.position = view.position;
+        camera.yaw = view.yaw;
+        camera.pitch = view.pitch;
+    }
     if let Some(s) = stream_stats(&game) {
         eprintln!(
             "streamed {} chunks ({} full) in {:.2}s",
@@ -102,6 +111,15 @@ pub fn run(args: &Args) -> Result<(), String> {
             1.0 / 60.0,
         );
         renderer.frame.hud.clear();
+        if args.demo.is_some() {
+            let screen = renderer.output_size();
+            crate::game_hud::draw(
+                &mut game,
+                &mut renderer.frame.hud,
+                &mut renderer.frame.gizmos,
+                screen,
+            );
+        }
         if args.hud {
             let cpu = mc2_core::profiler::rows();
             let stats = renderer.world.stats;

@@ -2,6 +2,7 @@
 
 mod app;
 mod cli;
+mod demo;
 mod game_hud;
 mod headless;
 mod logger;
