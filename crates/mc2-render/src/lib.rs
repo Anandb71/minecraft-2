@@ -5,6 +5,7 @@ pub mod camera;
 pub mod clouds;
 pub mod debug_shade;
 pub mod direct;
+pub mod fog;
 pub mod frame;
 pub mod gizmo;
 pub mod hud;

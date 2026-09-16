@@ -26,6 +26,8 @@ pub struct FrameCtx {
     /// Cloud layer weather, and ray march samples (view, light) from quality.
     pub clouds: crate::clouds::CloudSettings,
     pub cloud_quality: (u32, u32),
+    /// Local height fog.
+    pub fog: crate::fog::FogSettings,
     /// Camera position in world metres, for world-anchored effects.
     pub camera_world: [f32; 3],
 }
@@ -75,6 +77,7 @@ impl FrameCtx {
             gi: crate::indirect::GiMethod::RadianceCascades,
             clouds: crate::clouds::CloudSettings::default(),
             cloud_quality: (64, 6),
+            fog: crate::fog::FogSettings::default(),
             camera_world: [0.0; 3],
         }
     }
