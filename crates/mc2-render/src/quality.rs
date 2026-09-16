@@ -65,6 +65,7 @@ impl Preset {
                 lod_pixels: 2.0,
                 trace_stride: 2,
                 restir_candidates: 8,
+                gi: crate::indirect::GiMethod::RadianceCascades,
             },
             Preset::HyperRealistic => Quality {
                 preset: self,
@@ -72,6 +73,7 @@ impl Preset {
                 lod_pixels: 1.5,
                 trace_stride: 2,
                 restir_candidates: 16,
+                gi: crate::indirect::GiMethod::RadianceCascades,
             },
             Preset::UltraRealistic => Quality {
                 preset: self,
@@ -79,6 +81,7 @@ impl Preset {
                 lod_pixels: 1.0,
                 trace_stride: 1,
                 restir_candidates: 32,
+                gi: crate::indirect::GiMethod::RadianceCascades,
             },
             Preset::SuperUltraCrazyDuperRealistic => Quality {
                 preset: self,
@@ -86,6 +89,7 @@ impl Preset {
                 lod_pixels: 0.5,
                 trace_stride: 1,
                 restir_candidates: 64,
+                gi: crate::indirect::GiMethod::RadianceCascades,
             },
         }
     }
@@ -103,6 +107,8 @@ pub struct Quality {
     pub trace_stride: u32,
     /// Initial ReSTIR candidates per pixel (M).
     pub restir_candidates: u32,
+    /// Indirect light method.
+    pub gi: crate::indirect::GiMethod,
 }
 
 impl Default for Quality {

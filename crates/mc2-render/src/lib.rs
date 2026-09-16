@@ -7,6 +7,7 @@ pub mod direct;
 pub mod frame;
 pub mod gizmo;
 pub mod hud;
+pub mod indirect;
 pub mod lights;
 pub mod overlay;
 pub mod present;

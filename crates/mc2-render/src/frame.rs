@@ -21,6 +21,8 @@ pub struct FrameCtx {
     pub world_layout: wgpu::BindGroupLayout,
     pub world_bind_group: wgpu::BindGroup,
     pub lights_bind_group: wgpu::BindGroup,
+    /// Which indirect light method runs this frame.
+    pub gi: crate::indirect::GiMethod,
 }
 
 impl FrameCtx {
@@ -65,6 +67,7 @@ impl FrameCtx {
             world_layout,
             world_bind_group,
             lights_bind_group,
+            gi: crate::indirect::GiMethod::RestirGi,
         }
     }
 }
