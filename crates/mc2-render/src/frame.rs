@@ -28,6 +28,8 @@ pub struct FrameCtx {
     pub cloud_quality: (u32, u32),
     /// Local height fog.
     pub fog: crate::fog::FogSettings,
+    /// Lens and film effects.
+    pub post: crate::post::PostSettings,
     /// Camera position in world metres, for world-anchored effects.
     pub camera_world: [f32; 3],
 }
@@ -78,6 +80,7 @@ impl FrameCtx {
             clouds: crate::clouds::CloudSettings::default(),
             cloud_quality: (64, 6),
             fog: crate::fog::FogSettings::default(),
+            post: crate::post::PostSettings::default(),
             camera_world: [0.0; 3],
         }
     }

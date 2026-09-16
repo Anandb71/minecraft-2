@@ -12,6 +12,7 @@ pub mod hud;
 pub mod indirect;
 pub mod lights;
 pub mod overlay;
+pub mod post;
 pub mod present;
 pub mod quality;
 pub mod renderer;
