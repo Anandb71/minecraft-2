@@ -87,6 +87,11 @@ impl Renderer {
             world.bind_group.clone(),
             lights.bind_group.clone(),
         );
+        let mut frame = frame;
+        if opts.mode == RenderMode::Calibration {
+            // The calibration chart shows the display transform alone.
+            frame.post = crate::post::PostSettings::neutral();
+        }
         let mut graph = FrameGraph::new(
             render_size(output_size, opts.quality.render_scale),
             output_size,
@@ -307,7 +312,11 @@ impl Renderer {
                     taa,
                     exposure_targets.1,
                 )));
-                presented = taa.color;
+                let post = crate::post::PostTargets::create(&mut graph);
+                graph.add_pass(Box::new(crate::post::PostPass::new(
+                    dev, &frame, taa.color, vis, post,
+                )));
+                presented = post.color;
                 history.extend([
                     (taa.color, taa.history),
                     (exposure_targets.0, exposure_targets.1),
