@@ -35,6 +35,8 @@ pub struct Args {
     pub time: Option<f64>,
     /// Overrides the preset's indirect light method.
     pub gi: Option<mc2_render::indirect::GiMethod>,
+    /// Depth of field for headless captures: focus distance (m), f-number.
+    pub dof: Option<(f32, f32)>,
 }
 
 /// Quality settings from the preset plus command line overrides.
@@ -64,6 +66,7 @@ impl Default for Args {
             quality: mc2_render::quality::Preset::UltraRealistic,
             time: None,
             gi: None,
+            dof: None,
         }
     }
 }
@@ -83,6 +86,7 @@ usage: minecraft-2 [options]
   --demo build|lights|mirror  scripted play before a headless capture
   --time <hours>         time of day, e.g. 6.5 or 22 (headless: frozen)
   --gi restir|cascades   indirect light method (default: preset)
+  --dof <focus_m>,<f>    depth of field for captures (35 mm lens)
   --quality <tier>       0 Realistic, 1 Hyper Realistic, 2 Ultra Realistic
                          (default), 3 Super Ultra Crazy Duper Realistic
   --view <n>             debug view: 0 shaded, 1 LOD hits, 2 march iterations";
@@ -142,6 +146,14 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                     return Err("--time expects hours in 0..=24".into());
                 }
                 out.time = Some(v);
+            }
+            "--dof" => {
+                let v = value("--dof")?;
+                let (focus, f) = v.split_once(',').ok_or("--dof expects focus,f-number")?;
+                out.dof = Some((
+                    focus.parse().map_err(|e| format!("--dof focus: {e}"))?,
+                    f.parse().map_err(|e| format!("--dof f-number: {e}"))?,
+                ));
             }
             "--gi" => {
                 let v = value("--gi")?;

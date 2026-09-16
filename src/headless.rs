@@ -45,6 +45,13 @@ pub fn run(args: &Args) -> Result<(), String> {
         },
     );
     renderer.debug_mode = args.debug_view;
+    if let Some((focus_m, f_number)) = args.dof {
+        renderer.frame.post.dof = Some(mc2_render::post::DepthOfField {
+            focus_m,
+            focal_mm: 35.0,
+            f_number,
+        });
+    }
     renderer.beam = !args.no_beam;
     let t = Instant::now();
     let mut game = Game::new();
