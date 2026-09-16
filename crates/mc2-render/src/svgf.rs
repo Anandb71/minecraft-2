@@ -70,6 +70,8 @@ pub struct SvgfPass {
     /// Temporal params, then one per a-trous level.
     params: Vec<wgpu::Buffer>,
     groups: Option<(u64, Vec<wgpu::BindGroup>)>,
+    /// Skip when no emitter is sampled (the signal is ReSTIR's output).
+    needs_lights: bool,
 }
 
 impl SvgfPass {
@@ -158,7 +160,14 @@ impl SvgfPass {
             atrous_layout,
             params,
             groups: None,
+            needs_lights: false,
         }
+    }
+
+    /// Runs only on frames where ReSTIR samples emitters.
+    pub fn only_with_lights(mut self) -> Self {
+        self.needs_lights = true;
+        self
     }
 
     /// Pairs for the history pass: this frame's moments become next frame's.
@@ -187,6 +196,9 @@ impl Pass<FrameCtx> for SvgfPass {
     }
 
     fn execute(&mut self, ctx: &mut PassContext<'_, FrameCtx>) {
+        if self.needs_lights && ctx.frame.uniforms.light_count == 0 {
+            return;
+        }
         let generation = ctx.graph.generation();
         if self.groups.as_ref().is_none_or(|(g, _)| *g != generation) {
             let g = ctx.graph;
