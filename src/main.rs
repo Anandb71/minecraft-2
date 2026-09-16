@@ -7,6 +7,7 @@ mod game_hud;
 mod headless;
 mod logger;
 mod measure;
+mod photo;
 mod world;
 
 fn main() {
