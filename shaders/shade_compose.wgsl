@@ -27,6 +27,13 @@
 // Outgoing diffuse radiance of every surface: indirect rays reuse it next
 // frame.
 @group(2) @binding(14) var out_surface: texture_storage_2d<rgba16float, write>;
+// Clouds at half resolution (rgb in-scattering, a transmittance), the
+// cloud shadow map and the cloud layer parameters.
+@group(2) @binding(15) var clouds_tex: texture_2d<f32>;
+@group(2) @binding(16) var cloud_shadow_map: texture_2d<f32>;
+@group(2) @binding(17) var<uniform> clouds: CloudParams;
+#import "clouds_params.wgsl"
+#import "cloud_shadow.wgsl"
 #import "sky_common.wgsl"
 #import "ambient.wgsl"
 
@@ -159,6 +166,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         sky += moon_disc(dir);
         sky += (stars(dir) + NIGHT_SKY) * view_t;
+        // Clouds in front of everything beyond the atmosphere.
+        // Half-resolution texel centres sit at even render pixels plus a half.
+        let cloud_uv = (vec2<f32>(pixel) + 0.5) * 0.5 / vec2<f32>(textureDimensions(clouds_tex));
+        let cloud = textureSampleLevel(clouds_tex, lut_sampler, cloud_uv, 0.0);
+        sky = sky * cloud.a + cloud.rgb;
         textureStore(out_hdr, pixel, vec4<f32>(sky, 1.0));
         textureStore(out_surface, pixel, vec4<f32>(0.0));
         return;
@@ -179,16 +191,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Irradiance reaching the surface, then the reflected specular.
     var irradiance = vec3<f32>(0.0);
     var specular = vec3<f32>(0.0);
+    let world_m = (vec3<f32>(frame.camera_voxel) + frame.camera_frac) / VOXELS_PER_METRE + rel_m;
     let nl_sun = max(dot(normal, sun), 0.0);
     if nl_sun > 0.0 && lv.r > 0.0 {
-        let e = frame.sun_illuminance * light_transmittance(altitude_km, sun) * lv.r;
+        let e = frame.sun_illuminance * light_transmittance(altitude_km, sun) * lv.r * cloud_shadow(world_m, sun);
         irradiance += e * nl_sun;
         specular += e * ggx_specular(normal, v, sun, mat.roughness, f0);
     }
     let moon = normalize(frame.moon_dir);
     let nl_moon = max(dot(normal, moon), 0.0);
     if nl_moon > 0.0 && lv.g > 0.0 {
-        irradiance += frame.moon_illuminance * light_transmittance(altitude_km, moon) * lv.g * nl_moon;
+        irradiance += frame.moon_illuminance * light_transmittance(altitude_km, moon) * lv.g * nl_moon * cloud_shadow(world_m, moon);
     }
     // Sky light scaled by traced sky visibility.
     irradiance += sky_irradiance(normal) * lv.b;
