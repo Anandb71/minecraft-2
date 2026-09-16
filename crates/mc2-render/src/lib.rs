@@ -2,6 +2,7 @@
 
 pub mod calibration;
 pub mod camera;
+pub mod clouds;
 pub mod debug_shade;
 pub mod direct;
 pub mod frame;

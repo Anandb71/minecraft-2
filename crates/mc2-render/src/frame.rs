@@ -23,6 +23,11 @@ pub struct FrameCtx {
     pub lights_bind_group: wgpu::BindGroup,
     /// Which indirect light method runs this frame.
     pub gi: crate::indirect::GiMethod,
+    /// Cloud layer weather, and ray march samples (view, light) from quality.
+    pub clouds: crate::clouds::CloudSettings,
+    pub cloud_quality: (u32, u32),
+    /// Camera position in world metres, for world-anchored effects.
+    pub camera_world: [f32; 3],
 }
 
 impl FrameCtx {
@@ -67,7 +72,10 @@ impl FrameCtx {
             world_layout,
             world_bind_group,
             lights_bind_group,
-            gi: crate::indirect::GiMethod::RestirGi,
+            gi: crate::indirect::GiMethod::RadianceCascades,
+            clouds: crate::clouds::CloudSettings::default(),
+            cloud_quality: (64, 6),
+            camera_world: [0.0; 3],
         }
     }
 }

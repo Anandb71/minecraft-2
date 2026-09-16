@@ -66,6 +66,8 @@ impl Preset {
                 trace_stride: 2,
                 restir_candidates: 8,
                 gi: crate::indirect::GiMethod::RadianceCascades,
+                cloud_steps: 32,
+                cloud_light_steps: 4,
             },
             Preset::HyperRealistic => Quality {
                 preset: self,
@@ -74,6 +76,8 @@ impl Preset {
                 trace_stride: 2,
                 restir_candidates: 16,
                 gi: crate::indirect::GiMethod::RadianceCascades,
+                cloud_steps: 48,
+                cloud_light_steps: 5,
             },
             Preset::UltraRealistic => Quality {
                 preset: self,
@@ -82,6 +86,8 @@ impl Preset {
                 trace_stride: 1,
                 restir_candidates: 32,
                 gi: crate::indirect::GiMethod::RadianceCascades,
+                cloud_steps: 64,
+                cloud_light_steps: 6,
             },
             Preset::SuperUltraCrazyDuperRealistic => Quality {
                 preset: self,
@@ -90,6 +96,8 @@ impl Preset {
                 trace_stride: 1,
                 restir_candidates: 64,
                 gi: crate::indirect::GiMethod::RadianceCascades,
+                cloud_steps: 96,
+                cloud_light_steps: 6,
             },
         }
     }
@@ -109,6 +117,9 @@ pub struct Quality {
     pub restir_candidates: u32,
     /// Indirect light method.
     pub gi: crate::indirect::GiMethod,
+    /// Cloud ray march samples through the layer and toward the light.
+    pub cloud_steps: u32,
+    pub cloud_light_steps: u32,
 }
 
 impl Default for Quality {
@@ -144,6 +155,8 @@ mod tests {
             assert!(w[1].lod_pixels <= w[0].lod_pixels);
             assert!(w[1].trace_stride <= w[0].trace_stride);
             assert!(w[1].restir_candidates >= w[0].restir_candidates);
+            assert!(w[1].cloud_steps >= w[0].cloud_steps);
+            assert!(w[1].cloud_light_steps >= w[0].cloud_light_steps);
         }
         assert_eq!(
             Preset::SuperUltraCrazyDuperRealistic.next(),
