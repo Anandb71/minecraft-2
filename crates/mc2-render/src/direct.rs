@@ -38,6 +38,9 @@ pub struct DirectTargets {
     pub res_a_prev: TexHandle,
     pub res_b_prev: TexHandle,
     pub direct_lights: TexHandle,
+    /// Outgoing diffuse radiance per pixel, and last frame's.
+    pub surface: TexHandle,
+    pub surface_prev: TexHandle,
 }
 
 impl DirectTargets {
@@ -59,6 +62,8 @@ impl DirectTargets {
             res_a_prev: graph.create_history(history_desc("reservoir a prev", RGBA32F)),
             res_b_prev: graph.create_history(history_desc("reservoir b prev", RGBA32F)),
             direct_lights: t(graph, "direct lights", RGBA16F),
+            surface: t(graph, "surface radiance", RGBA16F),
+            surface_prev: graph.create_history(history_desc("surface radiance prev", RGBA16F)),
         }
     }
 }
@@ -432,10 +437,22 @@ impl Pass<FrameCtx> for RestirPass {
     }
 }
 
+/// Denoised lighting signals composition reads, and where it writes
+/// surface radiance for next frame's indirect rays.
+#[derive(Clone, Copy)]
+pub struct ComposeInputs {
+    /// Emitter irradiance (denoised).
+    pub emitters: TexHandle,
+    /// Indirect irradiance (denoised, GI resolution).
+    pub gi: TexHandle,
+    pub surface: TexHandle,
+}
+
 pub struct ComposePass {
     vis: VisTargets,
     t: DirectTargets,
     sky: SkyTargets,
+    inputs: ComposeInputs,
     out: TexHandle,
     pipeline: HotCompute,
     bgl: wgpu::BindGroupLayout,
@@ -450,6 +467,7 @@ impl ComposePass {
         vis: VisTargets,
         t: DirectTargets,
         sky: SkyTargets,
+        inputs: ComposeInputs,
         out: TexHandle,
     ) -> Self {
         let bgl = layout(
@@ -469,6 +487,9 @@ impl ComposePass {
                 bind::write_2d(RGBA16F),
                 bind::texture_2d(),
                 bind::texture(wgpu::TextureViewDimension::D3, true),
+                unfilterable(),
+                unfilterable(),
+                bind::write_2d(RGBA16F),
             ],
         );
         let pipeline = HotCompute::new(
@@ -482,6 +503,7 @@ impl ComposePass {
             vis,
             t,
             sky,
+            inputs,
             out,
             pipeline,
             bgl,
@@ -502,15 +524,18 @@ impl Pass<FrameCtx> for ComposePass {
             self.vis.depth,
             self.vis.motion,
             self.t.light_vis,
-            self.t.direct_lights,
+            self.inputs.emitters,
+            self.inputs.gi,
         ] {
             b.read(h);
         }
+        b.write(self.inputs.surface);
         b.read(self.sky.transmittance);
         b.read(self.sky.sky_view);
         b.read(self.sky.aerial);
         b.read(self.sky.sky_view_moon);
         b.read(self.sky.aerial_moon);
+        b.read(self.sky.ambient);
         b.write(self.out);
     }
 
@@ -525,7 +550,7 @@ impl Pass<FrameCtx> for ComposePass {
                     v.depth,
                     v.motion,
                     self.t.light_vis,
-                    self.t.direct_lights,
+                    self.inputs.emitters,
                     self.sky.transmittance,
                     self.sky.sky_view,
                     self.sky.aerial,
@@ -538,6 +563,15 @@ impl Pass<FrameCtx> for ComposePass {
             ));
             r.push(wgpu::BindingResource::TextureView(
                 ctx.graph.view(self.sky.aerial_moon),
+            ));
+            r.push(wgpu::BindingResource::TextureView(
+                ctx.graph.view(self.sky.ambient),
+            ));
+            r.push(wgpu::BindingResource::TextureView(
+                ctx.graph.view(self.inputs.gi),
+            ));
+            r.push(wgpu::BindingResource::TextureView(
+                ctx.graph.view(self.inputs.surface),
             ));
             self.group = Some((
                 generation,

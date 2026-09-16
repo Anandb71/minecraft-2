@@ -42,6 +42,7 @@ pub struct Renderer {
     pub profiler: GpuProfiler,
     pub world: GpuWorld,
     pub lights: crate::lights::LightRegistry,
+    pub skymap: crate::skymap::SkyMap,
     output: TexHandle,
     pub output_format: wgpu::TextureFormat,
     output_size: (u32, u32),
@@ -54,6 +55,9 @@ pub struct Renderer {
     /// Sub-pixel camera jitter for temporal upsampling; on in world mode.
     pub jitter: bool,
 }
+
+/// Indirect light and its denoiser run at half the render resolution.
+pub const GI_SHIFT: u32 = 1;
 
 pub fn render_size(output: (u32, u32), scale: f32) -> (u32, u32) {
     (
@@ -94,6 +98,8 @@ impl Renderer {
             1.0,
         ));
         let mut exposure = None;
+        let skymap = crate::skymap::SkyMap::new(dev);
+        let mut history = Vec::new();
         // What the present pass shows: the render-resolution scene, or its
         // temporally upsampled display-resolution version.
         let mut presented = scene;
@@ -120,9 +126,103 @@ impl Renderer {
                     vis,
                     direct,
                 )));
-                graph.add_pass(Box::new(ComposePass::new(
-                    dev, &frame, vis, direct, sky, scene,
+                // Emitter light, denoised at render resolution.
+                let emitters = crate::svgf::SvgfTargets::create(
+                    &mut graph,
+                    [
+                        "emitters integrated",
+                        "emitters moments",
+                        "emitters moments prev",
+                        "emitters color prev",
+                        "emitters ping",
+                        "emitters pong",
+                    ],
+                    0,
+                );
+                graph.add_pass(Box::new(
+                    crate::svgf::SvgfPass::new(
+                        dev,
+                        &frame,
+                        "denoise.emitters",
+                        direct.direct_lights,
+                        vis,
+                        direct.vis_id_prev,
+                        emitters,
+                        0,
+                    )
+                    .only_with_lights(),
+                ));
+                // Indirect light at GI resolution, both methods writing one
+                // signal, then denoised.
+                use crate::indirect::{
+                    CascadeTargets, CascadesPass, GiInputs, RestirGiPass, RestirGiTargets,
+                };
+                let gi_inputs = GiInputs {
+                    vis,
+                    prev_id: direct.vis_id_prev,
+                    surface_prev: direct.surface_prev,
+                    sky,
+                };
+                let gi_noisy = crate::indirect::gi_output(&mut graph, GI_SHIFT);
+                let restir_gi = RestirGiTargets::create(&mut graph, GI_SHIFT);
+                graph.add_pass(Box::new(RestirGiPass::new(
+                    dev,
+                    &frame,
+                    gi_inputs,
+                    restir_gi,
+                    gi_noisy,
+                    skymap.view.clone(),
+                    GI_SHIFT,
                 )));
+                let cascades = CascadeTargets::create(&mut graph);
+                graph.add_pass(Box::new(CascadesPass::new(
+                    dev,
+                    &frame,
+                    gi_inputs,
+                    cascades,
+                    gi_noisy,
+                    skymap.view.clone(),
+                    GI_SHIFT,
+                )));
+                let gi = crate::svgf::SvgfTargets::create(
+                    &mut graph,
+                    [
+                        "gi integrated",
+                        "gi moments",
+                        "gi moments prev",
+                        "gi color prev",
+                        "gi ping",
+                        "gi pong",
+                    ],
+                    GI_SHIFT,
+                );
+                graph.add_pass(Box::new(crate::svgf::SvgfPass::new(
+                    dev,
+                    &frame,
+                    "denoise.gi",
+                    gi_noisy,
+                    vis,
+                    direct.vis_id_prev,
+                    gi,
+                    GI_SHIFT,
+                )));
+                graph.add_pass(Box::new(ComposePass::new(
+                    dev,
+                    &frame,
+                    vis,
+                    direct,
+                    sky,
+                    crate::direct::ComposeInputs {
+                        emitters: emitters.output,
+                        gi: gi.output,
+                        surface: direct.surface,
+                    },
+                    scene,
+                )));
+                history.extend(restir_gi.history_copies());
+                history.extend(crate::svgf::SvgfPass::history_copies(&emitters));
+                history.extend(crate::svgf::SvgfPass::history_copies(&gi));
+                history.push((direct.surface, direct.surface_prev));
                 graph.add_pass(Box::new(DebugShadePass::new(dev, &frame, vis, scene)));
                 let exposure_targets = crate::direct::ExposurePass::targets(&mut graph);
                 graph.add_pass(Box::new(crate::direct::ExposurePass::new(
@@ -142,14 +242,15 @@ impl Renderer {
                     exposure_targets.1,
                 )));
                 presented = taa.color;
-                graph.add_pass(Box::new(HistoryPass::new(vec![
+                history.extend([
                     (taa.color, taa.history),
                     (exposure_targets.0, exposure_targets.1),
                     (vis.id, direct.vis_id_prev),
                     (direct.light_vis, direct.light_vis_prev),
                     (direct.res_a1, direct.res_a_prev),
                     (direct.res_b1, direct.res_b_prev),
-                ])));
+                ]);
+                graph.add_pass(Box::new(HistoryPass::new(std::mem::take(&mut history))));
                 Some(vis)
             }
         };
@@ -183,6 +284,7 @@ impl Renderer {
             profiler: GpuProfiler::new(dev, &gpu.queue, gpu.timestamps),
             world,
             lights,
+            skymap,
             output,
             output_format,
             output_size,
@@ -241,10 +343,13 @@ impl Renderer {
             mc2_core::scope!("lights.update");
             for pos in self.world.take_changed() {
                 self.lights.update_chunk(pos, world.chunk(pos));
+                self.skymap.update_chunk(pos, world.chunk(pos));
             }
             self.lights.upload(&gpu.device, &gpu.queue, camera.position);
             self.frame.lights_bind_group = self.lights.bind_group.clone();
+            self.skymap.upload(&gpu.queue, camera.position);
         }
+        self.frame.gi = self.quality.gi;
         let prev = self.prev_camera.unwrap_or(*camera);
         self.frame.uniforms = FrameUniforms::build(&FrameInputs {
             camera: *camera,
