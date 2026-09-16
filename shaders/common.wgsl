@@ -66,3 +66,9 @@ fn oct_decode(e: vec2<f32>) -> vec3<f32> {
     n = vec3<f32>(n.x + select(t, -t, n.x >= 0.0), n.y + select(t, -t, n.y >= 0.0), n.z);
     return normalize(n);
 }
+
+// Vector writes through a dynamic index are not l-values under FXC; build
+// axis vectors with select instead.
+fn axis_mask(a: u32) -> vec3<bool> {
+    return vec3<bool>(a == 0u, a == 1u, a == 2u);
+}

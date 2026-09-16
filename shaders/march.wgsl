@@ -20,6 +20,7 @@
 // Written for the weakest compilers we ship to: no writes through struct or
 // array element chains (FXC rejects them as l-values), no struct copies in
 // the hot loop.
+#import "common.wgsl"
 #import "voxel_data.wgsl"
 
 const MAX_ITERATIONS: u32 = 1024u;
@@ -83,12 +84,6 @@ fn first_tmax(r: Ray, inv: vec3<f32>, rel_min: vec3<f32>, size: f32, cell: vec3<
 fn voxel_at(r: Ray, t: f32, lo: vec3<i32>, hi: vec3<i32>) -> vec3<i32> {
     let p = r.frac + r.dir * t;
     return clamp(r.base + vec3<i32>(floor(p)), lo, hi);
-}
-
-// Vector writes through a dynamic index are not l-values under FXC; build
-// axis vectors with select instead.
-fn axis_mask(a: u32) -> vec3<bool> {
-    return vec3<bool>(a == 0u, a == 1u, a == 2u);
 }
 
 fn axis_step(a: u32, s: vec3<i32>) -> vec3<i32> {
