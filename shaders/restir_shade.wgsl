@@ -29,8 +29,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let s = shading_at(pixel, id);
     let light = lights[r.light];
-    let contribution = light_contribution(s, light, r.offset);
+    let irradiance = light_irradiance(s, light, r.offset);
     let hit = march(shadow_ray_to(s, face_of(id), sample_point(light, r.offset)));
     let visible = select(0.0, 1.0, hit.kind == HIT_NONE);
-    textureStore(out_light, pixel, vec4<f32>(contribution * r.w * visible, 1.0));
+    textureStore(out_light, pixel, vec4<f32>(irradiance * r.w * visible, 1.0));
 }

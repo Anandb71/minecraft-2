@@ -108,6 +108,23 @@ fn light_contribution(s: Shading, light: Light, offset: vec3<f32>) -> vec3<f32> 
     return light.emission * brdf * geometry;
 }
 
+// Irradiance from a sample point: the demodulated signal the denoiser sees.
+fn light_irradiance(s: Shading, light: Light, offset: vec3<f32>) -> vec3<f32> {
+    let p = sample_point(light, offset);
+    let to_light = p - s.rel_voxels;
+    let d2_voxels = max(dot(to_light, to_light), 0.25);
+    let l = to_light / sqrt(d2_voxels);
+    let nl = dot(s.normal, l);
+    if nl <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let cos_light = max(dot(offset, -l), 0.05);
+    let d2_m = d2_voxels / (VOXELS_PER_METRE * VOXELS_PER_METRE);
+    let radius_m = light.radius_voxels / VOXELS_PER_METRE;
+    let area = 4.0 * PI * radius_m * radius_m;
+    return light.emission * nl * cos_light * area / d2_m;
+}
+
 fn target_weight(c: vec3<f32>) -> f32 {
     return luminance(c);
 }

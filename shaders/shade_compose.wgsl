@@ -20,68 +20,48 @@
 @group(2) @binding(9) var out_hdr: texture_storage_2d<rgba16float, write>;
 @group(2) @binding(10) var sky_view_moon: texture_2d<f32>;
 @group(2) @binding(11) var aerial_moon: texture_3d<f32>;
+// Sky irradiance for the six axis normals, one texel each: +X -X +Y -Y +Z -Z.
+@group(2) @binding(12) var sky_ambient: texture_2d<f32>;
+// Denoised indirect irradiance at GI resolution (half render resolution).
+@group(2) @binding(13) var gi: texture_2d<f32>;
+// Outgoing diffuse radiance of every surface: indirect rays reuse it next
+// frame.
+@group(2) @binding(14) var out_surface: texture_storage_2d<rgba16float, write>;
+#import "sky_common.wgsl"
+#import "ambient.wgsl"
 
 const AERIAL_DEPTH_KM: f32 = 8.0;
 const MOON_ANGULAR_RADIUS: f32 = 0.004547;
 const MOON_ALBEDO: f32 = 0.12;
-// Natural night sky brightness without moon, mostly airglow, cd/m^2.
-const NIGHT_SKY: vec3<f32> = vec3<f32>(1.6e-4, 2.2e-4, 2.0e-4);
 
-fn camera_height_km() -> f32 {
-    let y_m = (f32(frame.camera_voxel.y) + frame.camera_frac.y) / VOXELS_PER_METRE;
-    return PLANET_RADIUS + max(y_m, 1.0) / 1000.0;
-}
-
-fn moon_sky() -> bool {
-    return (frame.sky_flags & SKY_MOON) != 0u;
-}
-
-// Sky luminance toward `dir` per unit illuminance of the light the LUT was
-// built for.
-fn sky_lut(lut: texture_2d<f32>, dir: vec3<f32>, light: vec3<f32>) -> vec3<f32> {
-    let height = camera_height_km();
-    let view_zenith_cos = dir.y;
-    // Azimuth relative to the light, measured in the horizontal plane.
-    let light_h = normalize(vec3<f32>(light.x, 0.0, light.z) + vec3<f32>(1e-5, 0.0, 0.0));
-    let dir_h = normalize(vec3<f32>(dir.x, 0.0, dir.z) + vec3<f32>(1e-5, 0.0, 0.0));
-    let light_view_cos = dot(light_h, dir_h);
-    let origin = vec3<f32>(0.0, height, 0.0);
-    let hits_ground = ray_sphere(origin, dir, PLANET_RADIUS) > 0.0;
-    let uv = sky_view_uv(height, view_zenith_cos, light_view_cos, hits_ground);
-    return textureSampleLevel(lut, lut_sampler, uv, 0.0).rgb;
-}
-
-// Sky luminance from both lights, cd/m^2.
-fn sky_radiance(dir: vec3<f32>) -> vec3<f32> {
-    var l = sky_lut(sky_view_lut, dir, normalize(frame.sun_dir)) * frame.sun_illuminance;
-    if moon_sky() {
-        l += sky_lut(sky_view_moon, dir, normalize(frame.moon_dir)) * frame.moon_illuminance;
-    }
-    return l;
-}
-
-// Transmittance toward a light from an altitude, zero once the planet
-// blocks it.
-fn light_transmittance(altitude_km: f32, dir: vec3<f32>) -> vec3<f32> {
-    let h = PLANET_RADIUS + max(altitude_km, 0.001);
-    if ray_sphere(vec3<f32>(0.0, h, 0.0), dir, PLANET_RADIUS) > 0.0 {
-        return vec3<f32>(0.0);
-    }
-    return textureSampleLevel(transmittance_lut, lut_sampler, transmittance_uv(h, dir.y), 0.0).rgb;
-}
-
-// Irradiance from the sky dome around a normal, eight fixed samples.
-fn sky_irradiance(n: vec3<f32>) -> vec3<f32> {
+// Indirect irradiance at a render pixel from the half-resolution GI signal:
+// the four GI texels around it, weighted bilinearly and by agreement with
+// this surface's plane and normal.
+fn gi_upsample(pixel: vec2<i32>, position: vec3<f32>, normal: vec3<f32>, depth: f32) -> vec3<f32> {
+    let gi_size = vec2<i32>(textureDimensions(gi));
+    let g = (vec2<f32>(pixel) + 0.5) * 0.5 - 0.5;
+    let base = vec2<i32>(floor(g));
+    let f = g - vec2<f32>(base);
     var sum = vec3<f32>(0.0);
-    let up = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(n.y) > 0.9);
-    let t = normalize(cross(up, n));
-    let b = cross(n, t);
-    for (var i = 0; i < 8; i++) {
-        let phi = f32(i) / 8.0 * TAU;
-        let d = normalize(n * 0.7 + (t * cos(phi) + b * sin(phi)) * 0.71);
-        sum += sky_radiance(normalize(vec3<f32>(d.x, max(d.y, 0.02), d.z)));
+    var weight = 0.0;
+    for (var k = 0; k < 4; k++) {
+        let o = vec2<i32>(k & 1, k >> 1);
+        let q = clamp(base + o, vec2<i32>(0), gi_size - 1);
+        let qp = min(q * 2, vec2<i32>(frame.render_size) - 1);
+        let qid = textureLoad(vis_id, qp, 0);
+        if (qid.w >> 30u) == 0u {
+            continue;
+        }
+        let qpos = camera_ray_dir(vec2<f32>(qp)) * textureLoad(vis_depth, qp, 0).r;
+        let qn = oct_decode(textureLoad(vis_motion, qp, 0).ba);
+        let footprint = depth * frame.pixel_angle * 2.0 + 1e-3;
+        let wg = exp(-abs(dot(normal, qpos - position)) / footprint) * pow(max(dot(qn, normal), 0.0), 32.0);
+        let wb = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
+        let w = max(wb, 1e-3) * wg;
+        sum += textureLoad(gi, q, 0).rgb * w;
+        weight += w;
     }
-    return (sum / 8.0 + NIGHT_SKY) * PI;
+    return select(vec3<f32>(0.0), sum / max(weight, 1e-6), weight > 1e-5);
 }
 
 // Star field fixed to the celestial sphere: one candidate star per cell of a
@@ -180,6 +160,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         sky += moon_disc(dir);
         sky += (stars(dir) + NIGHT_SKY) * view_t;
         textureStore(out_hdr, pixel, vec4<f32>(sky, 1.0));
+        textureStore(out_surface, pixel, vec4<f32>(0.0));
         return;
     }
 
@@ -195,30 +176,31 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let diffuse = albedo * (1.0 - mat.metallic) * INV_PI;
     let f0 = mix(vec3<f32>(0.04), mat.albedo, mat.metallic);
 
-    var light = vec3<f32>(0.0);
-    // Sun.
+    // Irradiance reaching the surface, then the reflected specular.
+    var irradiance = vec3<f32>(0.0);
+    var specular = vec3<f32>(0.0);
     let nl_sun = max(dot(normal, sun), 0.0);
     if nl_sun > 0.0 && lv.r > 0.0 {
-        let t = light_transmittance(altitude_km, sun);
-        let e = frame.sun_illuminance * t * lv.r;
-        light += e * (diffuse * nl_sun + ggx_specular(normal, v, sun, mat.roughness, f0));
+        let e = frame.sun_illuminance * light_transmittance(altitude_km, sun) * lv.r;
+        irradiance += e * nl_sun;
+        specular += e * ggx_specular(normal, v, sun, mat.roughness, f0);
     }
-    // Moon.
     let moon = normalize(frame.moon_dir);
     let nl_moon = max(dot(normal, moon), 0.0);
     if nl_moon > 0.0 && lv.g > 0.0 {
-        let e = frame.moon_illuminance * light_transmittance(altitude_km, moon) * lv.g;
-        light += e * diffuse * nl_moon;
+        irradiance += frame.moon_illuminance * light_transmittance(altitude_km, moon) * lv.g * nl_moon;
     }
-    // Sky light scaled by traced sky visibility; bounce light is added by
-    // the indirect pass.
-    light += sky_irradiance(normal) * diffuse * lv.b;
+    // Sky light scaled by traced sky visibility.
+    irradiance += sky_irradiance(normal) * lv.b;
     // Emissive voxels gathered by ReSTIR, which does not run without lights.
     if frame.light_count > 0u {
-        light += textureLoad(direct_lights, pixel, 0).rgb;
+        irradiance += textureLoad(direct_lights, pixel, 0).rgb;
     }
-    // Emission.
-    light += mat.emission;
+    // Indirect light.
+    irradiance += gi_upsample(pixel, rel_m, normal, depth_m);
+    let surface = mat.emission + diffuse * irradiance;
+    textureStore(out_surface, pixel, vec4<f32>(surface, 1.0));
+    let light = surface + specular;
 
     // Aerial perspective.
     let uv = (vec2<f32>(pixel) + 0.5) / frame.render_size;
