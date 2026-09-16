@@ -32,8 +32,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let c = gbuffer(p);
-    let x = textureLoad(noisy, p, 0).rgb;
-    if (c.id.w >> 30u) == 0u {
+    let sample = textureLoad(noisy, p, 0);
+    let x = sample.rgb;
+    // Sky, and pixels the signal does not cover (alpha 0: reflections on
+    // rough surfaces), cost nothing.
+    if (c.id.w >> 30u) == 0u || sample.a == 0.0 {
         textureStore(out_color, p, vec4<f32>(x, 0.0));
         textureStore(out_moments, p, vec4<f32>(0.0));
         return;

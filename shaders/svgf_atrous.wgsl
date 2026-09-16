@@ -28,6 +28,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let centre = textureLoad(src, p, 0);
+    // Uncovered pixels were written as zero colour and zero variance.
+    if all(centre == vec4<f32>(0.0)) {
+        textureStore(out_color, p, centre);
+        return;
+    }
     let c = gbuffer(p);
     if (c.id.w >> 30u) == 0u {
         textureStore(out_color, p, centre);
