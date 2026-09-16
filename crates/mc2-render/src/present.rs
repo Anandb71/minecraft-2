@@ -10,7 +10,11 @@ struct PresentUniforms {
     exposure: f32,
     tonemap: u32,
     auto_exposure: u32,
-    _pad: f32,
+    frame_index: u32,
+    sharpen: f32,
+    vignette: f32,
+    grain: f32,
+    purkinje: u32,
 }
 
 pub struct PresentPass {
@@ -132,7 +136,11 @@ impl Pass<FrameCtx> for PresentPass {
                 exposure: ctx.frame.exposure,
                 tonemap: u32::from(ctx.frame.tonemap),
                 auto_exposure: u32::from(self.exposure.is_some() && ctx.frame.auto_exposure),
-                _pad: 0.0,
+                frame_index: ctx.frame.frame_index,
+                sharpen: ctx.frame.post.sharpen,
+                vignette: ctx.frame.post.vignette,
+                grain: ctx.frame.post.grain,
+                purkinje: u32::from(ctx.frame.post.purkinje),
             }),
         );
         let generation = ctx.graph.generation();
