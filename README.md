@@ -39,6 +39,9 @@ sets the hour and `--demo build|lights` plays a scripted scene before capturing.
 | 2 Ultra Realistic (default) | 75% | every pixel | 32 |
 | 3 Super Ultra Crazy Duper Realistic | 100% | every pixel | 64 |
 
+Indirect light runs at half the render resolution in every tier; `--gi restir`
+swaps radiance cascades for ReSTIR GI.
+
 `--software` selects the software adapter (WARP on Windows, lavapipe on Linux).
 `MC2_BACKEND=vulkan|dx12|metal` forces a backend.
 
@@ -74,6 +77,8 @@ sets the hour and `--demo build|lights` plays a scripted scene before capturing.
 - Sun and moon positions from latitude, season and time of day
 - Traced soft shadows and sky visibility through the same marcher that draws the world, accumulated with exact voxel-id reprojection
 - ReSTIR direct light from every emissive voxel cluster: torches, lanterns, lava
+- Indirect light from radiance cascades (ReSTIR GI selectable), bouncing frame over frame through last frame's lit surfaces
+- SVGF denoising of emitter and indirect light; temporal upsampling from the render resolution to the display
 - Auto exposure in EV100 with a night-aware key
 - Four quality tiers up to Super Ultra Crazy Duper Realistic
 - Visibility buffer with exact world voxel ids, material, face, depth and motion vectors
@@ -115,7 +120,7 @@ Physics runs on its own thread at a fixed 120 Hz with a 4 ms tick budget.
 4. Worldgen v1, region streaming, LOD. **(v0.4-worldgen)**
 5. Player controller, collision, carve and place. **(v0.5-player)**
 6. Sun, sky LUTs, traced shadows, ReSTIR direct light. **(v0.6-lighting)**
-7. Indirect light, denoise, temporal upsample.
+7. Indirect light, denoise, temporal upsample. **(v0.7-indirect)**
 8. Reflections, volumetrics, clouds, post stack, photo mode.
 9. Rigid bodies, contacts, destruction.
 10. Structural integrity and collapse.

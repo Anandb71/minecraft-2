@@ -395,3 +395,101 @@ writes and a `vec3<u32>` pad made a uniform 32 bytes.
   and wrong for 6.25 cm detail at kilometre range (D14).
 - One shadow ray per light per pixel: a lava field is thousands of lights
   (D15).
+
+## Step 7: Indirect light, denoising, temporal upsampling (`v0.7-indirect`)
+
+**Read first.** Sannikov, "Radiance Cascades: A Novel Approach to
+Calculating Global Illumination" (the penumbra condition, radiance
+intervals and their merging, section 4.5's screen-space probes holding
+world-space intervals); Ouyang et al. 2021, "ReSTIR GI: Path Resampling for
+Real-Time Path Tracing" (Algorithms 2-4, the Eq. 9 and 10 targets, the Eq. 11
+reconnection Jacobian, M clamps of 30 and 500, uniform hemisphere
+sampling); Schied et al. 2017, "Spatiotemporal Variance-Guided Filtering"
+(alpha 0.2, moments variance with a 7x7 spatial fallback under four frames,
+five a-trous levels, sigma_z 1, sigma_n 128, sigma_l 4, the first level as
+colour history, albedo demodulation); Karis 2014 on temporal antialiasing.
+
+**Built.**
+
+- Temporal upsampling (`upsample.rs`, `taa_upsample.wgsl`): the camera
+  jitters on a Halton (2,3) sequence; each display pixel gathers 3x3 render
+  samples under a Gaussian of their jittered centres, reprojects a
+  display-resolution history through a Catmull-Rom filter, clips it to the
+  YCoCg variance box, and blends by how close a sample landed, on
+  tonemapped weights. Realistic renders 640x360 and resolves 1280x720.
+- History reuse everywhere now asks `same_surface`: exact voxel ids until
+  jitter or half resolution moves samples, then ids within the sample
+  footprint plus one voxel on the same face.
+- SVGF (`svgf.rs`, `svgf_*.wgsl`) for any demodulated signal at render or
+  half resolution. Depth is compared as distance from the centre pixel's
+  tangent plane in pixel footprints, which is exact for the planes voxels
+  are made of. It filters ReSTIR's emitter irradiance (render resolution,
+  only when emitters are sampled) and indirect irradiance (half resolution).
+- Sky ambient cube (`sky_ambient.wgsl`): above-horizon sky irradiance for
+  the six axis normals, 144 cosine directions per face, once per frame.
+  Composition reads it instead of sampling the sky-view LUT per pixel.
+- Sky map (`skymap.rs`, `skymap.wgsl`): the highest solid 0.5 m cell per
+  column within 224 m, a toroidal 1024^2 texture updated per changed chunk
+  (4 KB of tops per chunk). Answers "is the sky open above this point" and,
+  by a short 2D march, "does the sun reach it".
+- Indirect hits (`gi_common.wgsl`): a hit that last frame saw on the same
+  surface returns last frame's surface radiance (direct light with traced
+  shadows, sky light, emitters and indirect light), so bounces compound
+  frame to frame for free; off screen, hits are lit through transmittance,
+  sky-map visibility and the ambient cube. Composition now writes that
+  surface radiance for every pixel. Indirect rays carry only light from
+  surfaces; sky light stays with the traced sky visibility, so nothing is
+  counted twice.
+- ReSTIR GI (`restir_gi_*.wgsl`) and radiance cascades (`rc_*.wgsl`), both
+  at half resolution writing the same noisy irradiance, selectable with
+  `--gi restir|cascades`. Cascades are the default in every preset (D19).
+- `MC2_GI_COMPARE=<frames>` measures the active method against an unbiased
+  reference: ReSTIR GI's initial samples with reuse disabled (debug view 5),
+  averaged over that many frames.
+
+**Measured.** Indirect methods on the build demo at noon, Realistic
+(640x360 render, 320x180 GI). Errors are relative RMSE on luminance
+against the reference, whose own noise is 0.243 at 512 frames (the first
+and third rows used 256 reference frames).
+
+| Method | Cost | Relative RMSE | Bias | Frame-to-frame change |
+|---|---|---|---|---|
+| ReSTIR GI, first version | 9.4 ms | 2.059 | +25.3% | 29.5% |
+| ReSTIR GI, spacing-aware history, own-reservoir fallback | 9.4 ms | 1.938 | +32.8% | 27.0% |
+| Radiance cascades, doubling intervals (15.75 m reach) | 2.5 ms | 1.646 | -14.3% | 6.1% |
+| Radiance cascades, fourfold intervals (341 m reach) | 3.0 ms | 1.541 | +3.5% | 5.3% |
+
+Frame costs at 1280x720 output (GPU timestamps, 120 frames, static camera):
+
+| Scene, preset | Frame mean / p99 | vis | direct.sun | direct.restir | denoise.emitters | indirect | denoise.gi | compose | denoise.upsample |
+|---|---|---|---|---|---|---|---|---|---|
+| Build demo, Realistic, cascades | 45.8 / 118.4 ms | 12.4 ms | 5.6 ms | skipped | skipped | 3.0 ms | 4.6 ms | 0.9 ms | 4.3 ms |
+| Build demo, Realistic, ReSTIR GI | 56.1 / 143.8 ms | 12.5 ms | 5.7 ms | skipped | skipped | 9.4 ms | 4.6 ms | 0.9 ms | 4.4 ms |
+| Build demo, Ultra, cascades | 120.1 / 217.3 ms | 23.7 ms | 46.0 ms | skipped | skipped | 6.6 ms | 10.8 ms | 2.1 ms | 4.5 ms |
+| Build demo, Ultra, ReSTIR GI | 137.2 / 235.7 ms | 23.7 ms | 46.0 ms | skipped | skipped | 22.5 ms | 10.8 ms | 2.2 ms | 4.5 ms |
+| Night lights, Realistic, cascades | 110.5 / 231.9 ms | 12.1 ms | 9.4 ms | 20.4 ms | 6.5 ms | 2.8 ms | 3.9 ms | 0.9 ms | 4.2 ms |
+| Night lights, Ultra, cascades | 290.0 / 431.4 ms | 23.7 ms | 76.7 ms | 48.4 ms | 15.1 ms | 6.2 ms | 9.2 ms | 2.1 ms | 4.4 ms |
+
+**Budget.** Scaled to 1440p on the target (4x pixels, roughly 10x faster),
+Ultra's indirect line is about 2.6 ms against 2.5 and denoise plus upsample
+about 6.1 ms against 2.0. SVGF is the second open budget bug: every tap
+rebuilds its world position from a matrix product; a half-resolution
+position and normal target would remove most of that. Frame means exceed
+the sum of GPU passes by 8 to 90 ms in these scenes; that time is not yet
+attributed and is logged for step 18.
+
+Bugs found: parallel golden tests crashed WARP with an access violation
+(each passes alone; they now run one at a time); sky light entered twice
+once indirect rays that escaped returned sky radiance; a removal script
+took composition's constants with it (the GPU march test caught the shader
+error). Caught in review before it showed: a 17-chunk sky map window
+would have aliased on its 16-chunk torus.
+
+**Rejected.**
+- ReSTIR GI as the default: three times the cost with more error and five
+  times the flicker in these measurements (D19).
+- A world-space irradiance cache: bounces already compound through the
+  previous frame's surface radiance, and the sky map covers off-screen hits
+  without a second structure to keep in step with edits (D20).
+- Separate shadow and sky rays at every indirect hit: they would triple the
+  ray count for light the sky map predicts well.

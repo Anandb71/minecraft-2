@@ -129,3 +129,23 @@ Measured on the integrated GPU at 960x540 over the sample terrain: the first ver
 - **A few global levels read by each pass.** Compact, but every pass interprets "high" separately and the budget table cannot say what a level costs.
 - **Hundreds of independent settings.** Maximal control and an untestable matrix.
 - **Four named presets that are plain settings structs (chosen).** Realistic, Hyper Realistic, Ultra Realistic and Super Ultra Crazy Duper Realistic each fill a `Quality` struct; knobs join the struct as the systems they scale land, and a test keeps each knob monotonic across tiers. The budget table is measured at Ultra Realistic.
+
+## D18. Reconstruction: denoising and upsampling
+
+- **Spatial blur only (edge-aware bilateral per frame).** Cheap and immediate, but one sample per pixel at half resolution needs a footprint that erases contact detail, and it flickers.
+- **A single temporal accumulator for the final image.** TAA alone smears lighting noise into ghosts and cannot tell texture from noise.
+- **SVGF per demodulated lighting signal, then temporal upsampling of the final image (chosen).** Lighting is denoised without albedo, at its own resolution, with variance-guided edge stopping; the composed image then accumulates jittered render samples into display resolution. Measured on the integrated GPU: SVGF 4.6 ms at 320x180, 10.8 ms at 480x270; upsampling 4.4 ms at 1280x720 output.
+
+## D19. Indirect light: radiance cascades against ReSTIR GI
+
+Both were built behind one output with the same hit shading and denoiser, and measured on the same scene against an unbiased reference (DEVLOG, step 7).
+
+- **ReSTIR GI.** 9.4 ms at Realistic, relative RMSE 1.94, bias +33%, 27% frame-to-frame change after SVGF. Reservoirs were healthy (temporal M at the 30 clamp for most pixels) but the weights' tail (99th percentile W 16x the median) survives denoising as flicker, and biased spatial reuse brightens.
+- **Radiance cascades with the paper's doubling intervals.** 2.5 ms, RMSE 1.65, bias -14% (six cascades reach only 15.75 m), 6% change.
+- **Radiance cascades with fourfold intervals (chosen).** 3.0 ms, RMSE 1.54, bias +3.5%, 5% change. Deterministic per frame, so the denoiser only has to smooth probe interpolation. ReSTIR GI stays available with `--gi restir`.
+
+## D20. Lighting indirect hits off screen
+
+- **Trace a shadow ray and a sky ray at every hit.** Correct, and triples the ray count of either method.
+- **A world-space radiance cache (hash grid of voxel faces).** Handles off-screen multi-bounce well, but it is a second structure to update on every edit and to budget.
+- **Last frame's surface radiance on screen, the sky map off screen (chosen).** Bounces compound through the previous frame for free; off-screen hits get sun and sky visibility from column heights (texture reads and an 18-step 2D march). Overhangs deeper than the map's 0.5 m column resolution can leak a little sky light.
