@@ -34,6 +34,30 @@
 @group(2) @binding(17) var<uniform> clouds: CloudParams;
 #import "clouds_params.wgsl"
 #import "cloud_shadow.wgsl"
+// Froxel fog, integrated: scattering (rgb) and transmittance (a) up to each
+// slice's far edge.
+@group(2) @binding(18) var fog_volume: texture_3d<f32>;
+// Denoised glossy reflections at GI resolution.
+@group(2) @binding(19) var reflections: texture_2d<f32>;
+const REFLECT_MAX_ROUGHNESS: f32 = 0.5;
+
+const FOG_NEAR_M: f32 = 0.5;
+const FOG_FAR_M: f32 = 192.0;
+
+// Applies local fog between the camera and a surface `depth_m` away (the
+// far edge of the volume for the sky).
+fn apply_fog(color: vec3<f32>, uv: vec2<f32>, depth_m: f32) -> vec3<f32> {
+    let slices = f32(textureDimensions(fog_volume).z);
+    let w = clamp(log(max(depth_m, FOG_NEAR_M) / FOG_NEAR_M) / log(FOG_FAR_M / FOG_NEAR_M), 0.0, 1.0);
+    // Texel z holds the integral up to slice z's far edge.
+    let s = w * slices;
+    let v = textureSampleLevel(fog_volume, lut_sampler, vec3<f32>(uv, (max(s - 1.0, 0.0) + 0.5) / slices), 0.0);
+    // Inside the first slice, fade in from no fog at the camera.
+    let first = clamp(s, 0.0, 1.0);
+    let scattering = v.rgb * first;
+    let transmittance = mix(1.0, v.a, first);
+    return color * transmittance + scattering;
+}
 #import "sky_common.wgsl"
 #import "ambient.wgsl"
 
@@ -41,11 +65,11 @@ const AERIAL_DEPTH_KM: f32 = 8.0;
 const MOON_ANGULAR_RADIUS: f32 = 0.004547;
 const MOON_ALBEDO: f32 = 0.12;
 
-// Indirect irradiance at a render pixel from the half-resolution GI signal:
+// A half-resolution lighting signal at a render pixel:
 // the four GI texels around it, weighted bilinearly and by agreement with
 // this surface's plane and normal.
-fn gi_upsample(pixel: vec2<i32>, position: vec3<f32>, normal: vec3<f32>, depth: f32) -> vec3<f32> {
-    let gi_size = vec2<i32>(textureDimensions(gi));
+fn half_res_upsample(signal: texture_2d<f32>, pixel: vec2<i32>, position: vec3<f32>, normal: vec3<f32>, depth: f32) -> vec3<f32> {
+    let gi_size = vec2<i32>(textureDimensions(signal));
     let g = (vec2<f32>(pixel) + 0.5) * 0.5 - 0.5;
     let base = vec2<i32>(floor(g));
     let f = g - vec2<f32>(base);
@@ -65,7 +89,7 @@ fn gi_upsample(pixel: vec2<i32>, position: vec3<f32>, normal: vec3<f32>, depth: 
         let wg = exp(-abs(dot(normal, qpos - position)) / footprint) * pow(max(dot(qn, normal), 0.0), 32.0);
         let wb = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
         let w = max(wb, 1e-3) * wg;
-        sum += textureLoad(gi, q, 0).rgb * w;
+        sum += textureLoad(signal, q, 0).rgb * w;
         weight += w;
     }
     return select(vec3<f32>(0.0), sum / max(weight, 1e-6), weight > 1e-5);
@@ -171,6 +195,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let cloud_uv = (vec2<f32>(pixel) + 0.5) * 0.5 / vec2<f32>(textureDimensions(clouds_tex));
         let cloud = textureSampleLevel(clouds_tex, lut_sampler, cloud_uv, 0.0);
         sky = sky * cloud.a + cloud.rgb;
+        sky = apply_fog(sky, (vec2<f32>(pixel) + 0.5) / frame.render_size, FOG_FAR_M);
         textureStore(out_hdr, pixel, vec4<f32>(sky, 1.0));
         textureStore(out_surface, pixel, vec4<f32>(0.0));
         return;
@@ -210,10 +235,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         irradiance += textureLoad(direct_lights, pixel, 0).rgb;
     }
     // Indirect light.
-    irradiance += gi_upsample(pixel, rel_m, normal, depth_m);
+    irradiance += half_res_upsample(gi, pixel, rel_m, normal, depth_m);
     let surface = mat.emission + diffuse * irradiance;
     textureStore(out_surface, pixel, vec4<f32>(surface, 1.0));
-    let light = surface + specular;
+    var light = surface + specular;
+    if mat.roughness <= REFLECT_MAX_ROUGHNESS {
+        light += half_res_upsample(reflections, pixel, rel_m, normal, depth_m);
+    }
 
     // Aerial perspective.
     let uv = (vec2<f32>(pixel) + 0.5) / frame.render_size;
@@ -223,7 +251,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if moon_sky() {
         in_scatter += textureSampleLevel(aerial_moon, lut_sampler, vec3<f32>(uv, slice), 0.0).rgb * frame.moon_illuminance;
     }
-    let color = light * ap.a + in_scatter;
+    let color = apply_fog(light * ap.a + in_scatter, uv, depth_m);
     textureStore(out_hdr, pixel, vec4<f32>(color, 1.0));
 }
 
