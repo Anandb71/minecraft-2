@@ -21,6 +21,8 @@ pub struct SkyTargets {
     /// Moon-lit counterparts, rendered only while moonlight matters.
     pub sky_view_moon: TexHandle,
     pub aerial_moon: TexHandle,
+    /// Sky irradiance for the six axis normals (+X -X +Y -Y +Z -Z).
+    pub ambient: TexHandle,
 }
 
 fn fixed(label: &'static str, w: u32, h: u32, d: u32) -> TextureDesc {
@@ -51,6 +53,7 @@ impl SkyTargets {
             // (if stale) contents rather than whatever the graph reallocated.
             sky_view_moon: graph.create_history(fixed("sky view moon", sw, sh, 1)),
             aerial_moon: graph.create_history(fixed("sky aerial moon", aw, ah, ad)),
+            ambient: graph.create_texture(fixed("sky ambient", 6, 1, 1)),
         }
     }
 }
@@ -205,6 +208,9 @@ pub struct SkyFramePass {
     aerial: HotCompute,
     view_layout: wgpu::BindGroupLayout,
     aerial_layout: wgpu::BindGroupLayout,
+    ambient: HotCompute,
+    ambient_layout: wgpu::BindGroupLayout,
+    ambient_group: Option<(u64, wgpu::BindGroup)>,
     sampler: wgpu::Sampler,
     /// Light index uniforms: sun, moon.
     params: [wgpu::Buffer; 2],
@@ -243,6 +249,18 @@ impl SkyFramePass {
                 bind::uniform(),
             ],
         );
+        let ambient_layout = layout(
+            device,
+            "sky ambient",
+            wgpu::ShaderStages::COMPUTE,
+            &[
+                bind::texture_2d(),
+                bind::texture_2d(),
+                bind::texture_2d(),
+                bind::sampler(true),
+                bind::write_2d(FORMAT),
+            ],
+        );
         let params = [0u32, 1].map(|light| {
             let buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("sky light params"),
@@ -274,6 +292,15 @@ impl SkyFramePass {
             ),
             view_layout,
             aerial_layout,
+            ambient: HotCompute::new(
+                device,
+                &ctx.shaders,
+                "sky_ambient.wgsl",
+                "main",
+                &[&ctx.frame_layout, &ambient_layout],
+            ),
+            ambient_layout,
+            ambient_group: None,
             sampler: linear_clamp(device),
             params,
             groups: None,
@@ -293,6 +320,7 @@ impl Pass<FrameCtx> for SkyFramePass {
         b.write(self.t.aerial);
         b.write(self.t.sky_view_moon);
         b.write(self.t.aerial_moon);
+        b.write(self.t.ambient);
     }
 
     fn execute(&mut self, ctx: &mut PassContext<'_, FrameCtx>) {
@@ -322,6 +350,28 @@ impl Pass<FrameCtx> for SkyFramePass {
             self.groups = Some((generation, groups));
         }
         let groups = self.groups.as_ref().expect("groups").1.clone();
+        if self
+            .ambient_group
+            .as_ref()
+            .is_none_or(|(g, _)| *g != generation)
+        {
+            let g = ctx.graph;
+            let view = |h| wgpu::BindingResource::TextureView(g.view(h));
+            let group = bind_group(
+                ctx.device,
+                "sky ambient",
+                &self.ambient_layout,
+                &[
+                    view(self.t.transmittance),
+                    view(self.t.sky_view),
+                    view(self.t.sky_view_moon),
+                    wgpu::BindingResource::Sampler(&self.sampler),
+                    view(self.t.ambient),
+                ],
+            );
+            self.ambient_group = Some((generation, group));
+        }
+        let ambient_group = self.ambient_group.as_ref().expect("group").1.clone();
         let frame_group = ctx.frame.frame_bind_group.clone();
         let (sw, sh) = SKY_VIEW_SIZE;
         let (aw, ah, ad) = AERIAL_SIZE;
@@ -329,19 +379,22 @@ impl Pass<FrameCtx> for SkyFramePass {
         let aerial_work = (aw.div_ceil(4), ah.div_ceil(4), ad.div_ceil(4));
         let pv = self.view.get(ctx.device, &ctx.frame.shaders).clone();
         let pa = self.aerial.get(ctx.device, &ctx.frame.shaders).clone();
+        let pamb = self.ambient.get(ctx.device, &ctx.frame.shaders).clone();
         let moon = ctx.frame.uniforms.sky_flags & crate::camera::SKY_MOON != 0;
         let sets = [
             [&frame_group, &groups[0]],
             [&frame_group, &groups[1]],
             [&frame_group, &groups[2]],
             [&frame_group, &groups[3]],
+            [&frame_group, &ambient_group],
         ];
-        let jobs: [Job<'_>; 4] = [
-            (&pv, &sets[0], view_work),
-            (&pa, &sets[1], aerial_work),
-            (&pv, &sets[2], view_work),
-            (&pa, &sets[3], aerial_work),
-        ];
-        dispatch_all(ctx, "sky.frame", &jobs[..if moon { 4 } else { 2 }]);
+        let mut jobs: Vec<Job<'_>> = vec![(&pv, &sets[0], view_work), (&pa, &sets[1], aerial_work)];
+        if moon {
+            jobs.push((&pv, &sets[2], view_work));
+            jobs.push((&pa, &sets[3], aerial_work));
+        }
+        // The ambient cube reads the sky-view LUTs written above.
+        jobs.push((&pamb, &sets[4], (1, 1, 1)));
+        dispatch_all(ctx, "sky.frame", &jobs);
     }
 }
