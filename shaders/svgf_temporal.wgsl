@@ -57,7 +57,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             continue;
         }
         let pid = textureLoad(prev_id, q << vec2<u32>(params.shift), 0);
-        if !same_surface(c.id, pid, c.depth) {
+        if !same_surface(c.id, pid, c.depth, f32(1u << params.shift)) {
             continue;
         }
         let bw = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);

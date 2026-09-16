@@ -30,7 +30,7 @@ fn reproject_history(pixel: vec2<i32>, id: vec4<u32>) -> vec4<f32> {
         return vec4<f32>(0.0);
     }
     let pid = textureLoad(prev_id, prev_pixel, 0);
-    if !same_surface(id, pid, textureLoad(vis_depth, pixel, 0).r) {
+    if !same_surface(id, pid, textureLoad(vis_depth, pixel, 0).r, 1.0) {
         return vec4<f32>(0.0);
     }
     return textureLoad(history, prev_pixel, 0);

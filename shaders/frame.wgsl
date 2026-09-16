@@ -52,17 +52,18 @@ const SKY_MOON: u32 = 1u;
 const VOXELS_PER_METRE: f32 = 16.0;
 
 // Whether a previous frame's visibility id saw the same surface as `id`,
-// seen at `depth_m`. Exact voxel equality until jittered samples land on
-// neighbouring voxels: then ids may differ by the pixel footprint (plus one
-// voxel), on the same face, and must both be geometry.
-fn same_surface(id: vec4<u32>, prev: vec4<u32>, depth_m: f32) -> bool {
+// seen at `depth_m`, when the two samples may be up to `pixels` render
+// pixels apart (jitter alone moves them one; half-resolution signals two).
+// Ids may differ by that footprint plus one voxel, on the same face, and
+// must both be geometry.
+fn same_surface(id: vec4<u32>, prev: vec4<u32>, depth_m: f32, pixels: f32) -> bool {
     if (prev.w >> 30u) == 0u || (id.w >> 30u) == 0u {
         return false;
     }
     if ((prev.w >> 16u) & 7u) != ((id.w >> 16u) & 7u) {
         return false;
     }
-    let footprint = depth_m * VOXELS_PER_METRE * frame.pixel_angle;
+    let footprint = depth_m * VOXELS_PER_METRE * frame.pixel_angle * pixels;
     let tolerance = vec3<i32>(i32(1.0 + ceil(footprint)));
     let d = abs(vec3<i32>(prev.xyz) - vec3<i32>(id.xyz));
     return all(d <= tolerance);
