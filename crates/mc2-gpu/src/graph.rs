@@ -22,6 +22,12 @@ pub enum SizePolicy {
         block: u32,
         extra: u32,
     },
+    /// A volume with one texel column per `block` render pixels and a fixed
+    /// depth, e.g. froxels.
+    RenderVolume {
+        block: u32,
+        depth: u32,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -193,6 +199,11 @@ impl GraphResources {
                 width: self.render_size.0.div_ceil(block) + extra,
                 height: self.render_size.1.div_ceil(block) + extra,
                 depth_or_array_layers: 1,
+            },
+            SizePolicy::RenderVolume { block, depth } => wgpu::Extent3d {
+                width: self.render_size.0.div_ceil(block),
+                height: self.render_size.1.div_ceil(block),
+                depth_or_array_layers: depth,
             },
         }
     }
