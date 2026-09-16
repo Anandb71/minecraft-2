@@ -6,6 +6,7 @@ mod demo;
 mod game_hud;
 mod headless;
 mod logger;
+mod measure;
 mod world;
 
 fn main() {

@@ -40,7 +40,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         FORMAT,
         args.size,
         RendererOptions {
-            quality: args.quality.settings(),
+            quality: crate::cli::quality(args),
             ..Default::default()
         },
     );
@@ -173,6 +173,15 @@ pub fn run(args: &Args) -> Result<(), String> {
     }
     let elapsed = start.elapsed().as_secs_f32();
 
+    // MC2_GI_COMPARE=<frames> measures the indirect method against an
+    // unbiased reference accumulated over that many frames.
+    if let Some(frames) = std::env::var("MC2_GI_COMPARE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        crate::measure::gi_compare(&gpu, &mut renderer, &mut game, &camera, &tex, frames)?;
+    }
+
     // MC2_DUMP=1 also writes intermediate lighting targets next to a capture.
     if let Mode::Capture(path) = &args.mode
         && std::env::var("MC2_DUMP").is_ok()
@@ -182,7 +191,10 @@ pub fn run(args: &Args) -> Result<(), String> {
             ("sky transmittance", 1.0),
             ("sky multiscatter", 50.0),
             ("light visibility", 1.0),
-            ("direct lights", 1.0),
+            ("direct lights", 0.0),
+            ("gi noisy", 0.0),
+            ("gi pong", 0.0),
+            ("surface radiance", 0.0),
         ] {
             if let Some(tex) = renderer.graph_texture(label) {
                 let name = format!("dump_{}.png", label.replace(' ', "_"));
@@ -232,18 +244,27 @@ fn dump_rgba16f(
     scale: f32,
 ) -> Result<(), String> {
     let raw = mc2_gpu::capture::read_texture(&gpu.device, &gpu.queue, tex);
-    let half = |b: [u8; 2]| {
-        let h = u16::from_le_bytes(b);
-        let sign = if h >> 15 == 1 { -1.0 } else { 1.0 };
-        let e = i32::from((h >> 10) & 0x1f);
-        let m = f32::from(h & 0x3ff);
-        sign * match e {
-            0 => m / 1024.0 * 2f32.powi(-14),
-            31 => f32::INFINITY,
-            _ => (1.0 + m / 1024.0) * 2f32.powi(e - 15),
-        }
-    };
+    let half = |b: [u8; 2]| crate::measure::half(u16::from_le_bytes(b));
     let size = tex.size();
+    // Scale 0 exposes the 95th percentile brightest channel at white.
+    let scale = if scale > 0.0 {
+        scale
+    } else {
+        let mut peaks: Vec<f32> = raw
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|px| {
+                (0..3)
+                    .map(|c| half([px[c * 2], px[c * 2 + 1]]))
+                    .fold(0.0, f32::max)
+            })
+            .filter(|v| v.is_finite())
+            .collect();
+        peaks.sort_by(f32::total_cmp);
+        let p95 = peaks.get(peaks.len() * 95 / 100).copied().unwrap_or(1.0);
+        1.0 / p95.max(1e-6)
+    };
     let mut rgba = Vec::with_capacity(raw.len() / 2);
     for px in raw.as_chunks::<8>().0 {
         for c in 0..3 {
