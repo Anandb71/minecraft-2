@@ -449,6 +449,10 @@ pub struct ComposeInputs {
     pub clouds: TexHandle,
     pub cloud_shadow: TexHandle,
     pub cloud_uniforms: wgpu::Buffer,
+    /// Integrated froxel fog.
+    pub fog: TexHandle,
+    /// Denoised glossy reflections (GI resolution).
+    pub reflections: TexHandle,
 }
 
 pub struct ComposePass {
@@ -496,6 +500,8 @@ impl ComposePass {
                 bind::texture_2d(),
                 unfilterable(),
                 bind::uniform(),
+                bind::texture(wgpu::TextureViewDimension::D3, true),
+                unfilterable(),
             ],
         );
         let pipeline = HotCompute::new(
@@ -538,6 +544,8 @@ impl Pass<FrameCtx> for ComposePass {
         b.write(self.inputs.surface);
         b.read(self.inputs.clouds);
         b.read(self.inputs.cloud_shadow);
+        b.read(self.inputs.fog);
+        b.read(self.inputs.reflections);
         b.read(self.sky.transmittance);
         b.read(self.sky.sky_view);
         b.read(self.sky.aerial);
@@ -588,6 +596,12 @@ impl Pass<FrameCtx> for ComposePass {
                 ctx.graph.view(self.inputs.cloud_shadow),
             ));
             r.push(self.inputs.cloud_uniforms.as_entire_binding());
+            r.push(wgpu::BindingResource::TextureView(
+                ctx.graph.view(self.inputs.fog),
+            ));
+            r.push(wgpu::BindingResource::TextureView(
+                ctx.graph.view(self.inputs.reflections),
+            ));
             self.group = Some((
                 generation,
                 bind_group(ctx.device, "shade compose", &self.bgl, &r),

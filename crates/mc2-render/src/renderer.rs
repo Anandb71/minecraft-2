@@ -51,6 +51,7 @@ pub struct Renderer {
     pub celestial: Celestial,
     /// Cloud layer weather.
     pub clouds: crate::clouds::CloudSettings,
+    pub fog: crate::fog::FogSettings,
     pub debug_mode: u32,
     /// Start primary rays from the beam prepass distances.
     pub beam: bool,
@@ -163,6 +164,15 @@ impl Renderer {
                 let clouds_pass = crate::clouds::CloudsPass::new(dev, &frame, cloud_targets, sky);
                 let cloud_uniforms = clouds_pass.uniforms.clone();
                 graph.add_pass(Box::new(clouds_pass));
+                let fog_targets = crate::fog::FogTargets::create(&mut graph);
+                graph.add_pass(Box::new(crate::fog::FogPass::new(
+                    dev,
+                    &frame,
+                    fog_targets,
+                    sky,
+                    (cloud_targets.shadow, cloud_uniforms.clone()),
+                    skymap.view.clone(),
+                )));
                 let gi_inputs = GiInputs {
                     vis,
                     prev_id: direct.vis_id_prev,
@@ -212,6 +222,48 @@ impl Renderer {
                     gi,
                     GI_SHIFT,
                 )));
+                // Glossy reflections, denoised like indirect light.
+                let reflections_noisy = graph.create_texture(TextureDesc {
+                    size: mc2_gpu::SizePolicy::RenderBlocks {
+                        block: 1 << GI_SHIFT,
+                        extra: 0,
+                    },
+                    ..TextureDesc::render_target(
+                        "reflections noisy",
+                        wgpu::TextureFormat::Rgba16Float,
+                        1.0,
+                    )
+                });
+                graph.add_pass(Box::new(crate::indirect::ReflectionPass::new(
+                    dev,
+                    &frame,
+                    gi_inputs,
+                    reflections_noisy,
+                    skymap.view.clone(),
+                    GI_SHIFT,
+                )));
+                let reflections = crate::svgf::SvgfTargets::create(
+                    &mut graph,
+                    [
+                        "reflections integrated",
+                        "reflections moments",
+                        "reflections moments prev",
+                        "reflections color prev",
+                        "reflections ping",
+                        "reflections pong",
+                    ],
+                    GI_SHIFT,
+                );
+                graph.add_pass(Box::new(crate::svgf::SvgfPass::new(
+                    dev,
+                    &frame,
+                    "refl.denoise",
+                    reflections_noisy,
+                    vis,
+                    direct.vis_id_prev,
+                    reflections,
+                    GI_SHIFT,
+                )));
                 graph.add_pass(Box::new(ComposePass::new(
                     dev,
                     &frame,
@@ -225,13 +277,17 @@ impl Renderer {
                         clouds: cloud_targets.clouds,
                         cloud_shadow: cloud_targets.shadow,
                         cloud_uniforms,
+                        fog: fog_targets.integrated,
+                        reflections: reflections.output,
                     },
                     scene,
                 )));
                 history.extend(restir_gi.history_copies());
                 history.extend(cloud_targets.history_copies());
+                history.extend(fog_targets.history_copies());
                 history.extend(crate::svgf::SvgfPass::history_copies(&emitters));
                 history.extend(crate::svgf::SvgfPass::history_copies(&gi));
+                history.extend(crate::svgf::SvgfPass::history_copies(&reflections));
                 history.push((direct.surface, direct.surface_prev));
                 graph.add_pass(Box::new(DebugShadePass::new(dev, &frame, vis, scene)));
                 let exposure_targets = crate::direct::ExposurePass::targets(&mut graph);
@@ -302,6 +358,7 @@ impl Renderer {
             prev_camera: None,
             celestial: Celestial::default(),
             clouds: crate::clouds::CloudSettings::default(),
+            fog: crate::fog::FogSettings::default(),
             debug_mode: 0,
             beam: true,
             jitter: opts.mode == RenderMode::World,
@@ -364,6 +421,7 @@ impl Renderer {
         self.frame.cloud_quality = (self.quality.cloud_steps, self.quality.cloud_light_steps);
         self.frame.camera_world = camera.position.as_vec3().to_array();
         self.frame.clouds = self.clouds;
+        self.frame.fog = self.fog;
         let prev = self.prev_camera.unwrap_or(*camera);
         self.frame.uniforms = FrameUniforms::build(&FrameInputs {
             camera: *camera,
