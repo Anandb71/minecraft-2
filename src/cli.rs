@@ -33,6 +33,17 @@ pub struct Args {
     pub quality: mc2_render::quality::Preset,
     /// Time of day in hours; headless runs freeze the clock there.
     pub time: Option<f64>,
+    /// Overrides the preset's indirect light method.
+    pub gi: Option<mc2_render::indirect::GiMethod>,
+}
+
+/// Quality settings from the preset plus command line overrides.
+pub fn quality(args: &Args) -> mc2_render::quality::Quality {
+    let mut q = args.quality.settings();
+    if let Some(gi) = args.gi {
+        q.gi = gi;
+    }
+    q
 }
 
 impl Default for Args {
@@ -52,6 +63,7 @@ impl Default for Args {
             demo: None,
             quality: mc2_render::quality::Preset::UltraRealistic,
             time: None,
+            gi: None,
         }
     }
 }
@@ -70,6 +82,7 @@ usage: minecraft-2 [options]
   --camera x,y,z,lx,ly,lz  headless camera position and look-at target (m)
   --demo build|lights    scripted play before a headless capture
   --time <hours>         time of day, e.g. 6.5 or 22 (headless: frozen)
+  --gi restir|cascades   indirect light method (default: preset)
   --quality <tier>       0 Realistic, 1 Hyper Realistic, 2 Ultra Realistic
                          (default), 3 Super Ultra Crazy Duper Realistic
   --view <n>             debug view: 0 shaded, 1 LOD hits, 2 march iterations";
@@ -129,6 +142,13 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                     return Err("--time expects hours in 0..=24".into());
                 }
                 out.time = Some(v);
+            }
+            "--gi" => {
+                let v = value("--gi")?;
+                out.gi = Some(
+                    mc2_render::indirect::GiMethod::parse(&v)
+                        .ok_or(format!("unknown indirect method `{v}`"))?,
+                );
             }
             "--quality" => {
                 let v = value("--quality")?;

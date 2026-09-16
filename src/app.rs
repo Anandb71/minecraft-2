@@ -42,6 +42,7 @@ pub struct App {
     vsync: bool,
     debug_mode: u32,
     quality: mc2_render::quality::Preset,
+    gi: Option<mc2_render::indirect::GiMethod>,
     error: Option<String>,
     exit_after: Option<u32>,
     frames: u32,
@@ -90,10 +91,19 @@ impl App {
             vsync: true,
             debug_mode: 0,
             quality: args.quality,
+            gi: args.gi,
             error: None,
             exit_after: args.exit_after,
             frames: 0,
         }
+    }
+
+    fn quality_settings(&self) -> mc2_render::quality::Quality {
+        let mut q = self.quality.settings();
+        if let Some(gi) = self.gi {
+            q.gi = gi;
+        }
+        q
     }
 
     fn init(&mut self, event_loop: &ActiveEventLoop) -> Result<(), String> {
@@ -133,7 +143,7 @@ impl App {
             format,
             (config.width, config.height),
             RendererOptions {
-                quality: self.quality.settings(),
+                quality: self.quality_settings(),
                 ..Default::default()
             },
         );
@@ -336,8 +346,9 @@ impl App {
             KeyCode::F4 => self.debug_mode = (self.debug_mode + 1) % 4,
             KeyCode::F6 => {
                 self.quality = self.quality.next();
+                let settings = self.quality_settings();
                 if let Some(r) = &mut self.running {
-                    r.renderer.set_quality(self.quality.settings());
+                    r.renderer.set_quality(settings);
                 }
             }
             KeyCode::KeyV => {
