@@ -80,7 +80,7 @@ usage: minecraft-2 [options]
   --seed <n>             world seed (default 42)
   --world <dir>          world directory (default worlds/default)
   --camera x,y,z,lx,ly,lz  headless camera position and look-at target (m)
-  --demo build|lights    scripted play before a headless capture
+  --demo build|lights|mirror  scripted play before a headless capture
   --time <hours>         time of day, e.g. 6.5 or 22 (headless: frozen)
   --gi restir|cascades   indirect light method (default: preset)
   --quality <tier>       0 Realistic, 1 Hyper Realistic, 2 Ultra Realistic

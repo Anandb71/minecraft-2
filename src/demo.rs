@@ -13,6 +13,9 @@ pub enum Demo {
     /// Ring the player with lanterns and torches on the ground: emitters
     /// for ReSTIR, meant to be captured at night.
     Lights,
+    /// Lay polished slabs (steel, obsidian, ice) and a wall in front of the
+    /// player: glossy reflections to look at.
+    Mirror,
 }
 
 impl Demo {
@@ -20,6 +23,7 @@ impl Demo {
         match s {
             "build" => Some(Self::Build),
             "lights" => Some(Self::Lights),
+            "mirror" => Some(Self::Mirror),
             _ => None,
         }
     }
@@ -93,6 +97,50 @@ pub fn run(game: &mut Game, demo: Demo) {
             }
             // Face the first lantern again, looking down the row.
             look(game, 120.0, -110.0);
+        }
+        Demo::Mirror => {
+            use mc2_voxel::material::ids;
+            let feet = {
+                let mut q = game.world.query::<&mc2_game::player::Body>();
+                q.iter(&game.world).next().map(|b| b.feet)
+            };
+            if let Some(feet) = feet {
+                let (yaw, _) = {
+                    let view = game.view();
+                    (view.yaw, view.pitch)
+                };
+                // Ahead of the player along the view's horizontal direction.
+                let ahead = glam::DVec3::new(f64::from(yaw).sin(), 0.0, f64::from(yaw).cos());
+                let centre = feet + ahead * 5.0;
+                let v = |p: glam::DVec3| (p * 16.0).floor().as_ivec3();
+                let floor = v(centre) - glam::IVec3::new(0, 1, 0);
+                let mut voxels = game.world.resource_mut::<mc2_game::Voxels>();
+                let w = &mut voxels.0;
+                // Clear air above, then three 2 m slabs side by side.
+                w.fill_box(
+                    floor + glam::IVec3::new(-48, 1, -16),
+                    floor + glam::IVec3::new(47, 64, 31),
+                    ids::AIR,
+                );
+                for (i, m) in [ids::STEEL, ids::OBSIDIAN, ids::ICE]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let x = -48 + i as i32 * 32;
+                    w.fill_box(
+                        floor + glam::IVec3::new(x, -3, -16),
+                        floor + glam::IVec3::new(x + 31, 0, 15),
+                        m,
+                    );
+                }
+                // A marble wall behind them to reflect.
+                w.fill_box(
+                    floor + glam::IVec3::new(-48, 1, 16),
+                    floor + glam::IVec3::new(47, 48, 31),
+                    ids::MARBLE,
+                );
+            }
+            look(game, 0.0, 60.0);
         }
     }
     mc2_core::profiler::end_frame();
