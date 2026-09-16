@@ -622,3 +622,82 @@ impl Pass<FrameCtx> for CascadesPass {
         dispatch_all(ctx, "indirect.cascades", &jobs);
     }
 }
+
+/// Traced glossy reflections at GI resolution, shaded like indirect hits.
+pub struct ReflectionPass {
+    inputs: GiInputs,
+    out: TexHandle,
+    sky_map: wgpu::TextureView,
+    sampler: wgpu::Sampler,
+    pipeline: HotCompute,
+    layout: wgpu::BindGroupLayout,
+    params: wgpu::Buffer,
+    group: Option<(u64, wgpu::BindGroup)>,
+}
+
+impl ReflectionPass {
+    pub fn new(
+        device: &wgpu::Device,
+        ctx: &FrameCtx,
+        inputs: GiInputs,
+        out: TexHandle,
+        sky_map: wgpu::TextureView,
+        shift: u32,
+    ) -> Self {
+        let mut entries = GiInputs::layout_entries();
+        entries.extend([bind::write_2d(RGBA16F), bind::uniform()]);
+        let layout = layout(device, "reflections", wgpu::ShaderStages::COMPUTE, &entries);
+        let pipeline = HotCompute::new(
+            device,
+            &ctx.shaders,
+            "reflect_trace.wgsl",
+            "main",
+            &[&ctx.frame_layout, &ctx.world_layout, &layout],
+        );
+        Self {
+            inputs,
+            out,
+            sky_map,
+            sampler: linear_clamp(device),
+            pipeline,
+            layout,
+            params: uniform_buffer(device, "reflection params", &[shift, 0, 0, 0]),
+            group: None,
+        }
+    }
+}
+
+impl Pass<FrameCtx> for ReflectionPass {
+    fn name(&self) -> &'static str {
+        "refl.trace"
+    }
+
+    fn setup(&mut self, b: &mut PassBuilder<'_>) {
+        self.inputs.read(b);
+        b.write(self.out);
+    }
+
+    fn execute(&mut self, ctx: &mut PassContext<'_, FrameCtx>) {
+        let generation = ctx.graph.generation();
+        if self.group.as_ref().is_none_or(|(g, _)| *g != generation) {
+            let mut r = self.inputs.resources(ctx, &self.sky_map, &self.sampler);
+            r.push(wgpu::BindingResource::TextureView(ctx.graph.view(self.out)));
+            r.push(self.params.as_entire_binding());
+            self.group = Some((
+                generation,
+                bind_group(ctx.device, "reflections", &self.layout, &r),
+            ));
+        }
+        let group = self.group.as_ref().expect("group").1.clone();
+        let fg = ctx.frame.frame_bind_group.clone();
+        let wg = ctx.frame.world_bind_group.clone();
+        let p = self.pipeline.get(ctx.device, &ctx.frame.shaders).clone();
+        let e = ctx.graph.extent(self.out);
+        let set = [&fg, &wg, &group];
+        dispatch_all(
+            ctx,
+            "refl.trace",
+            &[(&p, &set, (e.width.div_ceil(8), e.height.div_ceil(8), 1))],
+        );
+    }
+}
