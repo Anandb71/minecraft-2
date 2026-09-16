@@ -439,13 +439,16 @@ impl Pass<FrameCtx> for RestirPass {
 
 /// Denoised lighting signals composition reads, and where it writes
 /// surface radiance for next frame's indirect rays.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct ComposeInputs {
     /// Emitter irradiance (denoised).
     pub emitters: TexHandle,
     /// Indirect irradiance (denoised, GI resolution).
     pub gi: TexHandle,
     pub surface: TexHandle,
+    pub clouds: TexHandle,
+    pub cloud_shadow: TexHandle,
+    pub cloud_uniforms: wgpu::Buffer,
 }
 
 pub struct ComposePass {
@@ -490,6 +493,9 @@ impl ComposePass {
                 unfilterable(),
                 unfilterable(),
                 bind::write_2d(RGBA16F),
+                bind::texture_2d(),
+                unfilterable(),
+                bind::uniform(),
             ],
         );
         let pipeline = HotCompute::new(
@@ -530,6 +536,8 @@ impl Pass<FrameCtx> for ComposePass {
             b.read(h);
         }
         b.write(self.inputs.surface);
+        b.read(self.inputs.clouds);
+        b.read(self.inputs.cloud_shadow);
         b.read(self.sky.transmittance);
         b.read(self.sky.sky_view);
         b.read(self.sky.aerial);
@@ -573,6 +581,13 @@ impl Pass<FrameCtx> for ComposePass {
             r.push(wgpu::BindingResource::TextureView(
                 ctx.graph.view(self.inputs.surface),
             ));
+            r.push(wgpu::BindingResource::TextureView(
+                ctx.graph.view(self.inputs.clouds),
+            ));
+            r.push(wgpu::BindingResource::TextureView(
+                ctx.graph.view(self.inputs.cloud_shadow),
+            ));
+            r.push(self.inputs.cloud_uniforms.as_entire_binding());
             self.group = Some((
                 generation,
                 bind_group(ctx.device, "shade compose", &self.bgl, &r),

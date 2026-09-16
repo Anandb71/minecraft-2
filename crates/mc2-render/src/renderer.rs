@@ -49,6 +49,8 @@ pub struct Renderer {
     quality: Quality,
     prev_camera: Option<Camera>,
     pub celestial: Celestial,
+    /// Cloud layer weather.
+    pub clouds: crate::clouds::CloudSettings,
     pub debug_mode: u32,
     /// Start primary rays from the beam prepass distances.
     pub beam: bool,
@@ -157,6 +159,10 @@ impl Renderer {
                 use crate::indirect::{
                     CascadeTargets, CascadesPass, GiInputs, RestirGiPass, RestirGiTargets,
                 };
+                let cloud_targets = crate::clouds::CloudTargets::create(&mut graph);
+                let clouds_pass = crate::clouds::CloudsPass::new(dev, &frame, cloud_targets, sky);
+                let cloud_uniforms = clouds_pass.uniforms.clone();
+                graph.add_pass(Box::new(clouds_pass));
                 let gi_inputs = GiInputs {
                     vis,
                     prev_id: direct.vis_id_prev,
@@ -216,10 +222,14 @@ impl Renderer {
                         emitters: emitters.output,
                         gi: gi.output,
                         surface: direct.surface,
+                        clouds: cloud_targets.clouds,
+                        cloud_shadow: cloud_targets.shadow,
+                        cloud_uniforms,
                     },
                     scene,
                 )));
                 history.extend(restir_gi.history_copies());
+                history.extend(cloud_targets.history_copies());
                 history.extend(crate::svgf::SvgfPass::history_copies(&emitters));
                 history.extend(crate::svgf::SvgfPass::history_copies(&gi));
                 history.push((direct.surface, direct.surface_prev));
@@ -291,6 +301,7 @@ impl Renderer {
             quality: opts.quality,
             prev_camera: None,
             celestial: Celestial::default(),
+            clouds: crate::clouds::CloudSettings::default(),
             debug_mode: 0,
             beam: true,
             jitter: opts.mode == RenderMode::World,
@@ -350,6 +361,9 @@ impl Renderer {
             self.skymap.upload(&gpu.queue, camera.position);
         }
         self.frame.gi = self.quality.gi;
+        self.frame.cloud_quality = (self.quality.cloud_steps, self.quality.cloud_light_steps);
+        self.frame.camera_world = camera.position.as_vec3().to_array();
+        self.frame.clouds = self.clouds;
         let prev = self.prev_camera.unwrap_or(*camera);
         self.frame.uniforms = FrameUniforms::build(&FrameInputs {
             camera: *camera,
