@@ -52,6 +52,8 @@ pub struct Renderer {
     /// Cloud layer weather.
     pub clouds: crate::clouds::CloudSettings,
     pub fog: crate::fog::FogSettings,
+    /// Rigid bodies to draw next frame, posed for this frame.
+    pub bodies: Vec<crate::bodies::BodyInstance>,
     pub debug_mode: u32,
     /// Start primary rays from the beam prepass distances.
     pub beam: bool,
@@ -368,6 +370,7 @@ impl Renderer {
             celestial: Celestial::default(),
             clouds: crate::clouds::CloudSettings::default(),
             fog: crate::fog::FogSettings::default(),
+            bodies: Vec::new(),
             debug_mode: 0,
             beam: true,
             jitter: opts.mode == RenderMode::World,
@@ -416,6 +419,9 @@ impl Renderer {
     /// Streams world changes and sets the camera for the next frame.
     pub fn prepare(&mut self, gpu: &Gpu, world: &mut VoxelWorld, camera: &Camera, dt: f32) {
         self.world.update(&gpu.queue, world, camera.position);
+        self.world
+            .bodies
+            .update(&gpu.queue, &self.bodies, camera.position);
         {
             mc2_core::scope!("lights.update");
             for pos in self.world.take_changed() {
