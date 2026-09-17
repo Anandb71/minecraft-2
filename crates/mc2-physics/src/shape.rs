@@ -45,81 +45,96 @@ impl BodyShape {
         }
         let idx = |p: IVec3| (p.x + size.x * (p.y + size.y * p.z)) as usize;
         let volume = VOXEL_M * VOXEL_M * VOXEL_M;
+        // One pass over the materials: what is solid, what each voxel
+        // weighs, and the mass moments the inertia tensor is built from.
+        // Later passes read these instead of the material table.
+        let mut solid = vec![false; voxels.len()];
         let mut mass = 0.0f64;
         let mut first = glam::DVec3::ZERO;
+        // Second moments about the grid origin, kg m^2.
+        let (mut sxx, mut syy, mut szz) = (0.0f64, 0.0f64, 0.0f64);
+        let (mut sxy, mut sxz, mut syz) = (0.0f64, 0.0f64, 0.0f64);
         let mut count = 0u32;
-        for z in 0..size.z {
-            for y in 0..size.y {
-                for x in 0..size.x {
-                    let m = voxels[idx(IVec3::new(x, y, z))];
-                    if !m.is_solid() {
-                        continue;
-                    }
-                    let dm = f64::from(m.get().density * volume);
-                    mass += dm;
-                    first += (IVec3::new(x, y, z).as_dvec3() + 0.5) * dm;
-                    count += 1;
-                }
+        for (i, &m) in voxels.iter().enumerate() {
+            if !m.is_solid() {
+                continue;
             }
+            let dm = f64::from(m.get().density * volume);
+            solid[i] = true;
+            mass += dm;
+            count += 1;
+            let i = i as i32;
+            let p = IVec3::new(i % size.x, (i / size.x) % size.y, i / (size.x * size.y));
+            let c = (p.as_dvec3() + 0.5) * f64::from(VOXEL_M);
+            first += c * dm;
+            sxx += dm * c.x * c.x;
+            syy += dm * c.y * c.y;
+            szz += dm * c.z * c.z;
+            sxy += dm * c.x * c.y;
+            sxz += dm * c.x * c.z;
+            syz += dm * c.y * c.z;
         }
         if count == 0 || mass <= 0.0 {
             return None;
         }
-        let com = (first / mass).as_vec3();
+        let centre = first / mass;
+        let com = (centre / f64::from(VOXEL_M)).as_vec3();
 
-        // Inertia tensor about the centre of mass, each voxel a small cube.
-        let mut t = [[0.0f64; 3]; 3];
-        let cube = f64::from(VOXEL_M * VOXEL_M) / 6.0;
-        for z in 0..size.z {
-            for y in 0..size.y {
-                for x in 0..size.x {
-                    let m = voxels[idx(IVec3::new(x, y, z))];
-                    if !m.is_solid() {
-                        continue;
-                    }
-                    let dm = f64::from(m.get().density * volume);
-                    let r = ((IVec3::new(x, y, z).as_vec3() + 0.5 - com) * VOXEL_M).as_dvec3();
-                    let rr = r.dot(r);
-                    let ra = r.to_array();
-                    for (i, row) in t.iter_mut().enumerate() {
-                        for (j, cell) in row.iter_mut().enumerate() {
-                            let delta = if i == j { rr + cube } else { 0.0 };
-                            *cell += dm * (delta - ra[i] * ra[j]);
-                        }
-                    }
-                }
-            }
-        }
+        // Inertia about the centre of mass: the moments above, shifted by
+        // the parallel axis theorem, plus each voxel cube's own inertia.
+        let cube = f64::from(VOXEL_M * VOXEL_M) / 6.0 * mass;
+        let shift = |s: f64, a: f64, b: f64| s - mass * a * b;
+        let (mxx, myy, mzz) = (
+            shift(sxx, centre.x, centre.x),
+            shift(syy, centre.y, centre.y),
+            shift(szz, centre.z, centre.z),
+        );
+        let t = [
+            [
+                myy + mzz + cube,
+                -shift(sxy, centre.x, centre.y),
+                -shift(sxz, centre.x, centre.z),
+            ],
+            [
+                -shift(sxy, centre.x, centre.y),
+                mxx + mzz + cube,
+                -shift(syz, centre.y, centre.z),
+            ],
+            [
+                -shift(sxz, centre.x, centre.z),
+                -shift(syz, centre.y, centre.z),
+                mxx + myy + cube,
+            ],
+        ];
         let (inertia, principal) = eigen_symmetric(t);
 
         // Collision samples: per cell of a 4x4x4 partition of the grid, the
         // surface voxel farthest from the centre of mass, so extremities
         // always collide.
-        let solid = |p: IVec3| {
-            p.cmpge(IVec3::ZERO).all() && p.cmplt(size).all() && voxels[idx(p)].is_solid()
-        };
         let mut best: Vec<Option<(f32, Vec3)>> = vec![None; 64];
         let mut radius = 0.0f32;
         for z in 0..size.z {
             for y in 0..size.y {
                 for x in 0..size.x {
                     let p = IVec3::new(x, y, z);
-                    if !solid(p) {
+                    if !solid[idx(p)] {
                         continue;
                     }
                     let centre = (p.as_vec3() + 0.5 - com) * VOXEL_M;
                     let d = centre.length();
                     radius = radius.max(d + VOXEL_M * 0.87);
-                    let exposed = [
-                        IVec3::X,
-                        IVec3::NEG_X,
-                        IVec3::Y,
-                        IVec3::NEG_Y,
-                        IVec3::Z,
-                        IVec3::NEG_Z,
-                    ]
-                    .iter()
-                    .any(|&o| !solid(p + o));
+                    let exposed = x == 0
+                        || y == 0
+                        || z == 0
+                        || x + 1 == size.x
+                        || y + 1 == size.y
+                        || z + 1 == size.z
+                        || !solid[idx(p + IVec3::X)]
+                        || !solid[idx(p - IVec3::X)]
+                        || !solid[idx(p + IVec3::Y)]
+                        || !solid[idx(p - IVec3::Y)]
+                        || !solid[idx(p + IVec3::Z)]
+                        || !solid[idx(p - IVec3::Z)];
                     if !exposed {
                         continue;
                     }
