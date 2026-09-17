@@ -4,12 +4,13 @@
 use crate::body::{Body, BodyId};
 use crate::collision::{CollisionWindow, SolidCells};
 use crate::pair_contact::{
-    candidate_pairs, find_pair_contacts, solve_pair_positions, solve_pair_velocities,
+    candidate_pairs, find_pair_contacts, refresh_pair_contacts, solve_pair_positions,
+    solve_pair_velocities,
 };
 use crate::probe::SAMPLE_RADIUS;
-use crate::shape::BodyShape;
+use crate::shape::{BodyShape, VOXEL_M};
 use crate::world_contact::{
-    Contact, find_world_contacts, solve_world_positions, solve_world_velocities,
+    Contact, find_world_contacts, refresh_contacts, solve_world_positions, solve_world_velocities,
 };
 use glam::{DVec3, IVec3, Quat, Vec3};
 use rayon::prelude::*;
@@ -172,15 +173,15 @@ impl PhysicsWorld {
             .with_min_len(4)
             .filter(|((b, _), p)| !b.asleep && !**p)
             .map(|((b, window), _)| {
-                let mut found = 0;
+                let mut contacts = find_world(b, window.as_ref(), obstacles, dt);
                 for _ in 0..substeps {
                     integrate(b, h);
-                    let contacts = solve_world(b, window.as_ref(), obstacles, h);
+                    refresh_contacts(b, &mut contacts);
+                    solve_world_positions(b, &mut contacts, h);
                     derive_velocities(b, h);
                     solve_world_velocities(b, &contacts, h);
-                    found += contacts.len();
                 }
-                found
+                contacts.len()
             })
             .sum();
         // Bodies that may touch each other advance together, substep by
@@ -192,35 +193,61 @@ impl PhysicsWorld {
         // Small groups are cheaper serial than split across threads.
         let serial = group.len() < 24;
         if !pairs.is_empty() {
+            // Narrow phase once for the step, then every substep solves the
+            // same contacts against the poses it finds (Mueller et al. 2020,
+            // Section 3.5).
+            let find = |(b, window, contacts): (
+                &mut Body,
+                &Option<CollisionWindow<S>>,
+                &mut Vec<Contact>,
+            )| {
+                contacts.clear();
+                if !b.asleep {
+                    *contacts = find_world(b, window.as_ref(), obstacles, dt);
+                }
+            };
+            if serial {
+                for &i in &group {
+                    find((&mut self.bodies[i], &windows[i], &mut contacts[i]));
+                }
+            } else {
+                self.bodies
+                    .par_iter_mut()
+                    .zip(windows.par_iter())
+                    .zip(contacts.par_iter_mut())
+                    .zip(paired.par_iter())
+                    .with_min_len(8)
+                    .filter(|(_, p)| **p)
+                    .for_each(|(((b, w), c), _)| find((b, w, c)));
+            }
+            let pair_start = std::time::Instant::now();
+            let mut pc = find_pair_contacts(&mut self.bodies, &pairs, step_margin(dt));
+            pair_time += pair_start.elapsed();
+            pair_contacts = pc.len();
             for _ in 0..substeps {
-                let begin = |(b, window, contacts): (
-                    &mut Body,
-                    &Option<CollisionWindow<S>>,
-                    &mut Vec<Contact>,
-                )| {
-                    contacts.clear();
+                let begin = |(b, contacts): (&mut Body, &mut Vec<Contact>)| {
                     if !b.asleep {
                         integrate(b, h);
-                        *contacts = solve_world(b, window.as_ref(), obstacles, h);
+                        refresh_contacts(b, contacts);
+                        solve_world_positions(b, contacts, h);
                     }
                 };
                 if serial {
                     for &i in &group {
-                        begin((&mut self.bodies[i], &windows[i], &mut contacts[i]));
+                        begin((&mut self.bodies[i], &mut contacts[i]));
                     }
                 } else {
                     self.bodies
                         .par_iter_mut()
-                        .zip(windows.par_iter())
                         .zip(contacts.par_iter_mut())
                         .zip(paired.par_iter())
                         .with_min_len(8)
                         .filter(|(_, p)| **p)
-                        .for_each(|(((b, w), c), _)| begin((b, w, c)));
+                        .for_each(|((b, c), _)| begin((b, c)));
                 }
                 let pair_start = std::time::Instant::now();
-                let mut pc = find_pair_contacts(&mut self.bodies, &pairs);
-                solve_pair_positions(&mut self.bodies, &mut pc, h);
+                refresh_pair_contacts(&self.bodies, &mut pc);
+                solve_pair_positions(&mut self.bodies, &mut pc);
                 pair_time += pair_start.elapsed();
                 let finish = |b: &mut Body, contacts: &Vec<Contact>| {
                     if !b.asleep {
@@ -242,9 +269,8 @@ impl PhysicsWorld {
                         .for_each(|((b, c), _)| finish(b, c));
                 }
                 solve_pair_velocities(&mut self.bodies, &pc, h);
-                world_contacts += contacts.iter().map(Vec::len).sum::<usize>();
-                pair_contacts += pc.len();
             }
+            world_contacts += contacts.iter().map(Vec::len).sum::<usize>();
         }
         for (b, held) in self.bodies.iter_mut().zip(&held) {
             if *held {
@@ -278,8 +304,8 @@ impl PhysicsWorld {
         self.stats = PhysicsStats {
             bodies: self.bodies.len(),
             awake: self.bodies.iter().filter(|b| !b.asleep).count(),
-            world_contacts: world_contacts / substeps as usize,
-            pair_contacts: pair_contacts / substeps as usize,
+            world_contacts,
+            pair_contacts,
             pairs: pairs.len(),
             step_ms: start.elapsed().as_secs_f32() * 1000.0,
             pair_ms: pair_time.as_secs_f32() * 1000.0,
@@ -302,21 +328,26 @@ fn reach_window<'a, S: SolidCells>(b: &Body, dt: f32, world: &'a S) -> Collision
     )
 }
 
-/// World and obstacle contacts of a body this substep, already solved for
-/// position.
-fn solve_world<S: SolidCells>(
+/// How far a contact may be from touching and still be worth finding at
+/// the start of a step. Half a voxel: the sample spheres probe their
+/// neighbouring cell, so a wider reach would look past it. A contact that
+/// forms mid-step is found by the next one, an eighth of a second later.
+fn step_margin(_dt: f32) -> f32 {
+    VOXEL_M * 0.5
+}
+
+/// World and obstacle contacts of a body for the coming step.
+fn find_world<S: SolidCells>(
     b: &mut Body,
     window: Option<&CollisionWindow<S>>,
     obstacles: &[Obstacle],
-    h: f32,
+    dt: f32,
 ) -> Vec<Contact> {
     let window = window.filter(|w| w.any_solid());
     if window.is_none() && obstacles.is_empty() {
         return Vec::new();
     }
-    let mut contacts = find_world_contacts(b, window, obstacles);
-    solve_world_positions(b, &mut contacts, h);
-    contacts
+    find_world_contacts(b, window, obstacles, step_margin(dt))
 }
 
 fn integrate(b: &mut Body, h: f32) {

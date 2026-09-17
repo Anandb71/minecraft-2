@@ -73,17 +73,23 @@ fn axis_of(o: IVec3) -> usize {
 }
 
 /// World contacts of a sample sphere at `p` (world metres): normal, depth
-/// in metres, contact point.
+/// in metres, contact point. The sphere is grown by `margin` metres so a
+/// step finds the contacts its substeps will need; the depth reported is
+/// still the true overlap, and may be negative.
 pub fn sample_contacts<S: SolidCells>(
     world: &CollisionWindow<S>,
     p: DVec3,
+    margin: f32,
     out: &mut Vec<(Vec3, f32, DVec3)>,
 ) {
     let mut raw = Vec::new();
-    let r = f64::from(SAMPLE_RADIUS) * 16.0;
+    let r = f64::from(SAMPLE_RADIUS + margin) * 16.0;
     sphere_contacts(p * 16.0, r, |v| world.solid(v), &mut raw);
     for (o, d, q) in raw {
-        out.push((o.as_vec3(), (d / 16.0) as f32, q / 16.0));
+        let depth = (d / 16.0) as f32 - margin;
+        // The contact point sits on the sphere of the true radius.
+        let point = q / 16.0 + (o.as_dvec3() * f64::from(margin));
+        out.push((o.as_vec3(), depth, point));
     }
 }
 

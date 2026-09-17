@@ -11,10 +11,6 @@ use glam::{DVec3, Vec3};
 
 /// Hard cap on contacts a body keeps per substep.
 const MAX_CONTACTS: usize = 48;
-/// Overlap a body did not move into this substep (spawned inside
-/// something, or pushed there by a neighbour) is resolved no faster than
-/// this, m/s, so crowded debris separates instead of exploding apart.
-pub const MAX_DEPENETRATION_SPEED: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Contact {
@@ -40,8 +36,13 @@ pub struct Contact {
 /// Contacts of a sample sphere at `p` against boxes that push bodies but
 /// are not pushed back: the face of least penetration of each box it
 /// overlaps.
-fn obstacle_contacts(obstacles: &[Obstacle], p: DVec3, out: &mut Vec<(Vec3, f32, DVec3, Vec3)>) {
-    let r = f64::from(SAMPLE_RADIUS);
+fn obstacle_contacts(
+    obstacles: &[Obstacle],
+    p: DVec3,
+    margin: f32,
+    out: &mut Vec<(Vec3, f32, DVec3, Vec3)>,
+) {
+    let r = f64::from(SAMPLE_RADIUS + margin);
     for o in obstacles {
         let lo = o.min - r;
         let hi = o.max + r;
@@ -64,16 +65,20 @@ fn obstacle_contacts(obstacles: &[Obstacle], p: DVec3, out: &mut Vec<(Vec3, f32,
                 n[axis] = 1.0;
             }
         }
-        out.push((n.as_vec3(), best as f32, p - n * r, o.vel));
+        let r_true = f64::from(SAMPLE_RADIUS);
+        out.push((n.as_vec3(), best as f32 - margin, p - n * r_true, o.vel));
     }
 }
 
 /// Contacts of a body with the world (when the window holds any matter)
 /// and with obstacles.
+/// Contacts of a body found once for a whole step: `margin` metres of
+/// slack covers the motion its substeps will make.
 pub fn find_world_contacts<S: SolidCells>(
     b: &Body,
     world: Option<&CollisionWindow<S>>,
     obstacles: &[Obstacle],
+    margin: f32,
 ) -> Vec<Contact> {
     let mut raw = Vec::new();
     let mut moving = Vec::new();
@@ -82,7 +87,7 @@ pub fn find_world_contacts<S: SolidCells>(
         .iter()
         .filter(|o| {
             let closest = b.pos.clamp(o.min, o.max);
-            closest.distance(b.pos) <= f64::from(b.shape.radius + SAMPLE_RADIUS)
+            closest.distance(b.pos) <= f64::from(b.shape.radius + SAMPLE_RADIUS + margin)
         })
         .copied()
         .collect();
@@ -91,10 +96,10 @@ pub fn find_world_contacts<S: SolidCells>(
         moving.clear();
         let p = b.world_point(s);
         if let Some(world) = world {
-            sample_contacts(world, p, &mut raw);
+            sample_contacts(world, p, margin, &mut raw);
         }
         moving.extend(raw.iter().map(|&(n, d, q)| (n, d, q, Vec3::ZERO)));
-        obstacle_contacts(&near_obstacle, p, &mut moving);
+        obstacle_contacts(&near_obstacle, p, margin, &mut moving);
         let prev = b.prev_pos + (b.prev_rot * s).as_dvec3();
         for &(n, depth, point, surface_vel) in &moving {
             let r = (point - b.pos).as_vec3();
@@ -118,6 +123,18 @@ pub fn find_world_contacts<S: SolidCells>(
     out
 }
 
+/// Prepares contacts found earlier in the step for one substep: the
+/// multiplier starts again, the approach speed and friction anchor are
+/// taken from the pose this substep starts in.
+pub fn refresh_contacts(b: &Body, contacts: &mut [Contact]) {
+    for c in contacts.iter_mut() {
+        c.r = b.rot * c.local;
+        c.lambda_n = 0.0;
+        c.vn_before = c.n.dot(b.point_velocity(c.r) - c.surface_vel);
+        c.point_prev = b.prev_pos + (b.prev_rot * c.local).as_dvec3();
+    }
+}
+
 pub fn solve_world_positions(b: &mut Body, contacts: &mut [Contact], h: f32) {
     for c in contacts.iter_mut() {
         // Re-evaluate against the pose updated by earlier contacts: the
@@ -125,11 +142,6 @@ pub fn solve_world_positions(b: &mut Body, contacts: &mut [Contact], h: f32) {
         let r_now = b.rot * c.local;
         let point_now = b.pos + r_now.as_dvec3();
         let depth = c.depth - c.n.dot((point_now - c.point).as_vec3());
-        // How far this substep's motion carried the point into the surface
-        // (and the surface into the point).
-        let travel = (c.point - c.point_prev).as_vec3() - c.surface_vel * h;
-        let approach = -c.n.dot(travel);
-        let depth = depth.min(approach.max(0.0) + MAX_DEPENETRATION_SPEED * h);
         let w = b.generalized_inverse_mass(r_now, c.n);
         c.r = r_now;
         if w <= 0.0 || depth <= 0.0 {
