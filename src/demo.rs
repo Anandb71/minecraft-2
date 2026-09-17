@@ -16,6 +16,9 @@ pub enum Demo {
     /// Lay polished slabs (steel, obsidian, ice) and a wall in front of the
     /// player: glossy reflections to look at.
     Mirror,
+    /// Place two TNT blocks down the view, light one, and stop while the
+    /// debris of both blasts is in the air.
+    Blast,
 }
 
 impl Demo {
@@ -24,6 +27,7 @@ impl Demo {
             "build" => Some(Self::Build),
             "lights" => Some(Self::Lights),
             "mirror" => Some(Self::Mirror),
+            "blast" => Some(Self::Blast),
             _ => None,
         }
     }
@@ -141,6 +145,53 @@ pub fn run(game: &mut Game, demo: Demo) {
                 );
             }
             look(game, 0.0, 60.0);
+        }
+        Demo::Blast => {
+            // TNT sits in hotbar slot 9. Two blocks about two metres apart,
+            // five to seven metres out.
+            look(game, 0.0, 130.0);
+            select(game, 8);
+            click(game, Button::Secondary);
+            look(game, 120.0, 0.0);
+            click(game, Button::Secondary);
+            // Raise the crosshair onto the second charge and light it by
+            // hand; the first goes off when the blast reaches it.
+            let on_tnt = |g: &Game| {
+                g.world
+                    .resource::<Interaction>()
+                    .target
+                    .is_some_and(|t| t.hit.material == mc2_voxel::material::ids::TNT)
+            };
+            for _ in 0..80 {
+                if on_tnt(game) {
+                    break;
+                }
+                look(game, 0.0, -2.0);
+            }
+            game.input().key_down(Key::Interact);
+            tick(game, 1);
+            game.input().key_up(Key::Interact);
+            look(game, -60.0, -60.0);
+            let blasts = |g: &Game| {
+                g.world
+                    .resource::<mc2_game::physics::Physics>()
+                    .blasts_total
+            };
+            let mut waited = 0;
+            while blasts(game) < 2 && waited < 600 {
+                tick(game, 1);
+                waited += 1;
+            }
+            // Debris mid-flight.
+            tick(game, 9);
+            let p = game.world.resource::<mc2_game::physics::Physics>();
+            eprintln!(
+                "blast demo: {} blasts after {:.2} s, {} bodies, last {:?}",
+                p.blasts_total,
+                f64::from(waited) / 60.0,
+                p.world.bodies.len(),
+                p.last_blast
+            );
         }
     }
     mc2_core::profiler::end_frame();
