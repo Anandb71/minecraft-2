@@ -7,7 +7,9 @@ license.workspace = true
 [dependencies]
 mc2-core.workspace = true
 mc2-physics.workspace = true
+mc2-structure.workspace = true
 mc2-voxel.workspace = true
 mc2-worldgen.workspace = true
 bevy_ecs.workspace = true
 glam.workspace = true
+log.workspace = true

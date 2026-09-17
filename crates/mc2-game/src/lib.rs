@@ -8,6 +8,7 @@ pub mod interact;
 pub mod physics;
 pub mod physics_host;
 pub mod player;
+pub mod structure;
 pub mod view;
 
 use bevy_ecs::prelude::*;
@@ -49,13 +50,22 @@ impl Game {
         world.insert_resource(view::ViewCamera::default());
         world.insert_resource(clock::WorldClock::default());
         world.insert_resource(physics::Physics::default());
+        world.insert_resource(structure::Structure::default());
 
         let mut frame = Schedule::default();
         frame.add_systems((clock::advance_clock, player::look, player::toggles).chain());
         let mut fixed = Schedule::default();
         fixed.add_systems((player::movement, physics::step_physics).chain());
         let mut late = Schedule::default();
-        late.add_systems((view::update_view, interact::interact, physics::light_fuses).chain());
+        late.add_systems(
+            (
+                view::update_view,
+                interact::interact,
+                physics::light_fuses,
+                structure::update_structure,
+            )
+                .chain(),
+        );
         Self {
             world,
             frame,
