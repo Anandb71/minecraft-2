@@ -1,5 +1,7 @@
-//! Explosions that turn terrain into debris.
+//! Explosions that turn terrain into debris, and baking settled debris back
+//! into the voxel world.
 
+use crate::body::{Body, BodyId};
 use crate::shape::{BodyShape, VOXEL_M};
 use crate::world::PhysicsWorld;
 use glam::{DVec3, IVec3, Vec3};
@@ -153,9 +155,65 @@ pub fn explode(
     report
 }
 
+/// Writes a body into the world at its current pose: every empty world
+/// voxel whose centre lies inside a solid body voxel takes its material.
+/// Returns the number of voxels written.
+pub fn bake(world: &mut VoxelWorld, body: &Body) -> u64 {
+    let r = f64::from(body.shape.radius) * 16.0;
+    let c = body.pos * 16.0;
+    let lo = (c - r).floor().as_ivec3();
+    let hi = (c + r).ceil().as_ivec3();
+    let mut written = 0;
+    for z in lo.z..=hi.z {
+        for y in lo.y..=hi.y {
+            for x in lo.x..=hi.x {
+                let v = IVec3::new(x, y, z);
+                let centre = (v.as_dvec3() + 0.5) * f64::from(VOXEL_M);
+                let m = body.material_at(centre);
+                if !m.is_solid() || !world.voxel(v).is_air() {
+                    continue;
+                }
+                world.set_voxel(v, m);
+                written += 1;
+            }
+        }
+    }
+    written
+}
+
+/// Bakes bodies that have slept for `after_s` seconds (or the oldest
+/// sleepers while more than `max_bodies` exist) into the world.
+pub fn bake_settled(
+    world: &mut VoxelWorld,
+    physics: &mut PhysicsWorld,
+    after_s: f32,
+    max_bodies: usize,
+) -> Vec<BodyId> {
+    let mut sleepers: Vec<(f32, BodyId)> = physics
+        .bodies
+        .iter()
+        .filter(|b| b.asleep)
+        .map(|b| (b.still_time, b.id))
+        .collect();
+    sleepers.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let excess = physics.bodies.len().saturating_sub(max_bodies);
+    let mut baked = Vec::new();
+    for (i, (still, id)) in sleepers.into_iter().enumerate() {
+        if still < after_s && i >= excess {
+            continue;
+        }
+        if let Some(b) = physics.remove(id) {
+            bake(world, &b);
+            baked.push(id);
+        }
+    }
+    baked
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::Quat;
 
     #[test]
     fn explosion_carves_a_crater_and_throws_debris() {
@@ -184,5 +242,19 @@ mod tests {
             1,
         );
         assert_eq!(r2.removed_voxels, 0);
+    }
+
+    #[test]
+    fn baking_writes_a_body_back_into_the_world() {
+        let mut w = VoxelWorld::new();
+        let mut p = PhysicsWorld::new();
+        let shape = Arc::new(
+            BodyShape::from_voxels(IVec3::splat(4), vec![ids::GRANITE; 64]).expect("shape"),
+        );
+        let id = p.spawn(shape, DVec3::new(4.0, 4.0, 4.0), Quat::IDENTITY);
+        let body = p.remove(id).unwrap();
+        let written = bake(&mut w, &body);
+        assert_eq!(written, 64);
+        assert_eq!(w.voxel(IVec3::splat(64)), ids::GRANITE);
     }
 }
