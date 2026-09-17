@@ -173,3 +173,27 @@ Both were built behind one output with the same hit shading and denoiser, and me
 - **No post beyond tonemapping.** Honest, but images read as renders: no glare around the sun, no film response, no night vision.
 - **Screen-space effects stacked ad hoc.** Every effect a pass with its own resolution and history.
 - **One display-resolution post pass plus the present shader (chosen).** Bloom, motion blur and depth of field on the upsampled HDR image; Purkinje shift, AgX, contrast-adaptive sharpening, vignetting and grain in present, all from one settings struct. Photo mode reuses the same passes, raising quality to the top tier for 96 frames before saving.
+
+## D25. Rigid body solver
+
+- **Sequential impulses with warm starting.** The standard in game engines, but stable stacks need many iterations and persistent contact manifolds, which voxel fragments with changing sample contacts do not have.
+- **Shape matching over voxel particles.** Every voxel a particle: handles any shape and breaks naturally, but costs per voxel and bodies look soft.
+- **Extended position based dynamics with substeps (chosen, Müller et al. 2020).** One position iteration per substep, contacts as positional constraints, friction and restitution in a velocity pass. Two cubes stack on the first try once penetration is re-evaluated; 144 fragments step in 2.0 ms.
+
+## D26. Collision representation
+
+- **Convex hulls or boxes per fragment.** A cheap narrow phase, but it fills in the concave shapes that blasts produce, and it needs a second representation beside the voxels.
+- **Signed distance fields per body.** Smooth normals, but building and storing one for every fragment costs more than the fragment.
+- **Surface sample spheres against voxel grids (chosen).** Up to 64 samples per body; one sphere probe serves world and body contacts, with the world read through a window cached per step. Resting contact is blocky at the scale of one voxel, which is the scale of everything else.
+
+## D27. Drawing bodies
+
+- **Rasterise body meshes into the visibility buffer.** Fast primary visibility, but a second geometry path that shadow, indirect and reflection rays would not see.
+- **Voxelise moving bodies into the world every frame.** One structure, but rotation aliases, and every frame would edit and re-upload bricks.
+- **Trace posed voxel grids beside the world (chosen).** The same ids, lighting, history and motion vectors as terrain. A culling grid keeps a ray that misses the debris at one slab test. 74 fragments cost 1.4 ms (Realistic) and 6.3 ms (Ultra) on the integrated GPU, once sky rays skip them.
+
+## D28. Destruction
+
+- **Remove voxels only.** Craters without anything thrown: cheap and lifeless.
+- **Particles for debris.** Many cheap sprites or points, but they cannot be stood on, kicked, stacked or baked back into the world.
+- **Rigid fragments from the blast shell, baked back when settled (chosen).** Up to 48 fragments per blast, sleeping when still and becoming terrain after 15 s, so a battlefield does not accumulate bodies.
