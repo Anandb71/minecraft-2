@@ -3,6 +3,9 @@
 
 use crate::body::{Body, BodyId};
 use crate::shape::BodyShape;
+use crate::world_contact::{
+    Contact, find_world_contacts, solve_world_positions, solve_world_velocities,
+};
 use glam::{DVec3, Quat, Vec3};
 use mc2_voxel::world::VoxelWorld;
 use rayon::prelude::*;
@@ -78,7 +81,7 @@ impl PhysicsWorld {
     }
 
     /// Advances by `dt` seconds.
-    pub fn step(&mut self, dt: f32, _world: &VoxelWorld) {
+    pub fn step(&mut self, dt: f32, world: &VoxelWorld) {
         let start = std::time::Instant::now();
         let substeps = self.substeps.max(1);
         let h = dt / substeps as f32;
@@ -87,17 +90,33 @@ impl PhysicsWorld {
             b.step_start_rot = b.rot;
             b.age += dt;
         }
+        let mut world_contacts = 0usize;
         for _ in 0..substeps {
-            self.bodies.par_iter_mut().for_each(|b| {
-                if !b.asleep {
+            // Integrate and solve world contacts, bodies in parallel.
+            let contacts: Vec<Vec<Contact>> = self
+                .bodies
+                .par_iter_mut()
+                .map(|b| {
+                    if b.asleep {
+                        return Vec::new();
+                    }
                     integrate(b, h);
-                }
-            });
-            self.bodies.par_iter_mut().for_each(|b| {
-                if !b.asleep {
+                    let mut contacts = find_world_contacts(b, world);
+                    solve_world_positions(b, &mut contacts);
+                    contacts
+                })
+                .collect();
+            self.bodies
+                .par_iter_mut()
+                .zip(contacts.par_iter())
+                .for_each(|(b, contacts)| {
+                    if b.asleep {
+                        return;
+                    }
                     derive_velocities(b, h);
-                }
-            });
+                    solve_world_velocities(b, contacts, h);
+                });
+            world_contacts += contacts.iter().map(Vec::len).sum::<usize>();
         }
         for b in &mut self.bodies {
             if b.asleep {
@@ -118,7 +137,7 @@ impl PhysicsWorld {
         self.stats = PhysicsStats {
             bodies: self.bodies.len(),
             awake: self.bodies.iter().filter(|b| !b.asleep).count(),
-            world_contacts: 0,
+            world_contacts: world_contacts / substeps as usize,
             pair_contacts: 0,
             step_ms: start.elapsed().as_secs_f32() * 1000.0,
         };
@@ -154,11 +173,50 @@ mod tests {
     use glam::IVec3;
     use mc2_voxel::material::ids;
 
+    fn ground() -> VoxelWorld {
+        let mut w = VoxelWorld::new();
+        // A 16 m x 16 m granite floor, top surface at y = 2 m.
+        w.fill_box(IVec3::new(0, 0, 0), IVec3::new(255, 31, 255), ids::GRANITE);
+        w
+    }
+
     fn cube(n: i32) -> Arc<BodyShape> {
         Arc::new(
             BodyShape::from_voxels(IVec3::splat(n), vec![ids::GRANITE; (n * n * n) as usize])
                 .expect("cube"),
         )
+    }
+
+    #[test]
+    fn a_dropped_cube_comes_to_rest_on_the_floor() {
+        let w = ground();
+        let mut p = PhysicsWorld::new();
+        // 0.5 m cube dropped from 1 m above the floor.
+        let id = p.spawn(cube(8), DVec3::new(8.0, 3.25, 8.0), Quat::IDENTITY);
+        for _ in 0..600 {
+            p.step(1.0 / 120.0, &w);
+        }
+        let b = p.body(id).unwrap();
+        // Centre 0.25 m above the surface, give or take a sample radius.
+        assert!((b.pos.y - 2.25).abs() < 0.05, "rest height {}", b.pos.y);
+        assert!(b.asleep, "still moving at {} m/s", b.vel.length());
+    }
+
+    #[test]
+    fn a_tumbling_cube_settles_flat() {
+        let w = ground();
+        let mut p = PhysicsWorld::new();
+        let rot = Quat::from_euler(glam::EulerRot::XYZ, 0.4, 0.7, 0.2);
+        let id = p.spawn(cube(8), DVec3::new(8.0, 4.0, 8.0), rot);
+        p.body_mut(id).unwrap().ang_vel = Vec3::new(3.0, 1.0, -2.0);
+        for _ in 0..1200 {
+            p.step(1.0 / 120.0, &w);
+        }
+        let b = p.body(id).unwrap();
+        // Resting on a face: one grid axis is vertical.
+        let up = b.grid_rotation().inverse() * Vec3::Y;
+        assert!(up.abs().max_element() > 0.98, "tilted: {up}");
+        assert!((b.pos.y - 2.25).abs() < 0.06, "rest height {}", b.pos.y);
     }
 
     #[test]
