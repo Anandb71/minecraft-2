@@ -6,6 +6,7 @@
 //! body detonates wherever it has been thrown. A blast lights every TNT
 //! block it reaches with a short random fuse, so charges chain.
 
+use crate::collide::{Aabb, SolidField};
 use crate::input::{Input, Key, Time};
 use crate::interact::{Interaction, prepare_edit};
 use crate::{Streaming, Voxels};
@@ -31,6 +32,44 @@ pub const MAX_BODIES: usize = 600;
 pub const BAKE_AFTER_S: f32 = 15.0;
 /// Baking runs this often, seconds.
 const BAKE_INTERVAL_S: f64 = 0.5;
+/// Bodies lighter than this the player kicks aside; heavier ones are solid
+/// to walk into and stand on, kilograms.
+pub const KICK_MASS_KG: f32 = 40.0;
+
+/// What the player collides with: the world, and bodies too heavy to kick.
+/// A world voxel counts as solid when its centre lies in a solid body voxel.
+pub struct WorldAndBodies<'a> {
+    pub world: &'a VoxelWorld,
+    pub bodies: Vec<&'a mc2_physics::Body>,
+}
+
+impl<'a> WorldAndBodies<'a> {
+    /// Heavy bodies whose bounding spheres come within `reach` metres of
+    /// the box.
+    pub fn near(world: &'a VoxelWorld, physics: &'a Physics, b: &Aabb, reach: f64) -> Self {
+        let bodies = physics
+            .world
+            .bodies
+            .iter()
+            .filter(|body| {
+                body.shape.mass >= KICK_MASS_KG
+                    && body.pos.clamp(b.min, b.max).distance(body.pos)
+                        <= f64::from(body.shape.radius) + reach
+            })
+            .collect();
+        Self { world, bodies }
+    }
+}
+
+impl SolidField for WorldAndBodies<'_> {
+    fn solid(&self, v: IVec3) -> bool {
+        if self.world.solid(v) {
+            return true;
+        }
+        let centre = (v.as_dvec3() + 0.5) / f64::from(VOXELS_PER_BLOCK);
+        self.bodies.iter().any(|b| b.material_at(centre).is_solid())
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Fuse {
@@ -226,9 +265,22 @@ pub fn step_physics(
     mut interaction: ResMut<Interaction>,
     mut physics: ResMut<Physics>,
     time: Res<Time>,
+    players: Query<(&crate::player::Player, &crate::player::Body)>,
 ) {
     mc2_core::scope!("physics.tick");
     let physics = &mut *physics;
+    // The player shoves what it walks into.
+    physics.world.obstacles = players
+        .iter()
+        .map(|(p, b)| {
+            let bounds = Aabb::standing(b.feet, crate::player::WIDTH, p.height());
+            mc2_physics::Obstacle {
+                min: bounds.min,
+                max: bounds.max,
+                vel: b.velocity.as_vec3(),
+            }
+        })
+        .collect();
     let world = &mut voxels.0;
     physics.dirty.append(&mut interaction.edited);
     for (lo, hi) in std::mem::take(&mut physics.dirty) {
@@ -345,5 +397,70 @@ mod tests {
         assert_eq!(physics.blasts_total, 3);
         let voxels = &game.world.resource::<Voxels>().0;
         assert_eq!(voxels.voxel(BlockPos(charges[2]).origin() + 8), ids::TNT);
+    }
+
+    #[test]
+    fn the_player_stands_on_heavy_debris_and_kicks_light_debris() {
+        use crate::input::Key;
+        use glam::Quat;
+        let setup = |game: &mut Game| {
+            let v = &mut game.world.resource_mut::<Voxels>().0;
+            // Floor top at 4 m.
+            v.fill_box(IVec3::ZERO, IVec3::new(511, 63, 511), ids::GRANITE);
+        };
+        let feet = |game: &mut Game| {
+            let mut q = game.world.query::<&crate::player::Body>();
+            q.iter(&game.world).next().unwrap().feet
+        };
+
+        // A 1 m granite block (2.7 t): the player lands on it.
+        let mut game = Game::new();
+        setup(&mut game);
+        let block =
+            Arc::new(BodyShape::from_voxels(IVec3::splat(16), vec![ids::GRANITE; 4096]).unwrap());
+        let rot = block.principal;
+        game.world
+            .resource_mut::<Physics>()
+            .world
+            .spawn(block, DVec3::new(10.5, 4.5, 10.5), rot);
+        game.spawn_player(DVec3::new(10.5, 7.0, 10.5), 0.0, 0.0);
+        for _ in 0..120 {
+            game.update(1.0 / 60.0);
+        }
+        let y = feet(&mut game).y;
+        assert!((y - 5.0).abs() < 0.08, "player feet at {y}, block top at 5");
+
+        // A plank chip of a few kilograms: walking into it shoves it along.
+        let mut game = Game::new();
+        setup(&mut game);
+        let chip =
+            Arc::new(BodyShape::from_voxels(IVec3::splat(4), vec![ids::PLANKS; 64]).unwrap());
+        assert!(chip.mass < KICK_MASS_KG);
+        let rot = chip.principal;
+        let id = game.world.resource_mut::<Physics>().world.spawn(
+            chip,
+            DVec3::new(14.0, 4.125, 19.0),
+            rot,
+        );
+        game.spawn_player(DVec3::new(14.0, 4.0, 17.0), 0.0, 0.0);
+        game.input().captured = true;
+        game.input().key_down(Key::Forward);
+        for _ in 0..90 {
+            game.update(1.0 / 60.0);
+        }
+        let player_z = feet(&mut game).z;
+        let chip_z = game
+            .world
+            .resource::<Physics>()
+            .world
+            .body(id)
+            .unwrap()
+            .pos
+            .z;
+        assert!(player_z > 19.0, "player stuck at {player_z}");
+        assert!(
+            chip_z > player_z,
+            "chip at {chip_z} left behind the player at {player_z}"
+        );
     }
 }

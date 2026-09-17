@@ -247,6 +247,7 @@ pub fn toggles(input: Res<Input>, mut players: Query<(&mut Player, &mut Body)>) 
 /// Movement, on the fixed clock.
 pub fn movement(
     voxels: Res<Voxels>,
+    physics: Res<crate::physics::Physics>,
     streaming: Res<Streaming>,
     input: Res<Input>,
     time: Res<Time>,
@@ -265,7 +266,11 @@ pub fn movement(
             b.velocity = DVec3::ZERO;
             continue;
         }
-        step_player(&voxels.0, &mut p, &mut b, &input, time.fixed_dt);
+        // Bodies the player could reach this tick are part of the ground.
+        let bounds = Aabb::standing(b.feet, WIDTH, p.height());
+        let reach = b.velocity.length() * time.fixed_dt + 1.0;
+        let field = crate::physics::WorldAndBodies::near(&voxels.0, &physics, &bounds, reach);
+        step_player(&field, &mut p, &mut b, &input, time.fixed_dt);
     }
 }
 
