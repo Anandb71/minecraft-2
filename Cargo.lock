@@ -1213,6 +1213,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc2-physics"
+version = "0.1.0"
+dependencies = [
+ "glam 0.33.7",
+ "mc2-core",
+ "mc2-voxel",
+ "rayon",
+]
+
+[[package]]
 name = "mc2-render"
 version = "0.1.0"
 dependencies = [

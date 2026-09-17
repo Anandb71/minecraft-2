@@ -1,0 +1,11 @@
+[package]
+name = "mc2-physics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mc2-core.workspace = true
+mc2-voxel.workspace = true
+glam.workspace = true
+rayon.workspace = true
