@@ -9,11 +9,21 @@
 
 use bytemuck::{Pod, Zeroable};
 use glam::{DVec3, IVec3, Quat, Vec3};
+use mc2_core::FxHashMap;
+use mc2_gpu::alloc::{Range, RangeAllocator};
 use mc2_physics::BodyShape;
 use std::sync::Arc;
 
+/// Bodies drawn per frame; farther ones are dropped first.
+pub const MAX_BODIES: usize = 1024;
+/// Bodies farther than this from the camera are not drawn, metres.
+pub const DRAW_DISTANCE_M: f64 = 384.0;
+/// Shape pool, words (16 MB).
+const VOXEL_WORDS: u32 = 1 << 22;
 /// Culling grid cells per axis, at most.
 pub const GRID_DIM: i32 = 32;
+/// Header words before the cell array.
+const GRID_HEADER_WORDS: usize = 8;
 /// Cell array plus body index lists, words.
 const GRID_WORDS: usize = (GRID_DIM * GRID_DIM * GRID_DIM) as usize + (1 << 17);
 /// Cells pack a list offset (20 bits) and a count (12 bits).
@@ -171,6 +181,185 @@ pub fn build_grid(boxes: &[(Vec3, Vec3)]) -> CullGrid {
             dims,
             words,
         };
+    }
+}
+
+struct ShapeSlot {
+    range: Range,
+    coarse: u32,
+    shape: Arc<BodyShape>,
+    seen: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BodyGpuStats {
+    pub drawn: usize,
+    pub pool_words: u64,
+    pub list_words: usize,
+}
+
+pub struct BodyGpu {
+    pub table: wgpu::Buffer,
+    pub voxels: wgpu::Buffer,
+    pub grid: wgpu::Buffer,
+    alloc: RangeAllocator,
+    shapes: FxHashMap<u64, ShapeSlot>,
+    /// Pose drawn last frame, world metres.
+    prev: FxHashMap<u64, (DVec3, Quat)>,
+    frame: u64,
+    pub stats: BodyGpuStats,
+}
+
+impl BodyGpu {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let buffer = |label: &str, bytes: u64| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        Self {
+            table: buffer(
+                "body table",
+                (MAX_BODIES * std::mem::size_of::<GpuBody>()) as u64,
+            ),
+            voxels: buffer("body voxels", u64::from(VOXEL_WORDS) * 4),
+            grid: buffer("body grid", ((GRID_HEADER_WORDS + GRID_WORDS) * 4) as u64),
+            alloc: RangeAllocator::new(VOXEL_WORDS, &[]),
+            shapes: FxHashMap::default(),
+            prev: FxHashMap::default(),
+            frame: 0,
+            stats: BodyGpuStats::default(),
+        }
+    }
+
+    /// Uploads new shapes, frees shapes no longer drawn, and writes this
+    /// frame's table and culling grid.
+    pub fn update(&mut self, queue: &wgpu::Queue, bodies: &[BodyInstance], camera_m: DVec3) {
+        mc2_core::scope!("bodies.update");
+        self.frame += 1;
+        let camera_voxel = (camera_m * 16.0).floor();
+        let mut visible: Vec<&BodyInstance> = bodies
+            .iter()
+            .filter(|b| b.grid_origin.distance(camera_m) < DRAW_DISTANCE_M)
+            .collect();
+        if visible.len() > MAX_BODIES {
+            visible.sort_by(|a, b| {
+                a.grid_origin
+                    .distance_squared(camera_m)
+                    .total_cmp(&b.grid_origin.distance_squared(camera_m))
+            });
+            visible.truncate(MAX_BODIES);
+        }
+        let mut table = Vec::with_capacity(visible.len());
+        let mut boxes = Vec::with_capacity(visible.len());
+        let mut next_prev = FxHashMap::default();
+        for b in visible {
+            let Some((voxels, coarse)) = self.slot(queue, b) else {
+                continue;
+            };
+            let rel = |p: DVec3| (p * 16.0 - camera_voxel).as_vec3();
+            let axes = |q: Quat| [q * Vec3::X, q * Vec3::Y, q * Vec3::Z];
+            let (prev_origin, prev_rot) = self
+                .prev
+                .get(&b.key)
+                .copied()
+                .unwrap_or((b.grid_origin, b.grid_rotation));
+            let a = axes(b.grid_rotation);
+            let pa = axes(prev_rot);
+            let origin = rel(b.grid_origin);
+            let size = b.shape.size;
+            table.push(GpuBody {
+                origin: origin.to_array(),
+                tag: (b.key & 0x7ff) as u32,
+                axis_x: a[0].to_array(),
+                voxels,
+                axis_y: a[1].to_array(),
+                coarse,
+                axis_z: a[2].to_array(),
+                size: size.to_array(),
+                prev_origin: rel(prev_origin).to_array(),
+                prev_axis_x: pa[0].to_array(),
+                prev_axis_y: pa[1].to_array(),
+                prev_axis_z: pa[2].to_array(),
+                ..Default::default()
+            });
+            // Camera-relative bounds of the rotated grid box.
+            let half = size.as_vec3() * 0.5;
+            let centre = origin + a[0] * half.x + a[1] * half.y + a[2] * half.z;
+            let reach = a[0].abs() * half.x + a[1].abs() * half.y + a[2].abs() * half.z;
+            boxes.push((centre - reach, centre + reach));
+            next_prev.insert(b.key, (b.grid_origin, b.grid_rotation));
+        }
+        self.prev = next_prev;
+        // Shapes of bodies not drawn for a second are released.
+        let frame = self.frame;
+        let alloc = &mut self.alloc;
+        self.shapes.retain(|_, s| {
+            let keep = frame - s.seen < 60;
+            if !keep {
+                alloc.free(s.range);
+            }
+            keep
+        });
+
+        let grid = build_grid(&boxes);
+        let mut header = [0u32; GRID_HEADER_WORDS];
+        header[0..3].copy_from_slice(bytemuck::cast_slice(&grid.min.to_array()));
+        header[3] = grid.cell.to_bits();
+        header[4..7].copy_from_slice(bytemuck::cast_slice(&grid.dims.to_array()));
+        header[7] = table.len() as u32;
+        queue.write_buffer(&self.grid, 0, bytemuck::cast_slice(&header));
+        if !grid.words.is_empty() {
+            queue.write_buffer(
+                &self.grid,
+                (GRID_HEADER_WORDS * 4) as u64,
+                bytemuck::cast_slice(&grid.words),
+            );
+        }
+        if !table.is_empty() {
+            queue.write_buffer(&self.table, 0, bytemuck::cast_slice(&table));
+        }
+        self.stats = BodyGpuStats {
+            drawn: table.len(),
+            pool_words: self.alloc.used_words(),
+            list_words: grid.words.len(),
+        };
+    }
+
+    /// The pool offsets of a body's shape, uploading it on first sight.
+    fn slot(&mut self, queue: &wgpu::Queue, b: &BodyInstance) -> Option<(u32, u32)> {
+        if let Some(s) = self.shapes.get_mut(&b.key) {
+            if Arc::ptr_eq(&s.shape, &b.shape) {
+                s.seen = self.frame;
+                return Some((s.range.offset + s.coarse, s.range.offset));
+            }
+            // The body's shape changed (it broke): upload the new one.
+            let old = self.shapes.remove(&b.key).expect("slot present");
+            self.alloc.free(old.range);
+        }
+        let (words, coarse) = encode_shape(&b.shape);
+        let Some(range) = self.alloc.alloc(words.len() as u32) else {
+            log::warn!("body voxel pool full; body {} not drawn", b.key);
+            return None;
+        };
+        queue.write_buffer(
+            &self.voxels,
+            u64::from(range.offset) * 4,
+            bytemuck::cast_slice(&words),
+        );
+        self.shapes.insert(
+            b.key,
+            ShapeSlot {
+                range,
+                coarse,
+                shape: b.shape.clone(),
+                seen: self.frame,
+            },
+        );
+        Some((range.offset + coarse, range.offset))
     }
 }
 

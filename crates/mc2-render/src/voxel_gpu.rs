@@ -123,6 +123,8 @@ pub struct GpuWorld {
     pending_copy: Option<usize>,
     pub layout: wgpu::BindGroupLayout,
     pub bind_group: wgpu::BindGroup,
+    /// Rigid bodies, bound alongside the world (bindings 5-7).
+    pub bodies: crate::bodies::BodyGpu,
     tree_alloc: RangeAllocator,
     voxel_alloc: RangeAllocator,
     chunks: FxHashMap<ChunkPos, GpuChunk>,
@@ -233,8 +235,12 @@ impl GpuWorld {
                 bind::storage(true),
                 bind::storage(true),
                 bind::storage(false),
+                bind::storage(true),
+                bind::storage(true),
+                bind::storage(true),
             ],
         );
+        let bodies = crate::bodies::BodyGpu::new(device);
         let bind_group = bind_group(
             device,
             "voxel world",
@@ -245,6 +251,9 @@ impl GpuWorld {
                 sectors.as_entire_binding(),
                 materials.as_entire_binding(),
                 feedback.as_entire_binding(),
+                bodies.table.as_entire_binding(),
+                bodies.voxels.as_entire_binding(),
+                bodies.grid.as_entire_binding(),
             ],
         );
         Self {
@@ -257,6 +266,7 @@ impl GpuWorld {
             pending_copy: None,
             layout,
             bind_group,
+            bodies,
             tree_alloc: RangeAllocator::new(config.tree_words, &[4]),
             voxel_alloc: RangeAllocator::new(
                 config.voxel_words,
