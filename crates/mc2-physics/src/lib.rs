@@ -5,6 +5,7 @@
 
 pub mod body;
 pub mod eigen;
+mod pair_contact;
 pub mod probe;
 pub mod shape;
 pub mod world;

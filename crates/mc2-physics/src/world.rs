@@ -2,6 +2,9 @@
 //! Algorithm 2 with one position iteration per substep).
 
 use crate::body::{Body, BodyId};
+use crate::pair_contact::{
+    candidate_pairs, find_pair_contacts, solve_pair_positions, solve_pair_velocities,
+};
 use crate::shape::BodyShape;
 use crate::world_contact::{
     Contact, find_world_contacts, solve_world_positions, solve_world_velocities,
@@ -90,7 +93,11 @@ impl PhysicsWorld {
             b.step_start_rot = b.rot;
             b.age += dt;
         }
+        // Broad phase once per step: bounding sphere pairs, expanded by
+        // how far the bodies can travel.
+        let pairs = candidate_pairs(&self.bodies, dt);
         let mut world_contacts = 0usize;
+        let mut pair_contacts = 0usize;
         for _ in 0..substeps {
             // Integrate and solve world contacts, bodies in parallel.
             let contacts: Vec<Vec<Contact>> = self
@@ -106,6 +113,8 @@ impl PhysicsWorld {
                     contacts
                 })
                 .collect();
+            let mut pc = find_pair_contacts(&mut self.bodies, &pairs);
+            solve_pair_positions(&mut self.bodies, &mut pc);
             self.bodies
                 .par_iter_mut()
                 .zip(contacts.par_iter())
@@ -116,7 +125,9 @@ impl PhysicsWorld {
                     derive_velocities(b, h);
                     solve_world_velocities(b, contacts, h);
                 });
+            solve_pair_velocities(&mut self.bodies, &pc, h);
             world_contacts += contacts.iter().map(Vec::len).sum::<usize>();
+            pair_contacts += pc.len();
         }
         for b in &mut self.bodies {
             if b.asleep {
@@ -138,7 +149,7 @@ impl PhysicsWorld {
             bodies: self.bodies.len(),
             awake: self.bodies.iter().filter(|b| !b.asleep).count(),
             world_contacts: world_contacts / substeps as usize,
-            pair_contacts: 0,
+            pair_contacts: pair_contacts / substeps as usize,
             step_ms: start.elapsed().as_secs_f32() * 1000.0,
         };
     }
@@ -217,6 +228,21 @@ mod tests {
         let up = b.grid_rotation().inverse() * Vec3::Y;
         assert!(up.abs().max_element() > 0.98, "tilted: {up}");
         assert!((b.pos.y - 2.25).abs() < 0.06, "rest height {}", b.pos.y);
+    }
+
+    #[test]
+    fn stacked_cubes_rest_on_each_other() {
+        let w = ground();
+        let mut p = PhysicsWorld::new();
+        let low = p.spawn(cube(8), DVec3::new(8.0, 2.3, 8.0), Quat::IDENTITY);
+        let high = p.spawn(cube(8), DVec3::new(8.0, 2.9, 8.0), Quat::IDENTITY);
+        for _ in 0..600 {
+            p.step(1.0 / 120.0, &w);
+        }
+        let (l, h) = (p.body(low).unwrap(), p.body(high).unwrap());
+        assert!((l.pos.y - 2.25).abs() < 0.06, "low at {}", l.pos.y);
+        assert!((h.pos.y - 2.75).abs() < 0.1, "high at {}", h.pos.y);
+        assert!((h.pos.x - l.pos.x).abs() < 0.1 && (h.pos.z - l.pos.z).abs() < 0.1);
     }
 
     #[test]
