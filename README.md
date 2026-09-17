@@ -26,8 +26,9 @@ cargo run --release -- --bench --frames 600 --size 2560x1440
 The first launch erodes the whole world (about 30 s on a laptop) and caches it
 under `worlds/default`; later launches load it instantly. `--seed <n>` picks
 another world, `--camera x,y,z,lx,ly,lz` places a headless camera, `--time 21.5`
-sets the hour, `--demo build|lights|mirror` plays a scripted scene before
-capturing and `--dof 12,2.8` renders with a thin lens focused at 12 m at f/2.8.
+sets the hour, `--demo build|lights|mirror|blast` plays a scripted scene before
+capturing, `--dof 12,2.8` renders with a thin lens focused at 12 m at f/2.8 and
+`--hide-bodies` simulates debris without drawing it.
 
 ### Graphics quality
 
@@ -60,6 +61,7 @@ swaps radiance cascades for ReSTIR GI.
 | F | Toggle flying |
 | F5 | First / third person |
 | Tab | Block mode / carve mode |
+| E | Light the targeted TNT block (4 s fuse) |
 | 1-9, mouse wheel | Hotbar slot (carve mode: wheel changes radius) |
 | F3 | Toggle profiler HUD |
 | F4 | Debug view: shaded, LOD hits, march iteration heatmap, unlit materials |
@@ -102,6 +104,9 @@ Time stops and the camera flies free.
 - Traced glossy reflections with visible-normal sampling for metals, ice and polished stone
 - Bloom, motion blur, thin-lens depth of field, Purkinje night vision, sharpening, vignetting and film grain
 - Photo mode with a free camera, focal length, focus, aperture and exposure
+- Rigid body debris (extended position based dynamics): blasts carve craters and throw fragments that tumble, stack, can be stood on or kicked, and become terrain again when they settle
+- TNT with fuses and chain reactions; lit charges fly as bodies and go off where they land
+- Bodies are traced through the same lighting as the world: shadows, bounce light, reflections and exact reprojection
 - Auto exposure in EV100 with a night-aware key
 - Four quality tiers up to Super Ultra Crazy Duper Realistic
 - Visibility buffer with exact world voxel ids, material, face, depth and motion vectors
@@ -133,7 +138,8 @@ each line's last and p99 cost and turns red when p99 exceeds its budget.
 | Post and present | 1.0 ms |
 | Headroom | 1.6 ms |
 
-Physics runs on its own thread at a fixed 120 Hz with a 4 ms tick budget.
+Physics steps on the fixed 120 Hz clock, spread over the worker pool, with a
+4 ms tick budget.
 
 ## Build order
 
@@ -145,7 +151,7 @@ Physics runs on its own thread at a fixed 120 Hz with a 4 ms tick budget.
 6. Sun, sky LUTs, traced shadows, ReSTIR direct light. **(v0.6-lighting)**
 7. Indirect light, denoise, temporal upsample. **(v0.7-indirect)**
 8. Reflections, volumetrics, clouds, post stack, photo mode. **(v0.8-atmosphere)**
-9. Rigid bodies, contacts, destruction.
+9. Rigid bodies, contacts, destruction. **(v0.9-destruction)**
 10. Structural integrity and collapse.
 11. Fluids.
 12. Fire, heat, materials, wind, weather.
@@ -163,7 +169,8 @@ Physics runs on its own thread at a fixed 120 Hz with a 4 ms tick budget.
 - `crates/mc2-voxel`: bricks, 64-trees, materials, GPU layout, CPU reference marcher
 - `crates/mc2-game`: ECS game state, player, collision, blocks, interaction
 - `crates/mc2-worldgen`: noise, strata, erosion, amplification, chunk generation, streaming
-- `crates/mc2-render`: passes, GPU voxel residency and the renderer
+- `crates/mc2-physics`: rigid bodies (XPBD), contacts, explosions, baking
+- `crates/mc2-render`: passes, GPU voxel residency, rigid bodies and the renderer
 - `shaders/`: WGSL
 - `golden/`: reference images for renderer tests
 - [`DEVLOG.md`](DEVLOG.md): how each system works and what it costs
