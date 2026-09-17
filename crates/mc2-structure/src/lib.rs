@@ -9,5 +9,7 @@
 //! an anchor falls as rigid bodies.
 
 pub mod node;
+pub mod solve;
 
 pub use node::{NodeInfo, block_info};
+pub use solve::{Outcome, Params, RegionNode, solve};
