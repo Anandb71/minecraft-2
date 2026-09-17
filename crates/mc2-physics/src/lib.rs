@@ -4,3 +4,6 @@
 //! terrain into bodies; and baking of settled bodies back into the world.
 
 pub mod eigen;
+pub mod shape;
+
+pub use shape::BodyShape;
