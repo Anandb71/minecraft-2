@@ -5,6 +5,7 @@
 
 pub mod body;
 pub mod eigen;
+pub mod probe;
 pub mod shape;
 
 pub use body::{Body, BodyId};
