@@ -26,18 +26,19 @@ cargo run --release -- --bench --frames 600 --size 2560x1440
 The first launch erodes the whole world (about 30 s on a laptop) and caches it
 under `worlds/default`; later launches load it instantly. `--seed <n>` picks
 another world, `--camera x,y,z,lx,ly,lz` places a headless camera, `--time 21.5`
-sets the hour and `--demo build|lights` plays a scripted scene before capturing.
+sets the hour, `--demo build|lights|mirror` plays a scripted scene before
+capturing and `--dof 12,2.8` renders with a thin lens focused at 12 m at f/2.8.
 
 ### Graphics quality
 
 `--quality <tier>` or `F6` in game:
 
-| Tier | Render scale | Visibility rays | ReSTIR candidates |
-|---|---|---|---|
-| 0 Realistic | 50% | 1 per 2x2 block | 8 |
-| 1 Hyper Realistic | 67% | 1 per 2x2 block | 16 |
-| 2 Ultra Realistic (default) | 75% | every pixel | 32 |
-| 3 Super Ultra Crazy Duper Realistic | 100% | every pixel | 64 |
+| Tier | Render scale | Visibility rays | ReSTIR candidates | Cloud steps |
+|---|---|---|---|---|
+| 0 Realistic | 50% | 1 per 2x2 block | 8 | 32 |
+| 1 Hyper Realistic | 67% | 1 per 2x2 block | 16 | 48 |
+| 2 Ultra Realistic (default) | 75% | every pixel | 32 | 64 |
+| 3 Super Ultra Crazy Duper Realistic | 100% | every pixel | 64 | 96 |
 
 Indirect light runs at half the render resolution in every tier; `--gi restir`
 swaps radiance cascades for ReSTIR GI.
@@ -66,7 +67,24 @@ swaps radiance cascades for ReSTIR GI.
 | T | Pause or resume time |
 | [ ] | One hour back or forward |
 | V | Toggle vsync |
+| P | Photo mode |
+| F2 | Screenshot |
 | Esc | Release mouse, then quit |
+
+### Photo mode
+
+Time stops and the camera flies free.
+
+| Key | Action |
+|---|---|
+| W A S D, Space, Ctrl | Fly |
+| Mouse wheel | Focal length, 12-400 mm |
+| Q / E | Focus nearer / farther |
+| Z / X | Aperture one stop wider / narrower |
+| , / . | Exposure down / up a third of a stop |
+| G | Depth of field on or off |
+| Enter or F2 | Render 96 frames at Super Ultra Crazy Duper Realistic and save `captures/photo_<time>.png` |
+| P | Leave |
 
 ## Features
 
@@ -78,7 +96,12 @@ swaps radiance cascades for ReSTIR GI.
 - Traced soft shadows and sky visibility through the same marcher that draws the world, accumulated with exact voxel-id reprojection
 - ReSTIR direct light from every emissive voxel cluster: torches, lanterns, lava
 - Indirect light from radiance cascades (ReSTIR GI selectable), bouncing frame over frame through last frame's lit surfaces
-- SVGF denoising of emitter and indirect light; temporal upsampling from the render resolution to the display
+- SVGF denoising of emitter, indirect and reflected light; temporal upsampling from the render resolution to the display
+- Volumetric clouds (Schneider and Vos 2015) in a 1.5-4 km shell, lit by sun or moon with multiple scattering octaves, casting shadows on the ground, the fog and bounced light
+- Froxel height fog with light shafts, integrated energy-conservingly (Hillaire 2015)
+- Traced glossy reflections with visible-normal sampling for metals, ice and polished stone
+- Bloom, motion blur, thin-lens depth of field, Purkinje night vision, sharpening, vignetting and film grain
+- Photo mode with a free camera, focal length, focus, aperture and exposure
 - Auto exposure in EV100 with a night-aware key
 - Four quality tiers up to Super Ultra Crazy Duper Realistic
 - Visibility buffer with exact world voxel ids, material, face, depth and motion vectors
@@ -121,7 +144,7 @@ Physics runs on its own thread at a fixed 120 Hz with a 4 ms tick budget.
 5. Player controller, collision, carve and place. **(v0.5-player)**
 6. Sun, sky LUTs, traced shadows, ReSTIR direct light. **(v0.6-lighting)**
 7. Indirect light, denoise, temporal upsample. **(v0.7-indirect)**
-8. Reflections, volumetrics, clouds, post stack, photo mode.
+8. Reflections, volumetrics, clouds, post stack, photo mode. **(v0.8-atmosphere)**
 9. Rigid bodies, contacts, destruction.
 10. Structural integrity and collapse.
 11. Fluids.
