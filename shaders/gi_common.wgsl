@@ -10,6 +10,7 @@
 // Expects, declared before import: prev_id (u32), surface_prev (f32),
 // sky_map, sky_ambient, transmittance_lut, sky_view_lut, sky_view_moon,
 // lut_sampler; and common, frame, voxel_data, march and atmosphere imports.
+#import "bodies.wgsl"
 #import "sky_common.wgsl"
 #import "ambient.wgsl"
 #import "skymap.wgsl"
@@ -29,15 +30,16 @@ fn gi_ray(origin: vec3<f32>, dir: vec3<f32>, t_min_m: f32, t_max_m: f32) -> Ray 
 }
 
 // Outgoing diffuse radiance of a surface point toward any direction.
-fn surface_radiance(position: vec3<f32>, normal: vec3<f32>, voxel: vec3<i32>, material: u32, face: u32) -> vec3<f32> {
-    let mat = materials[material];
+// `word` is the hit's visibility id word (see hit_id_word).
+fn surface_radiance(position: vec3<f32>, normal: vec3<f32>, voxel: vec3<i32>, word: u32) -> vec3<f32> {
+    let mat = materials[word & 0xffffu];
     // Seen last frame?
     let rel_m = (position - frame.camera_frac) / VOXELS_PER_METRE;
     let uv = prev_uv(rel_m);
     if all(uv >= vec2<f32>(0.0)) && all(uv < vec2<f32>(1.0)) {
         let pp = vec2<i32>(uv * frame.render_size);
         let pid = textureLoad(prev_id, pp, 0);
-        let hid = vec4<u32>(vec3<u32>(voxel), material | (face << 16u) | (1u << 30u));
+        let hid = vec4<u32>(vec3<u32>(voxel), word);
         if same_surface(hid, pid, length(rel_m), 1.0) {
             return textureLoad(surface_prev, pp, 0).rgb;
         }
@@ -60,7 +62,8 @@ fn surface_radiance(position: vec3<f32>, normal: vec3<f32>, voxel: vec3<i32>, ma
 // origin (voxels). A miss past t_max_m within range returns no radiance
 // with sky = 0 unless `sky_on_miss`.
 fn trace_gi(origin: vec3<f32>, dir: vec3<f32>, t_min_m: f32, t_max_m: f32, sky_on_miss: bool) -> GiSample {
-    let hit = march(gi_ray(origin, dir, t_min_m, t_max_m));
+    let ray = gi_ray(origin, dir, t_min_m, t_max_m);
+    let hit = trace_scene(ray, ray.t_min);
     var s: GiSample;
     if hit.kind == HIT_NONE {
         s.position = dir;
@@ -70,10 +73,9 @@ fn trace_gi(origin: vec3<f32>, dir: vec3<f32>, t_min_m: f32, t_max_m: f32, sky_o
         return s;
     }
     s.position = origin + dir * hit.t;
-    s.normal = select(vec3<f32>(0.0), -sign(dir), axis_mask(hit.axis));
-    let face = hit.axis * 2u + select(0u, 1u, dir[hit.axis] < 0.0);
+    s.normal = hit_normal(hit, dir);
     s.sky = 0u;
-    s.radiance = surface_radiance(s.position, s.normal, hit.voxel, hit.material, face);
+    s.radiance = surface_radiance(s.position, s.normal, hit.voxel, hit_id_word(hit, dir));
     return s;
 }
 

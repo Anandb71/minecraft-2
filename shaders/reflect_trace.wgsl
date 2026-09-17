@@ -92,7 +92,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         textureStore(out_reflection, p, vec4<f32>(0.0, 0.0, 0.0, 1.0));
         return;
     }
-    let origin = frame.camera_frac + c.position * VOXELS_PER_METRE + face_of_id(c.id) * 0.05;
+    let origin = frame.camera_frac + c.position * VOXELS_PER_METRE + id_face(c.id, c.normal) * 0.05;
     let s = trace_gi(origin, l, 0.0, REFLECT_RANGE_M, true);
     let f0 = mix(vec3<f32>(pow((mat.ior - 1.0) / (mat.ior + 1.0), 2.0)), mat.albedo, mat.metallic);
     let vh = max(dot(v, h), 0.0);
@@ -100,10 +100,4 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Separable Smith: G2 / G1(V) = G1(L).
     let weight = fresnel * smith_g1(nl, alpha);
     textureStore(out_reflection, p, vec4<f32>(s.radiance * weight, 1.0));
-}
-
-fn face_of_id(id: vec4<u32>) -> vec3<f32> {
-    let face_index = (id.w >> 16u) & 7u;
-    let sign = select(-1.0, 1.0, (face_index & 1u) == 1u);
-    return select(vec3<f32>(0.0), vec3<f32>(sign), axis_mask(face_index / 2u));
 }

@@ -23,9 +23,7 @@ fn load_surface(pixel: vec2<i32>, id: vec4<u32>, depth_m: f32, normal_oct: vec2<
     let dir = camera_ray_dir(vec2<f32>(pixel));
     s.rel_voxels = frame.camera_frac + dir * depth_m * VOXELS_PER_METRE;
     s.normal = oct_decode(normal_oct);
-    let face_index = (id.w >> 16u) & 7u;
-    let sign = select(-1.0, 1.0, (face_index & 1u) == 1u);
-    s.face = select(vec3<f32>(0.0), vec3<f32>(sign), axis_mask(face_index / 2u));
+    s.face = id_face(id, s.normal);
     return s;
 }
 

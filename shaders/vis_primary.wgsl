@@ -7,6 +7,7 @@
 #import "common.wgsl"
 #import "frame.wgsl"
 #import "march.wgsl"
+#import "bodies.wgsl"
 
 @group(2) @binding(0) var vis_id: texture_storage_2d<rgba32uint, write>;
 @group(2) @binding(1) var vis_depth: texture_storage_2d<r32float, write>;
@@ -41,7 +42,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     ray.lod_scale = frame.pixel_angle * frame.lod_pixels;
     ray.feedback = true;
-    let hit = march(ray);
+    let hit = trace_scene(ray, 0.0);
     // Debug view 2 visualises traversal cost instead of depth.
     if frame.debug_mode == 2u {
         textureStore(vis_id, id.xy, vec4<u32>(0u, 0u, 0u, hit.kind << 30u));
@@ -60,7 +61,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    var normal = select(vec3<f32>(0.0), -sign(dir), axis_mask(hit.axis));
+    var normal = hit_normal(hit, dir);
     if hit.kind == HIT_LOD && hit.lod != 0u {
         // Aggregate normal of the filtered subtree, blended toward the face
         // by how spread its distribution is.
@@ -76,11 +77,16 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let t_m = hit.t / VOXELS_PER_METRE;
     let rel = dir * t_m;
-    let motion = prev_uv(rel) - current_uv(rel);
+    var prev_rel = rel;
+    if hit.kind == HIT_BODY {
+        // The point moved with its body since last frame.
+        let now = frame.camera_frac + dir * hit.t;
+        prev_rel = (body_prev_point(hit.lod, now) - frame.camera_frac) / VOXELS_PER_METRE;
+    }
+    let motion = prev_uv(prev_rel) - current_uv(rel);
     // The face the ray entered through; an aggregate LOD normal can point
     // the other way along this axis, so it is not used for the sign.
-    let face = hit.axis * 2u + select(0u, 1u, dir[hit.axis] < 0.0);
-    textureStore(vis_id, id.xy, vec4<u32>(vec3<u32>(hit.voxel), hit.material | (face << 16u) | (hit.kind << 30u)));
+    textureStore(vis_id, id.xy, vec4<u32>(vec3<u32>(hit.voxel), hit_id_word(hit, dir)));
     textureStore(vis_depth, id.xy, vec4<f32>(t_m));
     textureStore(vis_motion, id.xy, vec4<f32>(motion, oct_encode(normal)));
 }

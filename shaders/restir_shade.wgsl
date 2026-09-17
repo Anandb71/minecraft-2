@@ -3,6 +3,7 @@
 #import "common.wgsl"
 #import "frame.wgsl"
 #import "march.wgsl"
+#import "bodies.wgsl"
 #import "brdf.wgsl"
 #import "restir_common.wgsl"
 
@@ -30,7 +31,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let s = shading_at(pixel, id);
     let light = lights[r.light];
     let irradiance = light_irradiance(s, light, r.offset);
-    let hit = march(shadow_ray_to(s, face_of(id), sample_point(light, r.offset)));
+    let hit = trace_scene(shadow_ray_to(s, id_face(id, s.normal), sample_point(light, r.offset)), 0.0);
     let visible = select(0.0, 1.0, hit.kind == HIT_NONE);
     textureStore(out_light, pixel, vec4<f32>(irradiance * r.w * visible, 1.0));
 }

@@ -7,6 +7,7 @@
 #import "common.wgsl"
 #import "frame.wgsl"
 #import "march.wgsl"
+#import "bodies.wgsl"
 
 @group(2) @binding(0) var vis_id: texture_2d<u32>;
 @group(2) @binding(1) var vis_depth: texture_2d<f32>;
@@ -125,7 +126,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         ray.lod_scale = frame.pixel_angle * frame.lod_pixels * 8.0;
         ray.feedback = false;
         ray.coarse = false;
-        if march(ray).kind != HIT_NONE {
+        if trace_scene(ray, ray.t_min).kind != HIT_NONE {
             // Keep this pixel's own temporal reservoir rather than going dark.
             store(p, own);
             return;

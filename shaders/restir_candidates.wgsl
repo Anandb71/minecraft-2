@@ -5,6 +5,7 @@
 #import "common.wgsl"
 #import "frame.wgsl"
 #import "march.wgsl"
+#import "bodies.wgsl"
 #import "brdf.wgsl"
 #import "restir_common.wgsl"
 
@@ -50,7 +51,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     if r.light != 0xffffffffu && r.target_pdf > 0.0 {
         r.w = r.w_sum / (r.m * r.target_pdf);
-        let hit = march(shadow_ray_to(s, face_of(id), sample_point(lights[r.light], r.offset)));
+        let hit = trace_scene(shadow_ray_to(s, id_face(id, s.normal), sample_point(lights[r.light], r.offset)), 0.0);
         if hit.kind != HIT_NONE {
             r.w = 0.0;
         }

@@ -8,6 +8,7 @@
 #import "common.wgsl"
 #import "frame.wgsl"
 #import "march.wgsl"
+#import "bodies.wgsl"
 #import "lighting.wgsl"
 
 @group(2) @binding(0) var vis_id: texture_2d<u32>;
@@ -22,7 +23,7 @@ fn light_visible(s: Surface, dir: vec3<f32>, range_m: f32) -> f32 {
     if dot(s.face, dir) <= 0.0 {
         return 0.0;
     }
-    let hit = march(secondary_ray(s, dir, range_m));
+    let hit = trace_scene(secondary_ray(s, dir, range_m), 0.0);
     return select(0.0, 1.0, hit.kind == HIT_NONE);
 }
 

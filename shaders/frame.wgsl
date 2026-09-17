@@ -2,6 +2,7 @@
 // Positions on the GPU are camera relative: the camera sits at an integer
 // world voxel plus a fraction, and every world coordinate is formed as an
 // integer difference first, so precision does not decay 8 km from origin.
+#import "common.wgsl"
 
 struct Frame {
     view_proj: mat4x4<f32>,
@@ -63,10 +64,25 @@ fn same_surface(id: vec4<u32>, prev: vec4<u32>, depth_m: f32, pixels: f32) -> bo
     if ((prev.w >> 16u) & 7u) != ((id.w >> 16u) & 7u) {
         return false;
     }
+    // A body only matches itself (its tag), and never the world.
+    if ((prev.w >> 19u) & 0x7ffu) != ((id.w >> 19u) & 0x7ffu) || ((prev.w >> 30u) == 2u) != ((id.w >> 30u) == 2u) {
+        return false;
+    }
     let footprint = depth_m * VOXELS_PER_METRE * frame.pixel_angle * pixels;
     let tolerance = vec3<i32>(i32(1.0 + ceil(footprint)));
     let d = abs(vec3<i32>(prev.xyz) - vec3<i32>(id.xyz));
     return all(d <= tolerance);
+}
+
+// Outward face of a visibility id: an axis for the world, the stored normal
+// for bodies, whose faces turn with them.
+fn id_face(id: vec4<u32>, normal: vec3<f32>) -> vec3<f32> {
+    if (id.w >> 30u) == 2u {
+        return normal;
+    }
+    let face_index = (id.w >> 16u) & 7u;
+    let sign = select(-1.0, 1.0, (face_index & 1u) == 1u);
+    return select(vec3<f32>(0.0), vec3<f32>(sign), axis_mask(face_index / 2u));
 }
 
 // Camera-relative direction (metres) through a pixel centre plus jitter.
