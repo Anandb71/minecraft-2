@@ -127,7 +127,7 @@ impl PhysicsWorld {
                 let mut found = 0;
                 for _ in 0..substeps {
                     integrate(b, h);
-                    let contacts = solve_world(b, window.as_ref());
+                    let contacts = solve_world(b, window.as_ref(), h);
                     derive_velocities(b, h);
                     solve_world_velocities(b, &contacts, h);
                     found += contacts.len();
@@ -153,7 +153,7 @@ impl PhysicsWorld {
                     contacts.clear();
                     if !b.asleep {
                         integrate(b, h);
-                        *contacts = solve_world(b, window.as_ref());
+                        *contacts = solve_world(b, window.as_ref(), h);
                     }
                 };
                 if serial {
@@ -172,7 +172,7 @@ impl PhysicsWorld {
                 }
                 let pair_start = std::time::Instant::now();
                 let mut pc = find_pair_contacts(&mut self.bodies, &pairs);
-                solve_pair_positions(&mut self.bodies, &mut pc);
+                solve_pair_positions(&mut self.bodies, &mut pc, h);
                 pair_time += pair_start.elapsed();
                 let finish = |b: &mut Body, contacts: &Vec<Contact>| {
                     if !b.asleep {
@@ -204,7 +204,14 @@ impl PhysicsWorld {
                 b.still_time += dt;
                 continue;
             }
-            let speed = b.vel.length() + b.ang_vel.length() * b.shape.radius;
+            // Judge rest by how far the body actually moved over the step:
+            // resting contact leaves substep velocities that flicker around
+            // tiny position corrections without going anywhere.
+            let moved = (b.pos - b.step_start_pos).length() as f32;
+            let turned = (b.rot * b.step_start_rot.inverse())
+                .to_scaled_axis()
+                .length();
+            let speed = (moved + turned * b.shape.radius) / dt;
             if speed < SLEEP_SPEED {
                 b.still_time += dt;
                 if b.still_time > SLEEP_TIME {
@@ -244,12 +251,12 @@ fn reach_window<'a>(b: &Body, dt: f32, world: &'a VoxelWorld) -> VoxelWindow<'a>
 }
 
 /// World contacts of a body this substep, already solved for position.
-fn solve_world(b: &mut Body, window: Option<&VoxelWindow>) -> Vec<Contact> {
+fn solve_world(b: &mut Body, window: Option<&VoxelWindow>, h: f32) -> Vec<Contact> {
     let Some(window) = window.filter(|w| w.any_matter()) else {
         return Vec::new();
     };
     let mut contacts = find_world_contacts(b, window);
-    solve_world_positions(b, &mut contacts);
+    solve_world_positions(b, &mut contacts, h);
     contacts
 }
 
@@ -326,6 +333,29 @@ mod tests {
         let up = b.grid_rotation().inverse() * Vec3::Y;
         assert!(up.abs().max_element() > 0.98, "tilted: {up}");
         assert!((b.pos.y - 2.25).abs() < 0.06, "rest height {}", b.pos.y);
+    }
+
+    #[test]
+    fn friction_stops_a_spinning_sliding_cube() {
+        let w = ground();
+        let mut p = PhysicsWorld::new();
+        let id = p.spawn(cube(6), DVec3::new(8.0, 2.1875, 8.0), Quat::IDENTITY);
+        {
+            let b = p.body_mut(id).unwrap();
+            b.vel = Vec3::new(2.0, 0.0, 0.0);
+            b.ang_vel = Vec3::new(0.0, 6.0, 0.0);
+        }
+        let mut trace = Vec::new();
+        for i in 0..480 {
+            p.step(1.0 / 120.0, &w);
+            let b = p.body(id).unwrap();
+            if i % 40 == 0 {
+                trace.push((b.vel, b.ang_vel, b.pos.y));
+            }
+        }
+        let b = p.body(id).unwrap();
+        assert!(b.asleep, "still moving: {trace:?}");
+        assert!((b.pos.y - 2.1875).abs() < 0.03, "{}", b.pos.y);
     }
 
     #[test]

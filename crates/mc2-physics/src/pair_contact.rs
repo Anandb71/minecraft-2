@@ -5,6 +5,8 @@
 use crate::body::Body;
 use crate::probe::{SAMPLE_RADIUS, sphere_contacts};
 use crate::shape::VOXEL_M;
+use crate::world::GRAVITY;
+use crate::world_contact::MAX_DEPENETRATION_SPEED;
 use glam::{DVec3, Mat3, Vec3};
 
 #[derive(Clone, Copy, Debug)]
@@ -61,6 +63,9 @@ pub fn candidate_pairs(bodies: &[Body], dt: f32) -> Vec<(usize, usize)> {
     pairs
 }
 
+/// Speed at which a body wakes sleeping bodies it touches, m/s.
+const WAKE_SPEED: f32 = 0.25;
+
 pub fn find_pair_contacts(bodies: &mut [Body], pairs: &[(usize, usize)]) -> Vec<PairContact> {
     let mut out = Vec::new();
     let mut raw = Vec::new();
@@ -113,9 +118,15 @@ pub fn find_pair_contacts(bodies: &mut [Body], pairs: &[(usize, usize)]) -> Vec<
             }
         }
     }
-    // Touching a sleeping body wakes it.
+    // A moving body wakes a sleeping one it touches; a merely awake
+    // neighbour settling beside it does not.
+    let moving = |b: &Body| {
+        !b.asleep
+            && b.still_time == 0.0
+            && b.vel.length() + b.ang_vel.length() * b.shape.radius > WAKE_SPEED
+    };
     for c in &out {
-        if !bodies[c.a].asleep || !bodies[c.b].asleep {
+        if moving(&bodies[c.a]) || moving(&bodies[c.b]) {
             bodies[c.a].wake();
             bodies[c.b].wake();
         }
@@ -123,7 +134,7 @@ pub fn find_pair_contacts(bodies: &mut [Body], pairs: &[(usize, usize)]) -> Vec<
     out
 }
 
-pub fn solve_pair_positions(bodies: &mut [Body], contacts: &mut [PairContact]) {
+pub fn solve_pair_positions(bodies: &mut [Body], contacts: &mut [PairContact], h: f32) {
     for c in contacts.iter_mut() {
         let (a, b) = pair_mut(bodies, c.a, c.b);
         c.ra = a.rot * c.la;
@@ -131,6 +142,11 @@ pub fn solve_pair_positions(bodies: &mut [Body], contacts: &mut [PairContact]) {
         let moved_a = a.pos + c.ra.as_dvec3() - c.pa;
         let moved_b = b.pos + c.rb.as_dvec3() - c.pb;
         let depth = c.depth - c.n.dot((moved_a - moved_b).as_vec3());
+        // Relative approach of the two contact points during this substep.
+        let prev_a = a.prev_pos + (a.prev_rot * c.la).as_dvec3();
+        let prev_b = b.prev_pos + (b.prev_rot * c.lb).as_dvec3();
+        let approach = -c.n.dot(((c.pa - prev_a) - (c.pb - prev_b)).as_vec3());
+        let depth = depth.min(approach.max(0.0) + MAX_DEPENETRATION_SPEED * h);
         if depth <= 0.0 {
             continue;
         }
@@ -171,7 +187,12 @@ pub fn solve_pair_velocities(bodies: &mut [Body], contacts: &[PairContact], h: f
         let vn = c.n.dot(v);
         let vt = v - c.n * vn;
         let mu = 0.5 * (a.friction + b.friction);
-        let e = 0.5 * (a.restitution + b.restitution);
+        // No bounce from slow contact (Mueller et al. 2020, Eq. 34 note).
+        let e = if c.vn_before.abs() <= 2.0 * GRAVITY.length() * h {
+            0.0
+        } else {
+            0.5 * (a.restitution + b.restitution)
+        };
         let mut dv = c.n * (-vn + (-e * c.vn_before).max(0.0));
         let vt_len = vt.length();
         if vt_len > 1e-6 {

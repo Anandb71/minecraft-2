@@ -11,6 +11,10 @@ use mc2_voxel::window::VoxelWindow;
 
 /// Hard cap on contacts a body keeps per substep.
 const MAX_CONTACTS: usize = 48;
+/// Overlap a body did not move into this substep (spawned inside
+/// something, or pushed there by a neighbour) is resolved no faster than
+/// this, m/s, so crowded debris separates instead of exploding apart.
+pub const MAX_DEPENETRATION_SPEED: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Contact {
@@ -60,13 +64,16 @@ pub fn find_world_contacts(b: &Body, world: &VoxelWindow) -> Vec<Contact> {
     out
 }
 
-pub fn solve_world_positions(b: &mut Body, contacts: &mut [Contact]) {
+pub fn solve_world_positions(b: &mut Body, contacts: &mut [Contact], h: f32) {
     for c in contacts.iter_mut() {
         // Re-evaluate against the pose updated by earlier contacts: the
         // point has moved along the normal by however much they pushed it.
         let r_now = b.rot * c.local;
         let point_now = b.pos + r_now.as_dvec3();
         let depth = c.depth - c.n.dot((point_now - c.point).as_vec3());
+        // How far this substep's motion carried the point into the surface.
+        let approach = -c.n.dot((c.point - c.point_prev).as_vec3());
+        let depth = depth.min(approach.max(0.0) + MAX_DEPENETRATION_SPEED * h);
         let w = b.generalized_inverse_mass(r_now, c.n);
         c.r = r_now;
         if w <= 0.0 || depth <= 0.0 {
