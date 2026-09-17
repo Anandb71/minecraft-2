@@ -131,6 +131,8 @@ impl PhysicsWorld {
         }
         for b in &mut self.bodies {
             if b.asleep {
+                // Still counts how long the body has been at rest.
+                b.still_time += dt;
                 continue;
             }
             let speed = b.vel.length() + b.ang_vel.length() * b.shape.radius;

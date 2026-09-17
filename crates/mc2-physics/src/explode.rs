@@ -182,17 +182,19 @@ pub fn bake(world: &mut VoxelWorld, body: &Body) -> u64 {
 }
 
 /// Bakes bodies that have slept for `after_s` seconds (or the oldest
-/// sleepers while more than `max_bodies` exist) into the world.
+/// sleepers while more than `max_bodies` exist) into the world. Bodies for
+/// which `keep` is true stay bodies.
 pub fn bake_settled(
     world: &mut VoxelWorld,
     physics: &mut PhysicsWorld,
     after_s: f32,
     max_bodies: usize,
+    keep: impl Fn(BodyId) -> bool,
 ) -> Vec<BodyId> {
     let mut sleepers: Vec<(f32, BodyId)> = physics
         .bodies
         .iter()
-        .filter(|b| b.asleep)
+        .filter(|b| b.asleep && !keep(b.id))
         .map(|b| (b.still_time, b.id))
         .collect();
     sleepers.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -256,5 +258,26 @@ mod tests {
         let written = bake(&mut w, &body);
         assert_eq!(written, 64);
         assert_eq!(w.voxel(IVec3::splat(64)), ids::GRANITE);
+    }
+
+    #[test]
+    fn only_settled_bodies_not_kept_are_baked() {
+        let mut w = VoxelWorld::new();
+        w.fill_box(IVec3::ZERO, IVec3::new(255, 31, 255), ids::GRANITE);
+        let mut p = PhysicsWorld::new();
+        let shape = Arc::new(
+            BodyShape::from_voxels(IVec3::splat(4), vec![ids::PLANKS; 64]).expect("shape"),
+        );
+        let a = p.spawn(shape.clone(), DVec3::new(4.0, 2.2, 4.0), Quat::IDENTITY);
+        let kept = p.spawn(shape.clone(), DVec3::new(8.0, 2.2, 8.0), Quat::IDENTITY);
+        let flying = p.spawn(shape, DVec3::new(12.0, 30.0, 12.0), Quat::IDENTITY);
+        for _ in 0..240 {
+            p.step(1.0 / 120.0, &w);
+        }
+        let baked = bake_settled(&mut w, &mut p, 1.0, 100, |id| id == kept);
+        assert_eq!(baked, vec![a]);
+        assert!(p.body(kept).is_some() && p.body(flying).is_some());
+        let inside = (DVec3::new(4.0, 2.1, 4.0) * 16.0).floor().as_ivec3();
+        assert_eq!(w.voxel(inside), ids::PLANKS);
     }
 }
