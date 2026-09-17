@@ -168,9 +168,45 @@ pub fn capture(
     camera: &Camera,
     dir: &Path,
 ) -> Result<PathBuf, String> {
+    let quality = renderer.quality();
+    let mut top = Preset::SuperUltraCrazyDuperRealistic.settings();
+    top.gi = quality.gi;
+    renderer.set_quality(top);
+    let shutter = renderer.frame.post.shutter;
+    // A still frame: no motion blur.
+    renderer.frame.post.shutter = 0.0;
+    let result = render_to_png(gpu, renderer, world, camera, dir, CAPTURE_FRAMES, "photo");
+    renderer.frame.post.shutter = shutter;
+    renderer.set_quality(quality);
+    result
+}
+
+/// Saves the scene as the player sees it, at the current quality; the
+/// temporal histories are already settled, so one frame is enough.
+pub fn screenshot(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    world: &mut mc2_voxel::world::VoxelWorld,
+    camera: &Camera,
+    dir: &Path,
+) -> Result<PathBuf, String> {
+    render_to_png(gpu, renderer, world, camera, dir, 1, "screenshot")
+}
+
+/// Renders `frames` frames of the scene into an offscreen target without the
+/// HUD and writes the last one to `dir/<prefix>_<unix time>.png`.
+fn render_to_png(
+    gpu: &Gpu,
+    renderer: &mut Renderer,
+    world: &mut mc2_voxel::world::VoxelWorld,
+    camera: &Camera,
+    dir: &Path,
+    frames: u32,
+    prefix: &str,
+) -> Result<PathBuf, String> {
     let size = renderer.output_size();
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("photo target"),
+        label: Some("capture target"),
         size: wgpu::Extent3d {
             width: size.0,
             height: size.1,
@@ -183,30 +219,24 @@ pub fn capture(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    let quality = renderer.quality();
-    let mut top = Preset::SuperUltraCrazyDuperRealistic.settings();
-    top.gi = quality.gi;
-    renderer.set_quality(top);
     let hud = std::mem::take(&mut renderer.frame.hud);
-    let shutter = renderer.frame.post.shutter;
-    // A still frame: no motion blur.
-    renderer.frame.post.shutter = 0.0;
-    for _ in 0..CAPTURE_FRAMES {
+    let mut rendered = Ok(());
+    for _ in 0..frames {
         renderer.prepare(gpu, world, camera, 1.0 / 60.0);
         renderer.render(gpu, target.clone());
-        gpu.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| e.to_string())?;
+        if let Err(e) = gpu.device.poll(wgpu::PollType::wait_indefinitely()) {
+            rendered = Err(e.to_string());
+            break;
+        }
     }
-    renderer.frame.post.shutter = shutter;
     renderer.frame.hud = hud;
-    renderer.set_quality(quality);
+    rendered?;
     let rgba = mc2_gpu::capture::read_rgba8(&gpu.device, &gpu.queue, &target);
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let path = dir.join(format!("photo_{stamp}.png"));
+    let path = dir.join(format!("{prefix}_{stamp}.png"));
     mc2_gpu::capture::save_png(&path, size.0, size.1, &rgba).map_err(|e| e.to_string())?;
     Ok(path)
 }

@@ -18,7 +18,6 @@ pub enum Key {
     Slot(u8),
     Interact,
     Photo,
-    Screenshot,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

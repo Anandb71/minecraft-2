@@ -44,6 +44,7 @@ pub struct App {
     quality: mc2_render::quality::Preset,
     gi: Option<mc2_render::indirect::GiMethod>,
     photo: crate::photo::PhotoMode,
+    screenshot_requested: bool,
     error: Option<String>,
     exit_after: Option<u32>,
     frames: u32,
@@ -63,7 +64,6 @@ fn map_key(code: KeyCode) -> Option<Key> {
         KeyCode::Tab => Key::ToggleMode,
         KeyCode::KeyE => Key::Interact,
         KeyCode::KeyP => Key::Photo,
-        KeyCode::F2 => Key::Screenshot,
         KeyCode::Digit1 => Key::Slot(0),
         KeyCode::Digit2 => Key::Slot(1),
         KeyCode::Digit3 => Key::Slot(2),
@@ -94,6 +94,7 @@ impl App {
             quality: args.quality,
             gi: args.gi,
             photo: crate::photo::PhotoMode::default(),
+            screenshot_requested: false,
             error: None,
             exit_after: args.exit_after,
             frames: 0,
@@ -268,6 +269,19 @@ impl App {
                 Err(e) => log::error!("photo failed: {e}"),
             }
         }
+        if std::mem::take(&mut self.screenshot_requested) {
+            let mut voxels = self.game.world.resource_mut::<mc2_game::Voxels>();
+            match crate::photo::screenshot(
+                &r.gpu,
+                renderer,
+                &mut voxels.0,
+                &self.camera,
+                std::path::Path::new("captures"),
+            ) {
+                Ok(path) => log::info!("screenshot saved to {}", path.display()),
+                Err(e) => log::error!("screenshot failed: {e}"),
+            }
+        }
         {
             let mut voxels = self.game.world.resource_mut::<mc2_game::Voxels>();
             renderer.prepare(&r.gpu, &mut voxels.0, &self.camera, dt);
@@ -322,7 +336,7 @@ impl App {
                     )
                 },
                 format!(
-                    "click capture  WASD move  space jump  ctrl crouch  shift sprint  F fly  F5 view  Tab mode  1-9 slot  F3 HUD  F4 view {}  V vsync {}",
+                    "click capture  WASD move  space jump  ctrl crouch  shift sprint  F fly  F5 view  Tab mode  1-9 slot  F2 shot  F3 HUD  F4 view {}  V vsync {}  P photo",
                     self.debug_mode,
                     if self.vsync { "on" } else { "off" }
                 ),
@@ -384,6 +398,7 @@ impl App {
                     event_loop.exit();
                 }
             }
+            KeyCode::F2 => self.screenshot_requested = true,
             KeyCode::F3 => self.show_profiler = !self.show_profiler,
             KeyCode::KeyP => {
                 if self.photo.active {
