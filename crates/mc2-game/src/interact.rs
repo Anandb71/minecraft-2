@@ -142,17 +142,16 @@ fn targetable(m: MaterialId) -> bool {
     !m.is_air() && m.get().kind != Kind::Liquid
 }
 
-/// Applies `f(voxel, old) -> new` over an inclusive voxel box. Coarse cells
-/// that were never touched are first restored to full generated detail.
-/// Returns (removed, added) material volumes.
-pub fn edit_box(
+/// Readies an inclusive voxel box for editing: coarse cells that were never
+/// touched get their full generated detail back, and the chunks are pinned
+/// so streaming never regenerates over the edit.
+pub fn prepare_edit(
     world: &mut VoxelWorld,
     streamer: Option<&mut ChunkStreamer>,
     touched: &mut FxHashSet<(ChunkPos, IVec3)>,
     min: IVec3,
     max: IVec3,
-    mut f: impl FnMut(IVec3, MaterialId) -> MaterialId,
-) -> (FxHashMap<MaterialId, u64>, FxHashMap<MaterialId, u64>) {
+) {
     let mut chunks = FxHashSet::default();
     let mut restore: FxHashMap<ChunkPos, Vec<IVec3>> = FxHashMap::default();
     let (lo_cell, hi_cell) = (min >> BRICK_SHIFT, max >> BRICK_SHIFT);
@@ -177,7 +176,7 @@ pub fn edit_box(
     }
     // Coarse cells get their generated voxel detail back, one chunk sample
     // pass per chunk however many cells the edit touches.
-    if let Some(s) = streamer.as_ref() {
+    if let Some(s) = streamer.as_deref() {
         for (pos, cells) in restore {
             let bricks = s.generator().detail_bricks(pos, &cells);
             if let Some(tree) = world.chunk_mut(pos) {
@@ -187,6 +186,24 @@ pub fn edit_box(
             }
         }
     }
+    if let Some(s) = streamer {
+        for pos in chunks {
+            s.pin(pos);
+        }
+    }
+}
+
+/// Applies `f(voxel, old) -> new` over an inclusive voxel box after
+/// [`prepare_edit`]. Returns (removed, added) material volumes.
+pub fn edit_box(
+    world: &mut VoxelWorld,
+    streamer: Option<&mut ChunkStreamer>,
+    touched: &mut FxHashSet<(ChunkPos, IVec3)>,
+    min: IVec3,
+    max: IVec3,
+    mut f: impl FnMut(IVec3, MaterialId) -> MaterialId,
+) -> (FxHashMap<MaterialId, u64>, FxHashMap<MaterialId, u64>) {
+    prepare_edit(world, streamer, touched, min, max);
     let mut removed: FxHashMap<MaterialId, u64> = FxHashMap::default();
     let mut added: FxHashMap<MaterialId, u64> = FxHashMap::default();
     for z in min.z..=max.z {
@@ -206,11 +223,6 @@ pub fn edit_box(
                     *added.entry(new).or_default() += 1;
                 }
             }
-        }
-    }
-    if let Some(s) = streamer {
-        for pos in chunks {
-            s.pin(pos);
         }
     }
     (removed, added)
