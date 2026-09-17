@@ -94,6 +94,11 @@ pub struct Physics {
     pub blasts: Vec<Blast>,
     /// Last blast, for the HUD and demos.
     pub last_blast: Option<ExplosionReport>,
+    /// Voxel boxes this module changed (blasts, lit charges, baking), for
+    /// other systems to pick up.
+    pub edited_out: Vec<(IVec3, IVec3)>,
+    /// Boxes where settled debris became terrain again.
+    pub baked_out: Vec<(IVec3, IVec3)>,
     pub blasts_total: u64,
     next_bake: f64,
     seed: u64,
@@ -106,6 +111,8 @@ impl Default for Physics {
             fuses: Vec::new(),
             blasts: Vec::new(),
             last_blast: None,
+            edited_out: Vec::new(),
+            baked_out: Vec::new(),
             blasts_total: 0,
             next_bake: 0.0,
             seed: 0x51f1_5eed,
@@ -120,6 +127,13 @@ impl Physics {
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1_442_695_040_888_963_407);
         self.seed
+    }
+
+    /// Voxels in `lo..=hi` changed: physics resends and wakes, and other
+    /// systems hear about it.
+    pub fn world_edited(&mut self, lo: IVec3, hi: IVec3) {
+        self.host.edited(lo, hi);
+        self.edited_out.push((lo, hi));
     }
 
     /// Whether a body carries a lit fuse.
@@ -164,7 +178,7 @@ pub fn ignite_block(
         remaining: fuse_s,
         radius: TNT_RADIUS_M,
     });
-    physics.host.edited(o, o + n - 1);
+    physics.world_edited(o, o + n - 1);
     Some(id)
 }
 
@@ -219,7 +233,7 @@ pub fn detonate(
     for d in &debris {
         physics.host.spawn_debris(d);
     }
-    physics.host.edited(lo, hi);
+    physics.world_edited(lo, hi);
     interaction.edits += 1;
     physics.blasts_total += 1;
     physics.last_blast = Some(report);
@@ -295,7 +309,7 @@ pub fn step_physics(
     physics.host.set_obstacles(obstacles);
     let world = &mut voxels.0;
     for (lo, hi) in interaction.edited.drain(..) {
-        physics.host.edited(lo, hi);
+        physics.world_edited(lo, hi);
     }
     let dt = time.fixed_dt as f32;
     physics.host.tick(world, dt);
@@ -348,9 +362,9 @@ fn bake_settled(world: &mut VoxelWorld, physics: &mut Physics) -> usize {
             bake(world, &b);
             let r = f64::from(b.shape.radius) * 16.0;
             let c = b.pos * 16.0;
-            physics
-                .host
-                .edited((c - r).floor().as_ivec3(), (c + r).ceil().as_ivec3());
+            let (lo, hi) = ((c - r).floor().as_ivec3(), (c + r).ceil().as_ivec3());
+            physics.world_edited(lo, hi);
+            physics.baked_out.push((lo, hi));
             baked += 1;
         }
     }

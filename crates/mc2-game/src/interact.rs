@@ -119,6 +119,8 @@ pub struct Interaction {
     /// Voxel boxes edited since physics last looked, so resting debris
     /// there wakes up.
     pub edited: Vec<(IVec3, IVec3)>,
+    /// Voxel boxes where the player placed material: structure, not rock.
+    pub built: Vec<(IVec3, IVec3)>,
 }
 
 impl Default for Interaction {
@@ -137,6 +139,7 @@ impl Default for Interaction {
             touched: FxHashSet::default(),
             edits: 0,
             edited: Vec::new(),
+            built: Vec::new(),
         }
     }
 }
@@ -370,6 +373,7 @@ pub fn interact(
                     layer.set(t.place, explicit.then_some(kind));
                     state.edits += 1;
                     state.edited.push((o, o + 15));
+                    state.built.push((o, o + 15));
                 }
             }
         }
@@ -421,6 +425,9 @@ pub fn interact(
             state.inventory.spend(&spent);
             state.edits += 1;
             state.edited.push((lo, hi));
+            if depositing && !carving {
+                state.built.push((lo, hi));
+            }
         }
     }
 }
