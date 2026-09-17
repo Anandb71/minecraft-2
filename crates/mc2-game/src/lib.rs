@@ -6,6 +6,7 @@ pub mod collide;
 pub mod input;
 pub mod interact;
 pub mod physics;
+pub mod physics_host;
 pub mod player;
 pub mod view;
 
