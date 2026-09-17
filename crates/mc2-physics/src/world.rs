@@ -5,11 +5,13 @@ use crate::body::{Body, BodyId};
 use crate::pair_contact::{
     candidate_pairs, find_pair_contacts, solve_pair_positions, solve_pair_velocities,
 };
+use crate::probe::SAMPLE_RADIUS;
 use crate::shape::BodyShape;
 use crate::world_contact::{
     Contact, find_world_contacts, solve_world_positions, solve_world_velocities,
 };
 use glam::{DVec3, Quat, Vec3};
+use mc2_voxel::window::VoxelWindow;
 use mc2_voxel::world::VoxelWorld;
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -26,7 +28,11 @@ pub struct PhysicsStats {
     pub awake: usize,
     pub world_contacts: usize,
     pub pair_contacts: usize,
+    /// Candidate pairs from the broad phase.
+    pub pairs: usize,
     pub step_ms: f32,
+    /// Of which body-body contact search and solve.
+    pub pair_ms: f32,
 }
 
 pub struct PhysicsWorld {
@@ -96,38 +102,101 @@ impl PhysicsWorld {
         // Broad phase once per step: bounding sphere pairs, expanded by
         // how far the bodies can travel.
         let pairs = candidate_pairs(&self.bodies, dt);
-        let mut world_contacts = 0usize;
-        let mut pair_contacts = 0usize;
-        for _ in 0..substeps {
-            // Integrate and solve world contacts, bodies in parallel.
-            let contacts: Vec<Vec<Contact>> = self
-                .bodies
-                .par_iter_mut()
-                .map(|b| {
-                    if b.asleep {
-                        return Vec::new();
-                    }
+        // The world around each awake body, over everywhere it can reach
+        // this step, read once instead of per sample and substep.
+        let windows: Vec<Option<VoxelWindow>> = self
+            .bodies
+            .par_iter()
+            .map(|b| (!b.asleep).then(|| reach_window(b, dt, world)))
+            .collect();
+        let mut paired = vec![false; self.bodies.len()];
+        for &(i, j) in &pairs {
+            paired[i] = true;
+            paired[j] = true;
+        }
+        // A body near no other body is independent for the whole step: one
+        // parallel task runs all of its substeps.
+        let mut world_contacts: usize = self
+            .bodies
+            .par_iter_mut()
+            .zip(windows.par_iter())
+            .zip(paired.par_iter())
+            .with_min_len(4)
+            .filter(|((b, _), p)| !b.asleep && !**p)
+            .map(|((b, window), _)| {
+                let mut found = 0;
+                for _ in 0..substeps {
                     integrate(b, h);
-                    let mut contacts = find_world_contacts(b, world);
-                    solve_world_positions(b, &mut contacts);
-                    contacts
-                })
-                .collect();
-            let mut pc = find_pair_contacts(&mut self.bodies, &pairs);
-            solve_pair_positions(&mut self.bodies, &mut pc);
-            self.bodies
-                .par_iter_mut()
-                .zip(contacts.par_iter())
-                .for_each(|(b, contacts)| {
-                    if b.asleep {
-                        return;
-                    }
+                    let contacts = solve_world(b, window.as_ref());
                     derive_velocities(b, h);
-                    solve_world_velocities(b, contacts, h);
-                });
-            solve_pair_velocities(&mut self.bodies, &pc, h);
-            world_contacts += contacts.iter().map(Vec::len).sum::<usize>();
-            pair_contacts += pc.len();
+                    solve_world_velocities(b, &contacts, h);
+                    found += contacts.len();
+                }
+                found
+            })
+            .sum();
+        // Bodies that may touch each other advance together, substep by
+        // substep, with the pair constraints between their world solves.
+        let mut contacts: Vec<Vec<Contact>> = vec![Vec::new(); self.bodies.len()];
+        let mut pair_time = std::time::Duration::ZERO;
+        let mut pair_contacts = 0usize;
+        let group: Vec<usize> = (0..self.bodies.len()).filter(|&i| paired[i]).collect();
+        // Small groups are cheaper serial than split across threads.
+        let serial = group.len() < 24;
+        if !pairs.is_empty() {
+            for _ in 0..substeps {
+                let begin = |(b, window, contacts): (
+                    &mut Body,
+                    &Option<VoxelWindow>,
+                    &mut Vec<Contact>,
+                )| {
+                    contacts.clear();
+                    if !b.asleep {
+                        integrate(b, h);
+                        *contacts = solve_world(b, window.as_ref());
+                    }
+                };
+                if serial {
+                    for &i in &group {
+                        begin((&mut self.bodies[i], &windows[i], &mut contacts[i]));
+                    }
+                } else {
+                    self.bodies
+                        .par_iter_mut()
+                        .zip(windows.par_iter())
+                        .zip(contacts.par_iter_mut())
+                        .zip(paired.par_iter())
+                        .with_min_len(8)
+                        .filter(|(_, p)| **p)
+                        .for_each(|(((b, w), c), _)| begin((b, w, c)));
+                }
+                let pair_start = std::time::Instant::now();
+                let mut pc = find_pair_contacts(&mut self.bodies, &pairs);
+                solve_pair_positions(&mut self.bodies, &mut pc);
+                pair_time += pair_start.elapsed();
+                let finish = |b: &mut Body, contacts: &Vec<Contact>| {
+                    if !b.asleep {
+                        derive_velocities(b, h);
+                        solve_world_velocities(b, contacts, h);
+                    }
+                };
+                if serial {
+                    for &i in &group {
+                        finish(&mut self.bodies[i], &contacts[i]);
+                    }
+                } else {
+                    self.bodies
+                        .par_iter_mut()
+                        .zip(contacts.par_iter())
+                        .zip(paired.par_iter())
+                        .with_min_len(8)
+                        .filter(|(_, p)| **p)
+                        .for_each(|((b, c), _)| finish(b, c));
+                }
+                solve_pair_velocities(&mut self.bodies, &pc, h);
+                world_contacts += contacts.iter().map(Vec::len).sum::<usize>();
+                pair_contacts += pc.len();
+            }
         }
         for b in &mut self.bodies {
             if b.asleep {
@@ -152,9 +221,36 @@ impl PhysicsWorld {
             awake: self.bodies.iter().filter(|b| !b.asleep).count(),
             world_contacts: world_contacts / substeps as usize,
             pair_contacts: pair_contacts / substeps as usize,
+            pairs: pairs.len(),
             step_ms: start.elapsed().as_secs_f32() * 1000.0,
+            pair_ms: pair_time.as_secs_f32() * 1000.0,
         };
     }
+}
+
+/// Voxels a body's samples can touch during a step of `dt`: its bounding
+/// sphere at the start and at the ballistic end point, plus a sample radius
+/// and a voxel of slack.
+fn reach_window<'a>(b: &Body, dt: f32, world: &'a VoxelWorld) -> VoxelWindow<'a> {
+    let end = b.pos + ((b.vel + GRAVITY * dt * 0.5) * dt).as_dvec3();
+    let r = f64::from(b.shape.radius + SAMPLE_RADIUS) + 1.0 / 16.0;
+    let lo = b.pos.min(end) - r;
+    let hi = b.pos.max(end) + r;
+    VoxelWindow::new(
+        world,
+        (lo * 16.0).floor().as_ivec3(),
+        (hi * 16.0).floor().as_ivec3(),
+    )
+}
+
+/// World contacts of a body this substep, already solved for position.
+fn solve_world(b: &mut Body, window: Option<&VoxelWindow>) -> Vec<Contact> {
+    let Some(window) = window.filter(|w| w.any_matter()) else {
+        return Vec::new();
+    };
+    let mut contacts = find_world_contacts(b, window);
+    solve_world_positions(b, &mut contacts);
+    contacts
 }
 
 fn integrate(b: &mut Body, h: f32) {

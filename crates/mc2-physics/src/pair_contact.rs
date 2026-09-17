@@ -5,7 +5,7 @@
 use crate::body::Body;
 use crate::probe::{SAMPLE_RADIUS, sphere_contacts};
 use crate::shape::VOXEL_M;
-use glam::{DVec3, Vec3};
+use glam::{DVec3, Mat3, Vec3};
 
 #[derive(Clone, Copy, Debug)]
 pub struct PairContact {
@@ -64,16 +64,30 @@ pub fn candidate_pairs(bodies: &[Body], dt: f32) -> Vec<(usize, usize)> {
 pub fn find_pair_contacts(bodies: &mut [Body], pairs: &[(usize, usize)]) -> Vec<PairContact> {
     let mut out = Vec::new();
     let mut raw = Vec::new();
+    let r = f64::from(SAMPLE_RADIUS / VOXEL_M);
     for &(i, j) in pairs {
         for (x, y) in [(i, j), (j, i)] {
             let (sampler, other) = (&bodies[x], &bodies[y]);
             let grid_rot = other.grid_rotation();
+            // Sampler principal frame (metres) to the other's grid (voxels):
+            // g = m * s + t, one matrix product per sample.
+            let to_grid = Mat3::from_quat(grid_rot.inverse()) * (1.0 / VOXEL_M);
+            let m = to_grid * Mat3::from_quat(sampler.rot);
+            let t = to_grid * (sampler.pos - other.grid_origin()).as_vec3();
+            let lo = Vec3::splat(-1.0);
+            let hi = other.shape.size.as_vec3() + 1.0;
             for &s in &sampler.shape.samples {
-                let p = sampler.world_point(s);
-                let (_, g) = other.grid_point(p);
+                let g = m * s + t;
+                // Only samples within a voxel of the other grid can touch it.
+                if g.cmplt(lo).any() || g.cmpgt(hi).any() {
+                    continue;
+                }
                 raw.clear();
-                let r = f64::from(SAMPLE_RADIUS / VOXEL_M);
                 sphere_contacts(g.as_dvec3(), r, |c| other.shape.get(c).is_solid(), &mut raw);
+                if raw.is_empty() {
+                    continue;
+                }
+                let p = sampler.world_point(s);
                 for &(o, d, _) in &raw {
                     let n = grid_rot * o.as_vec3();
                     let depth = d as f32 * VOXEL_M;

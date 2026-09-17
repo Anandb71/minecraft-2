@@ -3,7 +3,7 @@
 
 use crate::shape::VOXEL_M;
 use glam::{DVec3, IVec3, Vec3};
-use mc2_voxel::world::VoxelWorld;
+use mc2_voxel::window::VoxelWindow;
 
 /// Collision samples are spheres of half a voxel.
 pub const SAMPLE_RADIUS: f32 = VOXEL_M * 0.5;
@@ -74,7 +74,7 @@ fn axis_of(o: IVec3) -> usize {
 
 /// World contacts of a sample sphere at `p` (world metres): normal, depth
 /// in metres, contact point.
-pub fn sample_contacts(world: &VoxelWorld, p: DVec3, out: &mut Vec<(Vec3, f32, DVec3)>) {
+pub fn sample_contacts(world: &VoxelWindow, p: DVec3, out: &mut Vec<(Vec3, f32, DVec3)>) {
     let mut raw = Vec::new();
     let r = f64::from(SAMPLE_RADIUS) * 16.0;
     sphere_contacts(p * 16.0, r, |v| world.voxel(v).is_solid(), &mut raw);

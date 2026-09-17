@@ -7,7 +7,7 @@ use crate::body::Body;
 use crate::probe::sample_contacts;
 use crate::world::GRAVITY;
 use glam::{DVec3, Vec3};
-use mc2_voxel::world::VoxelWorld;
+use mc2_voxel::window::VoxelWindow;
 
 /// Hard cap on contacts a body keeps per substep.
 const MAX_CONTACTS: usize = 48;
@@ -31,7 +31,7 @@ pub struct Contact {
     point_prev: DVec3,
 }
 
-pub fn find_world_contacts(b: &Body, world: &VoxelWorld) -> Vec<Contact> {
+pub fn find_world_contacts(b: &Body, world: &VoxelWindow) -> Vec<Contact> {
     let mut raw = Vec::new();
     let mut out = Vec::new();
     for &s in &b.shape.samples {
