@@ -493,3 +493,86 @@ would have aliased on its 16-chunk torus.
   without a second structure to keep in step with edits (D20).
 - Separate shadow and sky rays at every indirect hit: they would triple the
   ray count for light the sky map predicts well.
+
+## Step 8: Reflections, volumetrics, clouds, post stack, photo mode (`v0.8-atmosphere`)
+
+**Read first.** Schneider and Vos 2015, "The Real-time Volumetric
+Cloudscapes of Horizon Zero Dawn" (Perlin-Worley and Worley noise volumes,
+height gradients per cloud type, weather coverage, Beer and powder terms, the
+six-sample light cone, cheap-then-full marching, 1-in-16 amortisation);
+Hillaire 2015, "Physically Based and Unified Volumetric Rendering in
+Frostbite" (froxels, exponential depth, jittered temporal integration,
+energy-conserving scattering integration); Wrenninge's multiple scattering
+octaves as used by Hillaire 2016; Heitz 2018, "Sampling the GGX
+Distribution of Visible Normals" (Listing 1 and the F G2 / G1 estimator);
+Jimenez 2014, "Next Generation Post Processing in Call of Duty: Advanced
+Warfare" (13-tap downsample, Karis average, tent upsample).
+
+**Built.**
+
+- Clouds (`clouds.rs`, `cloud_noise.wgsl`, `clouds_*.wgsl`): tiling 128^3
+  Perlin-Worley and 32^3 Worley volumes generated on the GPU; a 1.5-4 km
+  spherical shell with stratus-to-cumulus gradients, coverage varying over
+  24 km, detail erosion; lighting from the sun or moon through a six-step
+  cone plus a far sample, three multiple-scattering octaves with a dual-lobe
+  phase and a powder term, and sky ambient by height; one texel in four of a
+  half-resolution buffer traced per frame and the rest reprojected by view
+  direction; a 256^2 toroidal cloud shadow map on the base plane that dims
+  the sun and moon on the ground, in fog and at indirect hits.
+- Froxel fog (`fog.rs`, `fog_*.wgsl`): height fog in 64 exponential slices
+  to 192 m at 1/8 resolution, lit by the sun or moon (transmittance, sky map
+  visibility, cloud shadow, Henyey-Greenstein) and the sky, jittered and
+  reprojected, integrated front to back and applied after aerial
+  perspective. As in the paper, one sample per froxel is jittered along the
+  view ray, material and light with the same offset, and integrated
+  analytically per slice; the history keeps 90% rather than Frostbite's 95%
+  so moving cloud shadows leave shorter trails. The frame graph gained a
+  render-relative volume size.
+- Traced reflections (`reflect_trace.wgsl`, `indirect.rs`): VNDF-sampled
+  rays for surfaces up to roughness 0.5, shaded like indirect hits with the
+  sky, denoised by SVGF and added in composition. SVGF now skips pixels a
+  signal does not cover.
+- Post (`post.rs`, `post_*.wgsl`, `present.wgsl`): six-level bloom, camera
+  motion blur over half a frame, thin-lens depth of field, then in present
+  the Purkinje shift at low adaptation, AgX, contrast-adaptive sharpening,
+  cos^4 vignetting and film grain.
+- Photo mode (`src/photo.rs`): `P` stops time and detaches a free camera;
+  focal length on the wheel (12-400 mm), focus, aperture in full stops and
+  exposure in thirds; `Enter` renders 96 frames at Super Ultra Crazy Duper
+  Realistic without motion blur and saves `captures/photo_<time>.png`.
+  `--dof focus,f` gives headless captures the same lens.
+- `--demo mirror` lays steel, obsidian and ice slabs by a marble wall.
+
+**Measured** (integrated GPU, 1280x720 output, 120 frames, static camera,
+GPU time per budget group summed over its passes):
+
+| Scene, preset | Frame mean / p99 | vis | direct | indirect | refl | denoise | clouds + fog | post |
+|---|---|---|---|---|---|---|---|---|
+| Terrain, Realistic | 47.9 / 52.4 ms | 11.0 | 6.3 | 2.7 | 3.9 | 8.1 | 1.2 + 2.0 | 6.4 |
+| Terrain, Hyper Realistic | 71.2 / 74.0 ms | 18.6 | 11.2 | 3.8 | 7.2 | 11.4 | 2.4 + 3.4 | 6.3 |
+| Terrain, Ultra Realistic | 116.5 / 126.0 ms | 22.0 | 44.5 | 5.9 | 9.0 | 13.3 | 3.6 + 4.2 | 6.2 |
+| Terrain, Super Ultra Crazy Duper Realistic | 188.4 / 192.3 ms | 33.8 | 77.8 | 9.1 | 16.3 | 20.7 | 7.3 + 7.5 | 6.1 |
+| Mirror demo, Realistic | 61.5 / 67.5 ms | 11.8 | 7.9 | 3.3 | 6.6 | 9.1 | 1.1 + 1.9 | 6.5 |
+| Mirror demo, Ultra Realistic | 176.1 / 185.6 ms | 23.5 | 60.2 | 7.3 | 16.5 | 16.0 | 3.3 + 4.0 | 6.5 |
+
+Skipping uncovered pixels in SVGF took reflections on plain terrain from
+3.9 ms (trace plus denoise, Realistic) to 0.2 ms; the whole frame went from
+47.9 to 45.6 ms.
+
+**Budget.** Scaled to the target (Ultra at 1440p, 4x the pixels on a GPU
+about 10x faster): clouds plus fog about 3.1 ms against 2.0, reflections
+about 6.6 ms against 1.0 when glossy surfaces fill the view, post about
+2.5 ms against 1.0. Three more open budget bugs; bloom's half-resolution first
+level and the display-resolution combine are the obvious post costs.
+
+Bugs found: the half-resolution cloud buffer was sampled with render
+coordinates (a dark strip on the right edge); the first cloud model was a
+uniform overcast because the dilated noise clustered around 0.75; an
+extinction of 0.04/m left cloud interiors grey; nearest-texel cloud shadows
+showed 50 m squares.
+
+**Rejected.**
+- Billboard clouds or sky domes (D21).
+- Analytic height fog (D22): no shafts.
+- Screen-space reflections (D23): the reflected world is mostly off screen.
+- Per-effect post passes with separate histories (D24).
