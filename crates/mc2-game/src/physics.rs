@@ -402,7 +402,6 @@ mod tests {
     #[test]
     fn the_player_stands_on_heavy_debris_and_kicks_light_debris() {
         use crate::input::Key;
-        use glam::Quat;
         let setup = |game: &mut Game| {
             let v = &mut game.world.resource_mut::<Voxels>().0;
             // Floor top at 4 m.
