@@ -15,4 +15,4 @@ mod world_contact;
 
 pub use body::{Body, BodyId};
 pub use shape::BodyShape;
-pub use world::{PhysicsStats, PhysicsWorld};
+pub use world::{Obstacle, PhysicsStats, PhysicsWorld};

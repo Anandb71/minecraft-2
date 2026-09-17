@@ -35,8 +35,19 @@ pub struct PhysicsStats {
     pub pair_ms: f32,
 }
 
+/// A box that pushes bodies without being pushed: the player, say.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Obstacle {
+    pub min: DVec3,
+    pub max: DVec3,
+    /// Metres per second; a moving obstacle wakes the bodies it touches.
+    pub vel: Vec3,
+}
+
 pub struct PhysicsWorld {
     pub bodies: Vec<Body>,
+    /// Kinematic boxes for the next step.
+    pub obstacles: Vec<Obstacle>,
     next_id: u64,
     pub substeps: u32,
     pub stats: PhysicsStats,
@@ -52,6 +63,7 @@ impl PhysicsWorld {
     pub fn new() -> Self {
         Self {
             bodies: Vec::new(),
+            obstacles: Vec::new(),
             next_id: 1,
             substeps: 8,
             stats: PhysicsStats::default(),
@@ -102,6 +114,15 @@ impl PhysicsWorld {
         // Broad phase once per step: bounding sphere pairs, expanded by
         // how far the bodies can travel.
         let pairs = candidate_pairs(&self.bodies, dt);
+        for o in self.obstacles.iter().filter(|o| o.vel.length() > 0.05) {
+            for b in self.bodies.iter_mut().filter(|b| b.asleep) {
+                let r = f64::from(b.shape.radius);
+                if b.pos.clamp(o.min, o.max).distance(b.pos) <= r {
+                    b.wake();
+                }
+            }
+        }
+        let obstacles = &self.obstacles;
         // The world around each awake body, over everywhere it can reach
         // this step, read once instead of per sample and substep.
         let windows: Vec<Option<VoxelWindow>> = self
@@ -127,7 +148,7 @@ impl PhysicsWorld {
                 let mut found = 0;
                 for _ in 0..substeps {
                     integrate(b, h);
-                    let contacts = solve_world(b, window.as_ref(), h);
+                    let contacts = solve_world(b, window.as_ref(), obstacles, h);
                     derive_velocities(b, h);
                     solve_world_velocities(b, &contacts, h);
                     found += contacts.len();
@@ -153,7 +174,7 @@ impl PhysicsWorld {
                     contacts.clear();
                     if !b.asleep {
                         integrate(b, h);
-                        *contacts = solve_world(b, window.as_ref(), h);
+                        *contacts = solve_world(b, window.as_ref(), obstacles, h);
                     }
                 };
                 if serial {
@@ -250,12 +271,19 @@ fn reach_window<'a>(b: &Body, dt: f32, world: &'a VoxelWorld) -> VoxelWindow<'a>
     )
 }
 
-/// World contacts of a body this substep, already solved for position.
-fn solve_world(b: &mut Body, window: Option<&VoxelWindow>, h: f32) -> Vec<Contact> {
-    let Some(window) = window.filter(|w| w.any_matter()) else {
+/// World and obstacle contacts of a body this substep, already solved for
+/// position.
+fn solve_world(
+    b: &mut Body,
+    window: Option<&VoxelWindow>,
+    obstacles: &[Obstacle],
+    h: f32,
+) -> Vec<Contact> {
+    let window = window.filter(|w| w.any_matter());
+    if window.is_none() && obstacles.is_empty() {
         return Vec::new();
-    };
-    let mut contacts = find_world_contacts(b, window);
+    }
+    let mut contacts = find_world_contacts(b, window, obstacles);
     solve_world_positions(b, &mut contacts, h);
     contacts
 }
@@ -356,6 +384,32 @@ mod tests {
         let b = p.body(id).unwrap();
         assert!(b.asleep, "still moving: {trace:?}");
         assert!((b.pos.y - 2.1875).abs() < 0.03, "{}", b.pos.y);
+    }
+
+    #[test]
+    fn an_obstacle_shoves_a_resting_cube_aside() {
+        let w = ground();
+        let mut p = PhysicsWorld::new();
+        let id = p.spawn(cube(4), DVec3::new(8.0, 2.125, 8.0), Quat::IDENTITY);
+        for _ in 0..120 {
+            p.step(1.0 / 120.0, &w);
+        }
+        assert!(p.body(id).unwrap().asleep);
+        // A 0.6 m wide box walks through along +x at 3 m/s.
+        let mut x = 7.0;
+        for _ in 0..60 {
+            x += 3.0 / 120.0;
+            p.obstacles = vec![Obstacle {
+                min: DVec3::new(x - 0.3, 2.0, 7.7),
+                max: DVec3::new(x + 0.3, 3.8, 8.3),
+                vel: Vec3::new(3.0, 0.0, 0.0),
+            }];
+            p.step(1.0 / 120.0, &w);
+            let b = p.body(id).unwrap();
+            let inside = b.pos.x > x - 0.3 && b.pos.x < x + 0.3;
+            assert!(!inside, "cube at {} inside box at {x}", b.pos.x);
+        }
+        assert!(p.body(id).unwrap().pos.x > x + 0.3, "not pushed ahead");
     }
 
     #[test]
