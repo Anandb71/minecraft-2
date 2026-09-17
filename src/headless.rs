@@ -128,7 +128,9 @@ pub fn run(args: &Args) -> Result<(), String> {
     for i in 0..args.frames {
         renderer.frame.time = i as f32 / 60.0;
         stream(&mut game, camera.position);
-        crate::world::pose_bodies(&game, &mut renderer);
+        if !args.hide_bodies {
+            crate::world::pose_bodies(&game, &mut renderer);
+        }
         renderer.prepare(
             &gpu,
             &mut game.world.resource_mut::<Voxels>().0,
