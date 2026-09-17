@@ -19,11 +19,20 @@
 @group(2) @binding(5) var out_trace: texture_storage_2d<rgba16float, write>;
 #import "visibility_common.wgsl"
 
-fn light_visible(s: Surface, dir: vec3<f32>, range_m: f32) -> f32 {
+// Sun and moon rays see bodies; sky rays see only the world, since a
+// fragment hides a small part of the sky and every hemisphere ray through
+// the debris would pay for the body grid.
+fn light_visible(s: Surface, dir: vec3<f32>, range_m: f32, bodies: bool) -> f32 {
     if dot(s.face, dir) <= 0.0 {
         return 0.0;
     }
-    let hit = trace_scene(secondary_ray(s, dir, range_m), 0.0);
+    let ray = secondary_ray(s, dir, range_m);
+    var hit: Hit;
+    if bodies {
+        hit = trace_scene(ray, 0.0);
+    } else {
+        hit = march(ray);
+    }
     return select(0.0, 1.0, hit.kind == HIT_NONE);
 }
 
@@ -70,16 +79,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var sun_vis = 0.0;
     if frame.sun_dir.y > -0.1 {
         let sun = sample_cone(normalize(frame.sun_dir), cos_max, vec2<f32>(rng_next(&rng), rng_next(&rng)));
-        sun_vis = light_visible(s, sun, 1500.0);
+        sun_vis = light_visible(s, sun, 1500.0, true);
     }
     var moon_vis = 0.0;
     if frame.moon_dir.y > -0.1 && frame.sun_dir.y < 0.1 {
         let moon = sample_cone(normalize(frame.moon_dir), cos_max, vec2<f32>(rng_next(&rng), rng_next(&rng)));
-        moon_vis = light_visible(s, moon, 1500.0);
+        moon_vis = light_visible(s, moon, 1500.0, true);
     }
     // Cosine-weighted sky visibility: the fraction of the hemisphere's
     // irradiance that reaches the surface unoccluded.
     let sky_dir = sample_cosine(s.normal, vec2<f32>(rng_next(&rng), rng_next(&rng)));
-    let sky_vis = light_visible(s, sky_dir, SKY_RANGE_M);
+    let sky_vis = light_visible(s, sky_dir, SKY_RANGE_M, false);
     textureStore(out_trace, out_texel, vec4<f32>(sun_vis, moon_vis, sky_vis, f32(chosen)));
 }
