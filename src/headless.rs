@@ -55,6 +55,10 @@ pub fn run(args: &Args) -> Result<(), String> {
     renderer.beam = !args.no_beam;
     let t = Instant::now();
     let mut game = Game::new();
+    if args.physics_thread {
+        game.world.resource_mut::<mc2_game::physics::Physics>().host =
+            mc2_game::physics_host::PhysicsHost::threaded();
+    }
     let mut loader = TerrainLoader::start(args.seed, args.world_dir.clone(), Default::default());
     let terrain = loader.wait(&mut game)?;
     {

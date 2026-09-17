@@ -26,6 +26,8 @@ pub struct Args {
     pub no_beam: bool,
     /// Simulate bodies but do not draw them (A/B measurement).
     pub hide_bodies: bool,
+    /// Headless runs step physics on its own thread, as the window does.
+    pub physics_thread: bool,
     pub seed: u64,
     pub world_dir: PathBuf,
     /// Headless camera override: position and look-at target, metres.
@@ -62,6 +64,7 @@ impl Default for Args {
             debug_view: 0,
             no_beam: false,
             hide_bodies: false,
+            physics_thread: false,
             seed: 42,
             world_dir: PathBuf::from("worlds/default"),
             camera: None,
@@ -84,6 +87,7 @@ usage: minecraft-2 [options]
   --hud                  draw the profiler overlay into captures
   --no-beam              disable the beam prepass (A/B measurement)
   --hide-bodies          do not draw rigid bodies (A/B measurement)
+  --physics-thread       headless: physics on its own thread, paced in real time
   --seed <n>             world seed (default 42)
   --world <dir>          world directory (default worlds/default)
   --camera x,y,z,lx,ly,lz  headless camera position and look-at target (m)
@@ -121,6 +125,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--hud" => out.hud = true,
             "--no-beam" => out.no_beam = true,
             "--hide-bodies" => out.hide_bodies = true,
+            "--physics-thread" => out.physics_thread = true,
             "--seed" => {
                 out.seed = value("--seed")?
                     .parse()

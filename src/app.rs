@@ -79,9 +79,14 @@ fn map_key(code: KeyCode) -> Option<Key> {
 
 impl App {
     fn new(args: &Args) -> Self {
+        let mut game = Game::new();
+        // Physics runs on its own thread in the window; tests and headless
+        // captures step it inline.
+        game.world.resource_mut::<mc2_game::physics::Physics>().host =
+            mc2_game::physics_host::PhysicsHost::threaded();
         Self {
             running: None,
-            game: Game::new(),
+            game,
             loader: TerrainLoader::start(args.seed, args.world_dir.clone(), Default::default()),
             camera: Camera::default(),
             grabbed: false,
