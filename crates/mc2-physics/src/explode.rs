@@ -65,6 +65,9 @@ impl Carved {
     }
 }
 
+/// Fragments are cut from outside this fraction of the blast radius.
+const DEBRIS_SHELL: f64 = 0.55;
+
 /// How far out a material breaks, as a multiple of the blast radius: weak
 /// materials (by compressive strength) crumble up to 30% farther.
 fn reach_of(m: MaterialId) -> f64 {
@@ -168,22 +171,33 @@ fn carve(world: &mut VoxelWorld, c: DVec3, r_vox: f64) -> Carved {
         let Some(tree) = world.chunk_mut(pos) else {
             continue;
         };
+        // Debris is cut from the outer shell of the crater, so the
+        // material of deeper cells is never read: count them and move on.
+        let min = origin.as_dvec3() + 0.5;
+        let far = (c - min).abs().max((c - (min + 7.0)).abs()).length();
+        let keep = far > r_vox * DEBRIS_SHELL;
         let mut record = |i: u16, m: u16| {
-            let l = IVec3::new(
-                i32::from(i & 7),
-                i32::from((i >> 6) & 7),
-                i32::from((i >> 3) & 7),
-            );
-            if let Some(k) = carved.index(origin + l) {
-                carved.materials[k] = m;
+            if keep {
+                let l = IVec3::new(
+                    i32::from(i & 7),
+                    i32::from((i >> 6) & 7),
+                    i32::from((i >> 3) & 7),
+                );
+                if let Some(k) = carved.index(origin + l) {
+                    carved.materials[k] = m;
+                }
             }
             carved.count += 1;
         };
         match plan {
             CellPlan::Clear(m) => {
                 tree.set_cell(local, Cell::Empty);
-                for i in 0..512 {
-                    record(i, m.0);
+                if keep {
+                    for i in 0..512 {
+                        record(i, m.0);
+                    }
+                } else {
+                    carved.count += 512;
                 }
             }
             CellPlan::Replace(brick, removed) => {
@@ -239,7 +253,7 @@ pub fn blast(
         let phi = f64::from(rng.next()) * std::f64::consts::TAU;
         let s = (1.0 - z * z).sqrt();
         let dir = DVec3::new(s * phi.cos(), z, s * phi.sin());
-        let at = c + dir * r_vox * (0.6 + 0.45 * f64::from(rng.next()));
+        let at = c + dir * r_vox * (DEBRIS_SHELL + 0.05 + 0.45 * f64::from(rng.next()));
         let seed_v = at.floor().as_ivec3();
         if carved.get(seed_v).is_air() {
             continue;
