@@ -8,6 +8,7 @@ pub mod eigen;
 pub mod explode;
 mod pair_contact;
 pub mod probe;
+pub mod raycast;
 pub mod shape;
 pub mod world;
 mod world_contact;
