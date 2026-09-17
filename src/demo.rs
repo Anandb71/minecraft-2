@@ -171,7 +171,7 @@ pub fn run(game: &mut Game, demo: Demo) {
                 return;
             };
             let ahead = glam::DVec3::new(f64::from(yaw).sin(), 0.0, f64::from(yaw).cos());
-            let base = feet + ahead * 11.0;
+            let base = feet + ahead * 20.0;
             let b0: glam::IVec3 = (base * 16.0).floor().as_ivec3() >> 4;
             // A 3 m square stone tower 14 m tall under a 5 m cap.
             let tower = [
@@ -197,7 +197,7 @@ pub fn run(game: &mut Game, demo: Demo) {
                 s.mark_built(a, b);
                 s.edited(a, b);
             }
-            look(game, 0.0, -30.0);
+            look(game, 0.0, -60.0);
             // Let it settle, then blow the base out from under it.
             tick(game, 120);
             let standing = game.world.resource::<Physics>().host.body_count();
@@ -211,7 +211,8 @@ pub fn run(game: &mut Game, demo: Demo) {
                 tick(game, 1);
                 waited += 1;
             }
-            tick(game, 6);
+            // Long enough for the pieces to be visibly on their way down.
+            tick(game, 30);
             let s = game.world.resource::<Structure>().stats;
             eprintln!(
                 "collapse demo: {} bodies after {:.2} s, {} failures, {} collapses, {} pieces, worst ratio {:.2}",
