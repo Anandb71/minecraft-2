@@ -17,6 +17,7 @@ use mc2_voxel::brick::Brick;
 use mc2_voxel::coords::{CHUNK_VOXELS, ChunkPos};
 use mc2_voxel::material::{MaterialId, ids};
 use mc2_voxel::tree::ChunkTree;
+use rayon::prelude::*;
 use std::sync::Arc;
 
 const VOXEL_M: f32 = 1.0 / 16.0;
@@ -383,22 +384,63 @@ impl ChunkGenerator {
         self.brick(&s, cell, pos.origin().y)
     }
 
-    /// `detail_brick` for many cells of one chunk, sampling the chunk once.
+    /// `detail_brick` for many cells of one chunk.
     pub fn detail_bricks(&self, pos: ChunkPos, cells: &[IVec3]) -> Vec<Brick> {
-        let s = self.samples(pos);
-        cells
-            .iter()
-            .map(|&c| self.brick(&s, c, pos.origin().y))
-            .collect()
+        // Sample only the brick columns the cells stand in, once per column
+        // and in parallel: an edit touches a few hundred of a chunk's 4096.
+        let origin = pos.origin();
+        let (ox, oz) = (origin.x as f32 * VOXEL_M, origin.z as f32 * VOXEL_M);
+        let mut columns: mc2_core::FxHashMap<(i32, i32), Vec<usize>> = Default::default();
+        for (i, c) in cells.iter().enumerate() {
+            columns.entry((c.x, c.z)).or_default().push(i);
+        }
+        let columns: Vec<((i32, i32), Vec<usize>)> = columns.into_iter().collect();
+        let mut made: Vec<(usize, Brick)> = columns
+            .par_iter()
+            .flat_map_iter(|&((x, z), ref idx)| {
+                let corner = |x: i32, z: i32| {
+                    self.surface
+                        .sample(ox + x as f32 * 0.5, oz + z as f32 * 0.5)
+                };
+                let corners = [
+                    corner(x, z),
+                    corner(x + 1, z),
+                    corner(x, z + 1),
+                    corner(x + 1, z + 1),
+                ];
+                let column = self
+                    .strata
+                    .column(ox + x as f32 * 0.5 + 0.25, oz + z as f32 * 0.5 + 0.25);
+                idx.iter()
+                    .map(|&i| (i, self.brick_at(&corners, &column, cells[i], origin.y)))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        made.sort_unstable_by_key(|(i, _)| *i);
+        made.into_iter().map(|(_, b)| b).collect()
     }
 
     fn brick(&self, s: &ChunkSamples<'_>, cell: IVec3, base_y: i32) -> Brick {
         let (bx, bz) = (cell.x as usize, cell.z as usize);
-        let c00 = s.corner(bx, bz);
-        let c10 = s.corner(bx + 1, bz);
-        let c01 = s.corner(bx, bz + 1);
-        let c11 = s.corner(bx + 1, bz + 1);
-        let column = &s.columns[bz * 64 + bx];
+        let corners = [
+            *s.corner(bx, bz),
+            *s.corner(bx + 1, bz),
+            *s.corner(bx, bz + 1),
+            *s.corner(bx + 1, bz + 1),
+        ];
+        self.brick_at(&corners, &s.columns[bz * 64 + bx], cell, base_y)
+    }
+
+    /// A brick from its column's four corner samples (x-z order: 00, 10,
+    /// 01, 11) and strata column.
+    fn brick_at(
+        &self,
+        corners: &[SurfaceSample; 4],
+        column: &Column<'_>,
+        cell: IVec3,
+        base_y: i32,
+    ) -> Brick {
+        let [c00, c10, c01, c11] = corners;
         let y_base = base_y + cell.y * 8;
         let mut brick = Brick::empty();
         for lz in 0..8 {
@@ -540,6 +582,30 @@ mod tests {
             }
         }
         panic!("no land found");
+    }
+
+    #[test]
+    fn detail_bricks_match_whole_chunk_sampling() {
+        let g = generator();
+        let pos = land_chunk(&g);
+        // Cells in a few columns through the chunk's height, including
+        // column 63 at its edge.
+        let mut cells = Vec::new();
+        for z in 20..24 {
+            for x in (24..28).chain([63]) {
+                for y in (0..64).step_by(9) {
+                    cells.push(IVec3::new(x, y, z));
+                }
+            }
+        }
+        let fast = g.detail_bricks(pos, &cells);
+        for (c, brick) in cells.iter().zip(&fast) {
+            let reference = g.detail_brick(pos, *c);
+            for i in 0..512 {
+                let l = IVec3::new(i & 7, (i >> 6) & 7, (i >> 3) & 7);
+                assert_eq!(brick.get(l), reference.get(l), "cell {c} voxel {l}");
+            }
+        }
     }
 
     fn top_solid(tree: &ChunkTree, x: i32, z: i32) -> Option<i32> {
