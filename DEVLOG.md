@@ -688,3 +688,121 @@ Before sky rays skipped bodies, Ultra spent 56.0 ms in direct light
 
 **Rejected.** Sequential impulses (D25), convex hulls or SDFs for collision
 (D26), rasterised or re-voxelised bodies (D27), particle-only debris (D28).
+
+## Step 10: Structural integrity and collapse (`v0.10-structure`)
+
+**Read first.** Macklin, Müller and Chentanez 2016, "XPBD: Position-Based
+Simulation of Compliant Constrained Dynamics" (compliance as inverse
+stiffness folded into the time step, the total Lagrange multiplier, and the
+constraint force estimates it gives, which is how one would build breakable
+joints); Erin Catto, "Solver2D" (2024), on soft constraints as a
+spring-damper with a frequency and damping ratio, sub-stepping, the relax
+pass, and the warning that deriving velocity from position differences
+loses precision far from the origin — this codebase keeps body positions
+in f64 world metres, so the error stays in the last bits; Dennis
+Gustafsson's Teardown material on voxel volumes per object and deterministic
+destruction commands. His structural integrity prototype is shown but not
+described anywhere I could fetch, so the load graph here follows the brief.
+
+**Built.**
+
+- Physics on its own thread (`mc2-game::physics_host`), as the brief asks.
+  The game thread owns the voxel world; the physics world sees only the
+  collision cells it is sent. Each step reports the brick cells its bodies
+  needed and lacked, and those bodies wait a tick; the next job carries
+  them, plus fresh copies of mirrored cells that were edited. The game
+  thread never waits on physics: it sends a job when the thread is idle and
+  reads the newest snapshot of the bodies when one arrives. Spawns and
+  removals are visible to gameplay at once. Inline mode runs the same jobs
+  synchronously for tests and scripted captures.
+- `mc2-physics::collision`: solid occupancy per brick cell, from the world
+  (reusing brick occupancy masks when every material in a brick is solid)
+  or from the mirror the physics thread keeps.
+- `mc2-structure`, the load graph:
+  - Each 1 m block is a node: mass, dominant material, and the solid voxels
+    it offers each neighbour.
+  - Dijkstra from the anchors gives every node a path to support; resting
+    on the node below costs 1, leaning sideways 1.5, hanging 4. Nodes the
+    search never reaches are islands.
+  - Load and bending moment are gathered from the farthest node inward,
+    split between the neighbours nearer to support in proportion to shared
+    area. Moments are horizontal vectors, so the opposite arms of a
+    symmetric roof cancel.
+  - Every hand-off is checked in compression, bending and shear against the
+    weaker material: a quarter strength between placed blocks (mortar and
+    nails), 30% of intact strength for natural rock mass, and natural
+    ground is never crushed, only pulled apart.
+  - Islands are cut out of the world as bodies, in pieces of a chosen size.
+- Structural integrity in the game (`mc2-game::structure`): edits mark
+  blocks dirty; a region grows from them over untouched terrain within 8 m
+  and every placed block connected to it, however far that reaches.
+  Terrain outside the box anchors it, except above, where it is open;
+  unloaded chunks hold. Gathering costs at most a millisecond a frame and
+  reads cached block summaries, the solve runs on a worker thread, and the
+  verdict is applied when it arrives: failed blocks crumble into half-metre
+  pieces, unsupported islands fall as 2 m pieces lowest first, and islands
+  open to the top of their region are re-examined in a taller one.
+- `--demo collapse` raises a stone tower, blows its base out and stops
+  while it comes down; `--physics-thread` runs headless captures the way
+  the window does; the F3 HUD reports both systems.
+
+**Measured** (dev CPU).
+
+*Debris piles*, `cargo run --release -p mc2-game --example pile_profile`,
+2 m pieces dropped in a heap, 600 steps, before and after finding contacts
+once per step instead of once per substep:
+
+| Bodies | Step mean before | after | p99 after |
+|---|---|---|---|
+| 50 | 0.97 ms | 0.64 ms | 4.6 ms |
+| 150 | 3.27 ms | 1.46 ms | 13.0 ms |
+| 300 | 75.2 ms | 1.98 ms | 18.6 ms |
+| 600 | 161 ms | 11.5 ms | 103 ms |
+
+Before the change the 300-body pile never went to sleep; now every pile
+settles. Body shapes also got cheaper to build: a 2 m piece 1.00 -> 0.46 ms,
+a 4 m piece 7.4 -> 3.4 ms.
+
+*The collapse demo* (a 3 m stone tower 14 m tall under a 5 m cap, its base
+blown out), integrated GPU, 1280x720:
+
+| | Inline physics | On its own thread |
+|---|---|---|
+| game.update mean | 32.4 ms | 2.2 ms |
+| worst frame | 138 ms | 28.9 ms |
+
+A typical collapse: 8 regions solved, 10402 nodes in the last of them,
+20.7 ms of gathering spread over frames at a millisecond each, 21.5 ms to
+solve on the worker thread, 32 blocks failed, one island of the tower came
+down as 182 pieces, 230 bodies at the end.
+
+**Budget.**
+
+- Physics is off the frame: `game.update` falls from 32 ms to 2 ms with the
+  thread, and a busy step (15 ms with 159 awake pieces) costs physics
+  latency, not frames. It is still four times the 4 ms tick budget while a
+  tower is in the air, so a collapse runs in slow motion for a moment.
+- A detonation still costs 25 ms on the game thread: 17 ms carving and
+  7.7 ms restoring generated detail. Carving is the next thing to move off
+  the frame.
+- Uploading the changed chunks after a collapse costs up to 24 ms in
+  `voxel_gpu.update`, over its share of the frame.
+
+**Bugs found.**
+
+- Moments were scalars, so the four arms of a symmetric roof added instead
+  of cancelling and an intact tower "failed" at a stress ratio of 2.3.
+- Finding contacts once per step with a margin wider than a voxel made the
+  sample spheres probe past their neighbouring cell, so two cubes sank 3 cm
+  into each other before anything pushed back and then jumped apart at
+  4 m/s. The margin is now half a voxel.
+- The depenetration speed cap turned resolved overlap into velocity that
+  nothing removed once the contact separated; with contacts that live for a
+  whole step the cap is unnecessary and it is gone.
+- Verdicts were validated by re-reading every block of an island, which
+  cost more than the solve; they now compare against the summaries the
+  cache still holds, which edits invalidate anyway.
+
+**Rejected.** A lock around the voxel world (D29), structural integrity as
+breakable XPBD joints or as finite elements (D30), whole islands as single
+bodies (D31).
