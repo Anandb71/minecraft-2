@@ -197,3 +197,21 @@ Both were built behind one output with the same hit shading and denoiser, and me
 - **Remove voxels only.** Craters without anything thrown: cheap and lifeless.
 - **Particles for debris.** Many cheap sprites or points, but they cannot be stood on, kicked, stacked or baked back into the world.
 - **Rigid fragments from the blast shell, baked back when settled (chosen).** Up to 48 fragments per blast, sleeping when still and becoming terrain after 15 s, so a battlefield does not accumulate bodies.
+
+## D29. Physics on its own thread
+
+- **A lock around the voxel world.** Simplest to write, but the renderer takes the world mutably every frame to stream bricks, so a frame would wait on a physics step: exactly what the brief forbids.
+- **Copy the world, or the chunks near the bodies, each tick.** No contention, but a chunk tree is megabytes and debris sits in several of them; copy-on-write would move that cost to the next edit instead of removing it.
+- **A mirror of collision cells, fed by the game thread (chosen).** The physics thread owns solid occupancy for the brick cells around its bodies, a few thousand at a time, and asks for what it lacks; bodies whose surroundings have not arrived wait a tick, which is invisible. The game thread never blocks, and the mirror is about 60 bytes a cell.
+
+## D30. What structural integrity is made of
+
+- **Breakable XPBD joints between blocks.** The 2016 paper's total Lagrange multiplier gives a constraint force, so joints could break on force, and the solver already exists. But every block of every structure would become a simulated body with constraints, at 120 Hz, whether or not anything is happening to it.
+- **Finite elements over the voxel grid.** The honest way to get stress, and far too expensive for a 16 km world edited continuously.
+- **A load graph over the 1 m block layer (chosen).** Only blocks near an edit are examined, a few thousand at a time, on a worker thread. Compression, bending and shear per connection reproduce what the brief asks for: a stone arm breaks past about 3 m, a plank one past about 23 m, cutting a column drops the tower, and soil cannot overhang at all. It ignores arching and load history, which a game does not miss.
+
+## D31. What falls, and in what pieces
+
+- **The whole island as one body.** True to the structure, but a collapsing wall would need a dense voxel grid over its bounding box: a hollow tower would cost a hundred megabytes and one body that cannot break further.
+- **Voxel-level fragmentation.** Every voxel its own body is the most detailed and the least affordable.
+- **Fixed 2 m pieces, half-metre crumbs for failed blocks (chosen).** A collapse becomes a few hundred bodies, each a 32^3 grid built in under half a millisecond, cut a few per frame lowest first so the pile builds from the bottom. Rubble that settles for 15 s becomes terrain again, so a battlefield does not accumulate bodies.
