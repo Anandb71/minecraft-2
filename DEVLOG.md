@@ -576,3 +576,115 @@ showed 50 m squares.
 - Analytic height fog (D22): no shafts.
 - Screen-space reflections (D23): the reflected world is mostly off screen.
 - Per-effect post passes with separate histories (D24).
+
+## Step 9: Rigid bodies, contacts, destruction (`v0.9-destruction`)
+
+**Read first.** Müller, Macklin, Chentanez, Jeschke and Kim 2020, "Detailed
+Rigid Body Simulation with Extended Position Based Dynamics" (Algorithm 2:
+many substeps with one position iteration each; generalised inverse masses
+and positional corrections, Eqs. 2-9; static friction as a positional
+constraint; dynamic friction and restitution in the velocity pass, with no
+bounce below 2|g|h). Amanatides and Woo 1987 again, for marching body grids.
+
+**Built.**
+
+- `mc2-physics`, a new crate:
+  - Voxel body shapes: mass, centre of mass and principal inertia from
+    per-material density (Jacobi eigen solver), and up to 64 collision
+    samples, the outermost surface voxel in each 4^3 cell.
+  - The XPBD step: 8 substeps at 120 Hz, gyroscopic torque, exact rotation
+    per substep.
+  - Contacts: sample spheres against the world (read through a per-body
+    voxel window cached for the step) and against the other body's grid
+    after a sort-and-sweep broad phase. Penetration is re-evaluated as
+    earlier corrections move the bodies, and overlap a substep did not
+    cause is resolved at no more than 1 m/s.
+  - Kinematic obstacles (the player), with the surface velocity carried
+    into the contact.
+  - Sleeping judged by displacement over the step; only moving bodies wake
+    sleepers they touch. Bodies with no neighbour run all their substeps
+    as one parallel task.
+  - Explosions carve per brick cell, planned in parallel. Material from the
+    blast shell becomes 3-7 voxel fragments thrown up and out; bodies
+    already nearby are pushed.
+  - Settled bodies are baked back into terrain. Ray casts against bodies.
+- Game (`mc2-game::physics`):
+  - TNT: E lifts a TNT block out as a body with a 4 s fuse, and it
+    detonates wherever it ends up. A blast lights every TNT block within
+    reach with a 0.15-0.75 s fuse.
+  - Blasts restore generated detail before carving. Edits wake resting
+    debris.
+  - Debris at rest for 15 s, or the oldest sleepers above 600 bodies,
+    becomes terrain again.
+  - The player stands on bodies of 40 kg and up and kicks lighter ones.
+- Rendering (`bodies.rs`, `bodies.wgsl`):
+  - Bodies are dense voxel grids in a 16 MB pool plus a per-frame table
+    holding this frame's and last frame's pose.
+  - A culling grid of at most 32^3 cells covers their combined bounds.
+  - `trace_scene` marches the world, then the bodies in front of the world
+    hit, in each body's grid frame over occupancy blocks and voxels.
+  - Every ray type goes through it: primary, sun and moon visibility,
+    ReSTIR shadow rays, indirect and reflection rays. Sky visibility rays
+    skip bodies (below).
+  - Visibility ids carry an 11-bit body tag, so history follows a body and
+    never matches the world. Body faces use the stored normal, and motion
+    vectors come from last frame's pose.
+- `--demo blast` (two charges, one lit by hand, the other by the first
+  blast), `--hide-bodies`, a physics line on the F3 HUD, F2 screenshots,
+  and the `blast_profile` benchmark example.
+
+**Measured.**
+
+*Physics* (dev CPU, `cargo run --release -p mc2-game --example
+blast_profile`: three overlapping 3 m blasts in granite under a metre of
+dirt, then 10 s of physics):
+
+| | Before | After |
+|---|---|---|
+| Blasts (406k / 299k / 299k voxels) | 287 / 143 / 184 ms | 8.2 / 3.8 / 3.5 ms (first includes thread pool start) |
+| Step, 48 fragments, mean | 2.28 ms | 1.36 ms (windows, islands, fast pair transform) |
+| Pair search, 48 fragments | 0.87 ms | 0.11 ms |
+| Step, 144 fragments | | mean 2.0 ms, p99 4.3 ms, max 8.5 ms; 17 awake after 10 s |
+
+*Correctness.* The GPU body tracer agrees with the CPU body ray cast on all
+325 body pixels of nine rotated bodies (depth, material, tag, grid voxel
+and face). A lit debris golden joins the suite.
+
+*GPU cost* of the blast demo's 74 fragments, integrated GPU, 1280x720, 120
+frames, bodies hidden vs drawn:
+
+| Preset | Frame (hidden / drawn) | vis | direct |
+|---|---|---|---|
+| Realistic | 51.8 / 53.2 ms | 12.8 / 13.5 | 7.5 / 7.4 |
+| Ultra Realistic | 130.9 / 137.2 ms | 25.2 / 27.0 | 51.4 / 51.7 |
+
+Before sky rays skipped bodies, Ultra spent 56.0 ms in direct light
+(+4.6 ms) and the whole frame was 146.7 ms.
+
+**Budget.**
+
+- Physics: the tick p99 with 144 active fragments is 4.3 ms against 4.0
+  ms, a budget bug.
+- Blasts run on the main thread and cost a 4-8 ms hitch each.
+- Debris adds about 0.7 ms to primary visibility at the target (1.8 ms x
+  0.4), inside the march line's share only when the rest of it shrinks
+  (step 18).
+
+**Bugs found.**
+
+- Stacked cubes exploded when they first touched: pair penetration was
+  not re-evaluated, so every sample applied full depth.
+- The upper cube then slid off: the nearest-face normal of a sample
+  already inside the other grid pointed sideways. Pairs now use the same
+  sphere probe as the world.
+- Free spin decayed under the paper's linearised quaternion update.
+- Debris spawned by a blast was pushed by the same blast, often downward.
+- Rest time stopped counting at sleep, so time-based baking never ran.
+- Crater piles spun at 40 rad/s: overlap between neighbours was resolved
+  in one substep, and awake neighbours re-woke each other forever.
+- A headless edit landed in the streaming warm-up loop instead of the
+  capture loop, so bodies simulated but were never drawn.
+- The blast demo placed its second charge into the first one's cell.
+
+**Rejected.** Sequential impulses (D25), convex hulls or SDFs for collision
+(D26), rasterised or re-voxelised bodies (D27), particle-only debris (D28).
