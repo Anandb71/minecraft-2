@@ -128,6 +128,7 @@ pub fn run(args: &Args) -> Result<(), String> {
     for i in 0..args.frames {
         renderer.frame.time = i as f32 / 60.0;
         stream(&mut game, camera.position);
+        crate::world::pose_bodies(&game, &mut renderer);
         renderer.prepare(
             &gpu,
             &mut game.world.resource_mut::<Voxels>().0,
@@ -147,15 +148,18 @@ pub fn run(args: &Args) -> Result<(), String> {
         if args.hud {
             let cpu = mc2_core::profiler::rows();
             let stats = renderer.world.stats;
-            let extra = [format!(
-                "chunks {}  bricks {}  uploaded {} ({:.1} MB)  tree {:.1} MB  voxels {:.1} MB",
-                stats.chunks,
-                stats.bricks_resident,
-                stats.bricks_uploaded_last_frame,
-                stats.bytes_uploaded_last_frame as f32 / 1e6,
-                stats.tree_mb,
-                stats.voxel_mb
-            )];
+            let extra = [
+                format!(
+                    "chunks {}  bricks {}  uploaded {} ({:.1} MB)  tree {:.1} MB  voxels {:.1} MB",
+                    stats.chunks,
+                    stats.bricks_resident,
+                    stats.bricks_uploaded_last_frame,
+                    stats.bytes_uploaded_last_frame as f32 / 1e6,
+                    stats.tree_mb,
+                    stats.voxel_mb
+                ),
+                crate::world::physics_line(&game, &renderer),
+            ];
             let input = mc2_render::overlay::OverlayInput {
                 gpu: &renderer.profiler,
                 cpu: &cpu,

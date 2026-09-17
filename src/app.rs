@@ -282,6 +282,7 @@ impl App {
                 Err(e) => log::error!("screenshot failed: {e}"),
             }
         }
+        crate::world::pose_bodies(&self.game, renderer);
         {
             let mut voxels = self.game.world.resource_mut::<mc2_game::Voxels>();
             renderer.prepare(&r.gpu, &mut voxels.0, &self.camera, dt);
@@ -321,6 +322,7 @@ impl App {
                     s.tree_mb,
                     s.voxel_mb
                 ),
+                crate::world::physics_line(&self.game, renderer),
                 {
                     let clock = self.game.world.resource::<mc2_game::clock::WorldClock>();
                     let hour = clock.hour();
@@ -336,7 +338,7 @@ impl App {
                     )
                 },
                 format!(
-                    "click capture  WASD move  space jump  ctrl crouch  shift sprint  F fly  F5 view  Tab mode  1-9 slot  F2 shot  F3 HUD  F4 view {}  V vsync {}  P photo",
+                    "click capture  WASD move  space jump  ctrl crouch  shift sprint  F fly  F5 view  Tab mode  1-9 slot  E light TNT  F2 shot  F3 HUD  F4 view {}  V vsync {}  P photo",
                     self.debug_mode,
                     if self.vsync { "on" } else { "off" }
                 ),
