@@ -335,7 +335,7 @@ fn generated_terrain() {
 /// The lit pipeline on generated terrain: streams to quiescence, then
 /// restarts the frame counter and accumulates a fixed number of frames so
 /// every random sequence and history length is the same on every run.
-fn lit_golden(name: &str, celestial: mc2_render::camera::Celestial, lantern: bool) {
+fn lit_golden(name: &str, celestial: mc2_render::camera::Celestial, lantern: bool, debris: bool) {
     let _serial = serial();
     let Some(gpu) = software_gpu() else {
         return;
@@ -355,6 +355,9 @@ fn lit_golden(name: &str, celestial: mc2_render::camera::Celestial, lantern: boo
     let size = (320, 180);
     let mut renderer = world_renderer(&gpu, size);
     renderer.celestial = celestial;
+    if debris {
+        renderer.bodies = debris_bodies(&world);
+    }
     let target = golden_target(&gpu, size);
     render_until_quiet(&gpu, &mut renderer, &mut world, &camera, &target);
     renderer.frame.frame_index = 0;
@@ -388,6 +391,7 @@ fn lit_terrain_afternoon() {
             ..Default::default()
         },
         false,
+        false,
     );
 }
 
@@ -403,5 +407,80 @@ fn lit_terrain_night() {
             ..Default::default()
         },
         true,
+        false,
     );
+}
+
+/// Rigid bodies resting on and flying over the ground in the afternoon:
+/// body shading, shadows cast and received, bounce light.
+#[test]
+fn lit_debris_afternoon() {
+    let sun_dir = glam::Vec3::new(-0.55, 0.32, 0.77).normalize();
+    lit_golden(
+        "lit_debris_afternoon",
+        mc2_render::camera::Celestial {
+            sun_dir,
+            moon_dir: -sun_dir,
+            ..Default::default()
+        },
+        false,
+        true,
+    );
+}
+
+/// Eight blocky fragments of assorted shapes and materials in front of
+/// the camera, some resting on the ground and some in the air.
+fn debris_bodies(world: &mc2_voxel::world::VoxelWorld) -> Vec<mc2_render::bodies::BodyInstance> {
+    use mc2_voxel::material::{MaterialId, ids};
+    let mut out = Vec::new();
+    let materials = [ids::GRANITE, ids::PLANKS, ids::DIRT, ids::STONE_BRICK];
+    for k in 0..8u64 {
+        let size = glam::IVec3::new(
+            12 + (k % 5) as i32 * 2,
+            10 + ((k * 3) % 4) as i32 * 2,
+            14 + (k % 3) as i32 * 3,
+        );
+        let n = (size.x * size.y * size.z) as usize;
+        let m = materials[(k % 4) as usize];
+        // Corners knocked off in a fixed pattern.
+        let voxels: Vec<MaterialId> = (0..n)
+            .map(|i| {
+                let i = i as i32;
+                let v = glam::IVec3::new(i % size.x, (i / size.x) % size.y, i / (size.x * size.y));
+                let edge = v.cmpeq(glam::IVec3::ZERO) | v.cmpeq(size - 1);
+                if edge.x as u8 + edge.y as u8 + edge.z as u8 >= 2 && (i + k as i32) % 3 == 0 {
+                    MaterialId(0)
+                } else {
+                    m
+                }
+            })
+            .collect();
+        let shape = std::sync::Arc::new(mc2_physics::BodyShape::from_voxels(size, voxels).unwrap());
+        let angle = k as f64 * 0.8;
+        // Nearer the camera than the view target, about 25 m out.
+        let (x, z) = (8195.0 + 4.0 * angle.cos(), 8259.0 + 4.0 * angle.sin());
+        let (vx, vz) = ((x * 16.0) as i32, (z * 16.0) as i32);
+        let mut y = 8191;
+        while y > 0 && world.voxel(glam::IVec3::new(vx, y, vz)).is_air() {
+            y -= 1;
+        }
+        let lift = if k % 2 == 0 {
+            0.02
+        } else {
+            0.8 + 0.3 * k as f64
+        };
+        let rot = glam::Quat::from_euler(
+            glam::EulerRot::XYZ,
+            0.3 * k as f32,
+            0.9 * k as f32,
+            if k % 2 == 0 { 0.0 } else { 0.6 },
+        );
+        out.push(mc2_render::bodies::BodyInstance {
+            key: 100 + k,
+            shape,
+            grid_origin: glam::DVec3::new(x, f64::from(y + 1) / 16.0 + lift, z),
+            grid_rotation: rot,
+        });
+    }
+    out
 }
