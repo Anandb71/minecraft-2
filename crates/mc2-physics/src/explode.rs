@@ -5,10 +5,12 @@ use crate::body::{Body, BodyId};
 use crate::shape::{BodyShape, VOXEL_M};
 use crate::world::PhysicsWorld;
 use glam::{DVec3, IVec3, Vec3};
+use mc2_voxel::brick::Brick;
 use mc2_voxel::coords::{BRICK_SHIFT, CHUNK_SHIFT, ChunkPos};
 use mc2_voxel::material::{MaterialId, ids};
 use mc2_voxel::tree::Cell;
 use mc2_voxel::world::VoxelWorld;
+use rayon::prelude::*;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -70,84 +72,125 @@ fn reach_of(m: MaterialId) -> f64 {
     1.0 + 0.3 * weakness
 }
 
-/// Removes breakable solid voxels within reach of `c` (voxel units),
-/// brick cell by brick cell: empty cells cost one lookup, and uniform
-/// cells wholly inside reach are cleared without touching their voxels.
+/// What happens to one brick cell.
+enum CellPlan {
+    /// Every voxel is removed: a uniform cell wholly inside reach.
+    Clear(MaterialId),
+    /// The carved brick, and the removed voxels as (cell-local index, material).
+    Replace(Box<Brick>, Vec<(u16, u16)>),
+}
+
+/// Carves one brick against the blast.
+fn carve_brick(mut brick: Brick, origin: IVec3, c: DVec3, r_vox: f64) -> Option<CellPlan> {
+    let mut removed = Vec::new();
+    for i in 0..512u16 {
+        let l = IVec3::new(
+            i32::from(i & 7),
+            i32::from((i >> 6) & 7),
+            i32::from((i >> 3) & 7),
+        );
+        let m = brick.get(l);
+        if !breakable(m) {
+            continue;
+        }
+        let reach = r_vox * reach_of(m);
+        if ((origin + l).as_dvec3() + 0.5 - c).length_squared() > reach * reach {
+            continue;
+        }
+        brick.set(l, MaterialId(0));
+        removed.push((i, m.0));
+    }
+    (!removed.is_empty()).then(|| CellPlan::Replace(Box::new(brick), removed))
+}
+
+fn breakable(m: MaterialId) -> bool {
+    m.is_solid() && m != ids::BEDROCK
+}
+
+/// Removes breakable solid voxels within reach of `c` (voxel units). Brick
+/// cells are planned in parallel against the unchanged world (empty cells
+/// cost one lookup; uniform cells wholly inside reach are cleared without
+/// visiting their voxels), then the edits are applied in order.
 fn carve(world: &mut VoxelWorld, c: DVec3, r_vox: f64) -> Carved {
     let outer = r_vox * 1.3;
     let lo = (c - outer).floor().as_ivec3();
     let hi = (c + outer).ceil().as_ivec3();
     let dims = hi - lo + 1;
+    let mut cells = Vec::new();
+    for cz in (lo.z >> 3)..=(hi.z >> 3) {
+        for cy in (lo.y >> 3)..=(hi.y >> 3) {
+            for cx in (lo.x >> 3)..=(hi.x >> 3) {
+                let cell = IVec3::new(cx, cy, cz);
+                let min = (cell * 8).as_dvec3();
+                // Nearest voxel centre of the cell.
+                if (c.clamp(min + 0.5, min + 7.5) - c).length() <= outer {
+                    cells.push(cell);
+                }
+            }
+        }
+    }
+    let shared: &VoxelWorld = world;
+    let plans: Vec<(IVec3, CellPlan)> = cells
+        .par_iter()
+        .filter_map(|&cell| {
+            let origin = cell * 8;
+            let pos = ChunkPos::of_voxel(origin);
+            let local = cell - (pos.0 << (CHUNK_SHIFT - BRICK_SHIFT));
+            let tree = shared.chunk(pos)?;
+            let plan = match tree.cell(local) {
+                Cell::Empty => None,
+                Cell::Uniform(m) if !breakable(m) => None,
+                Cell::Uniform(m) => {
+                    let min = origin.as_dvec3() + 0.5;
+                    let far = (c - min).abs().max((c - (min + 7.0)).abs()).length();
+                    if far <= r_vox * reach_of(m) {
+                        Some(CellPlan::Clear(m))
+                    } else {
+                        carve_brick(Brick::filled(m), origin, c, r_vox)
+                    }
+                }
+                Cell::Brick(i) => carve_brick(tree.brick(i).clone(), origin, c, r_vox),
+            };
+            plan.map(|p| (cell, p))
+        })
+        .collect();
+
     let mut carved = Carved {
         lo,
         dims,
         materials: vec![0; dims.element_product() as usize],
         count: 0,
     };
-    let breakable = |m: MaterialId| m.is_solid() && m != ids::BEDROCK;
-    for cz in (lo.z >> 3)..=(hi.z >> 3) {
-        for cy in (lo.y >> 3)..=(hi.y >> 3) {
-            for cx in (lo.x >> 3)..=(hi.x >> 3) {
-                let cell = IVec3::new(cx, cy, cz);
-                let min = (cell * 8).as_dvec3();
-                let max = min + 8.0;
-                // Nearest and farthest voxel centres of the cell.
-                let near = (c.clamp(min + 0.5, max - 0.5) - c).length();
-                if near > outer {
-                    continue;
+    for (cell, plan) in plans {
+        let origin = cell * 8;
+        let pos = ChunkPos::of_voxel(origin);
+        let local = cell - (pos.0 << (CHUNK_SHIFT - BRICK_SHIFT));
+        let Some(tree) = world.chunk_mut(pos) else {
+            continue;
+        };
+        let mut record = |i: u16, m: u16| {
+            let l = IVec3::new(
+                i32::from(i & 7),
+                i32::from((i >> 6) & 7),
+                i32::from((i >> 3) & 7),
+            );
+            if let Some(k) = carved.index(origin + l) {
+                carved.materials[k] = m;
+            }
+            carved.count += 1;
+        };
+        match plan {
+            CellPlan::Clear(m) => {
+                tree.set_cell(local, Cell::Empty);
+                for i in 0..512 {
+                    record(i, m.0);
                 }
-                let far = (c - (min + 0.5))
-                    .abs()
-                    .max((c - (max - 0.5)).abs())
-                    .length();
-                let pos = ChunkPos::of_voxel(cell * 8);
-                let local = cell - (pos.0 << (CHUNK_SHIFT - BRICK_SHIFT));
-                let Some(tree) = world.chunk(pos) else {
-                    continue;
-                };
-                match tree.cell(local) {
-                    Cell::Empty => continue,
-                    Cell::Uniform(m) if !breakable(m) => continue,
-                    Cell::Uniform(m) if far <= r_vox * reach_of(m) => {
-                        // The whole cell goes.
-                        let origin = cell * 8;
-                        for i in 0..512 {
-                            let v = origin + IVec3::new(i & 7, (i >> 6) & 7, (i >> 3) & 7);
-                            if let Some(k) = carved.index(v) {
-                                carved.materials[k] = m.0;
-                            }
-                        }
-                        carved.count += 512;
-                        if let Some(tree) = world.chunk_mut(pos) {
-                            tree.set_cell(local, Cell::Empty);
-                        }
-                        continue;
-                    }
-                    _ => {}
+            }
+            CellPlan::Replace(brick, removed) => {
+                tree.edit_brick(local, |b| *b = *brick);
+                for (i, m) in removed {
+                    record(i, m);
                 }
-                let Some(tree) = world.chunk_mut(pos) else {
-                    continue;
-                };
-                let origin = cell * 8;
-                tree.edit_brick(local, |brick| {
-                    for i in 0..512 {
-                        let l = IVec3::new(i & 7, (i >> 6) & 7, (i >> 3) & 7);
-                        let m = brick.get(l);
-                        if !breakable(m) {
-                            continue;
-                        }
-                        let v = origin + l;
-                        let reach = r_vox * reach_of(m);
-                        if (v.as_dvec3() + 0.5 - c).length_squared() > reach * reach {
-                            continue;
-                        }
-                        brick.set(l, MaterialId(0));
-                        if let Some(k) = carved.index(v) {
-                            carved.materials[k] = m.0;
-                        }
-                        carved.count += 1;
-                    }
-                });
             }
         }
     }
