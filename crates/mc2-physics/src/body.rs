@@ -91,6 +91,18 @@ impl Body {
         self.pos - (self.grid_rotation() * (self.shape.com * VOXEL_M)).as_dvec3()
     }
 
+    /// Grid origin and rotation at `alpha` between the start of the last
+    /// fixed step (0) and now (1), for drawing between steps.
+    pub fn grid_pose_at(&self, alpha: f64) -> (DVec3, Quat) {
+        let pos = self.step_start_pos.lerp(self.pos, alpha);
+        let rot = self.step_start_rot.slerp(self.rot, alpha as f32);
+        let grid_rot = rot * self.shape.principal.inverse();
+        (
+            pos - (grid_rot * (self.shape.com * VOXEL_M)).as_dvec3(),
+            grid_rot,
+        )
+    }
+
     /// Generalised inverse mass for a correction along `n` (world) at
     /// offset `r` (world) from the centre of mass (Eq. 2).
     pub fn generalized_inverse_mass(&self, r: Vec3, n: Vec3) -> f32 {
