@@ -1,5 +1,6 @@
-//! Debris in the game: the rigid body world stepped on the fixed clock,
-//! explosives with fuses, and settled debris baked back into terrain.
+//! Debris in the game: the rigid body world (behind a [`PhysicsHost`],
+//! usually on its own thread) advanced on the fixed clock, explosives with
+//! fuses, and settled debris baked back into terrain.
 //!
 //! TNT is a material. Using a TNT block (the interact key) lifts its voxels
 //! out of the world as a body with a lit fuse; when the fuse runs out the
@@ -9,12 +10,14 @@
 use crate::collide::{Aabb, SolidField};
 use crate::input::{Input, Key, Time};
 use crate::interact::{Interaction, prepare_edit};
+use crate::physics_host::PhysicsHost;
 use crate::{Streaming, Voxels};
 use bevy_ecs::prelude::*;
+use glam::Vec3;
 use glam::{DVec3, IVec3};
 use mc2_core::FxHashSet;
-use mc2_physics::explode::{ExplosionReport, bake_settled, explode};
-use mc2_physics::{BodyId, BodyShape, PhysicsWorld};
+use mc2_physics::explode::{ExplosionReport, bake, blast};
+use mc2_physics::{BodyId, BodyShape};
 use mc2_voxel::coords::{BlockPos, VOXELS_PER_BLOCK};
 use mc2_voxel::material::{MaterialId, ids};
 use mc2_voxel::world::VoxelWorld;
@@ -48,9 +51,8 @@ impl<'a> WorldAndBodies<'a> {
     /// the box.
     pub fn near(world: &'a VoxelWorld, physics: &'a Physics, b: &Aabb, reach: f64) -> Self {
         let bodies = physics
-            .world
-            .bodies
-            .iter()
+            .host
+            .bodies()
             .filter(|body| {
                 body.shape.mass >= KICK_MASS_KG
                     && body.pos.clamp(b.min, b.max).distance(body.pos)
@@ -86,12 +88,10 @@ pub struct Blast {
 
 #[derive(Resource)]
 pub struct Physics {
-    pub world: PhysicsWorld,
+    pub host: PhysicsHost,
     pub fuses: Vec<Fuse>,
     /// Blasts to set off on the next tick.
     pub blasts: Vec<Blast>,
-    /// Voxel boxes edited since the last tick; bodies resting there wake.
-    pub dirty: Vec<(IVec3, IVec3)>,
     /// Last blast, for the HUD and demos.
     pub last_blast: Option<ExplosionReport>,
     pub blasts_total: u64,
@@ -102,10 +102,9 @@ pub struct Physics {
 impl Default for Physics {
     fn default() -> Self {
         Self {
-            world: PhysicsWorld::new(),
+            host: PhysicsHost::inline(),
             fuses: Vec::new(),
             blasts: Vec::new(),
-            dirty: Vec::new(),
             last_blast: None,
             blasts_total: 0,
             next_bake: 0.0,
@@ -159,13 +158,13 @@ pub fn ignite_block(
     let shape = Arc::new(BodyShape::from_voxels(IVec3::splat(n), voxels)?);
     let com = (o.as_dvec3() + shape.com.as_dvec3()) / f64::from(n);
     let rot = shape.principal;
-    let id = physics.world.spawn(shape, com, rot);
+    let id = physics.host.spawn(shape, com, rot, Vec3::ZERO);
     physics.fuses.push(Fuse {
         body: id,
         remaining: fuse_s,
         radius: TNT_RADIUS_M,
     });
-    physics.dirty.push((o, o + n - 1));
+    physics.host.edited(o, o + n - 1);
     Some(id)
 }
 
@@ -183,13 +182,16 @@ pub fn detonate(
     let r = f64::from(blast.radius) * f64::from(VOXELS_PER_BLOCK) * 1.3;
     let lo = (c - r).floor().as_ivec3();
     let hi = (c + r).ceil().as_ivec3();
-    prepare_edit(
-        world,
-        streaming.0.as_mut(),
-        &mut interaction.touched,
-        lo,
-        hi,
-    );
+    {
+        mc2_core::scope!("blast.restore");
+        prepare_edit(
+            world,
+            streaming.0.as_mut(),
+            &mut interaction.touched,
+            lo,
+            hi,
+        );
+    }
     // Chain reaction: every TNT block the blast reaches is lit.
     let mut blocks = FxHashSet::default();
     for z in (lo.z >> 4)..=(hi.z >> 4) {
@@ -208,19 +210,28 @@ pub fn detonate(
         ignite_block(world, physics, b, fuse);
     }
     let seed = physics.next_seed();
-    let report = explode(
-        world,
-        &mut physics.world,
-        blast.centre,
-        blast.radius,
-        DEBRIS_PER_BLAST,
-        seed,
-    );
-    physics.dirty.push((lo, hi));
+    let (report, debris) = {
+        mc2_core::scope!("blast.carve");
+        blast_carve(world, blast, seed)
+    };
+    // Bodies already there are pushed before the fragments join them.
+    physics.host.blast_impulse(blast.centre, blast.radius);
+    for d in &debris {
+        physics.host.spawn_debris(d);
+    }
+    physics.host.edited(lo, hi);
     interaction.edits += 1;
     physics.blasts_total += 1;
     physics.last_blast = Some(report);
     report
+}
+
+fn blast_carve(
+    world: &mut VoxelWorld,
+    b: Blast,
+    seed: u64,
+) -> (ExplosionReport, Vec<mc2_physics::explode::Debris>) {
+    blast(world, b.centre, b.radius, DEBRIS_PER_BLAST, seed)
 }
 
 fn block_has_tnt(world: &VoxelWorld, b: BlockPos) -> bool {
@@ -257,8 +268,8 @@ pub fn light_fuses(
     }
 }
 
-/// One fixed tick: wake bodies under edits, step, burn fuses, set off
-/// blasts, and bake debris that has settled.
+/// One fixed tick: hand edits and the player to physics, advance it, burn
+/// fuses, set off blasts, and bake debris that has settled.
 pub fn step_physics(
     mut voxels: ResMut<Voxels>,
     mut streaming: ResMut<Streaming>,
@@ -270,7 +281,7 @@ pub fn step_physics(
     mc2_core::scope!("physics.tick");
     let physics = &mut *physics;
     // The player shoves what it walks into.
-    physics.world.obstacles = players
+    let obstacles = players
         .iter()
         .map(|(p, b)| {
             let bounds = Aabb::standing(b.feet, crate::player::WIDTH, p.height());
@@ -281,16 +292,15 @@ pub fn step_physics(
             }
         })
         .collect();
+    physics.host.set_obstacles(obstacles);
     let world = &mut voxels.0;
-    physics.dirty.append(&mut interaction.edited);
-    for (lo, hi) in std::mem::take(&mut physics.dirty) {
-        let m = f64::from(VOXELS_PER_BLOCK);
-        physics
-            .world
-            .wake_region(lo.as_dvec3() / m, (hi + 1).as_dvec3() / m);
+    for (lo, hi) in interaction.edited.drain(..) {
+        physics.host.edited(lo, hi);
     }
     let dt = time.fixed_dt as f32;
-    physics.world.step(dt, world);
+    physics.host.tick(world, dt);
+    let lost = physics.host.take_lost();
+    physics.fuses.retain(|f| !lost.contains(&f.body));
 
     for f in &mut physics.fuses {
         f.remaining -= dt;
@@ -299,7 +309,7 @@ pub fn step_physics(
         physics.fuses.drain(..).partition(|f| f.remaining <= 0.0);
     physics.fuses = lit;
     for f in burnt {
-        if let Some(body) = physics.world.remove(f.body) {
+        if let Some(body) = physics.host.remove(f.body) {
             physics.blasts.push(Blast {
                 centre: body.pos,
                 radius: f.radius,
@@ -312,14 +322,39 @@ pub fn step_physics(
 
     if time.elapsed >= physics.next_bake {
         physics.next_bake = time.elapsed + BAKE_INTERVAL_S;
-        let primed: Vec<BodyId> = physics.fuses.iter().map(|f| f.body).collect();
-        let baked = bake_settled(world, &mut physics.world, BAKE_AFTER_S, MAX_BODIES, |id| {
-            primed.contains(&id)
-        });
-        if !baked.is_empty() {
+        if bake_settled(world, physics) > 0 {
             interaction.edits += 1;
         }
     }
+}
+
+/// Bakes bodies asleep for `BAKE_AFTER_S` (or, above `MAX_BODIES`, the
+/// longest sleepers) into the world, except lit charges. Returns how many.
+fn bake_settled(world: &mut VoxelWorld, physics: &mut Physics) -> usize {
+    let mut sleepers: Vec<(f32, BodyId)> = physics
+        .host
+        .bodies()
+        .filter(|b| b.asleep && !physics.is_primed(b.id))
+        .map(|b| (b.still_time, b.id))
+        .collect();
+    sleepers.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let excess = physics.host.body_count().saturating_sub(MAX_BODIES);
+    let mut baked = 0;
+    for (i, (still, id)) in sleepers.into_iter().enumerate() {
+        if still < BAKE_AFTER_S && i >= excess {
+            break;
+        }
+        if let Some(b) = physics.host.remove(id) {
+            bake(world, &b);
+            let r = f64::from(b.shape.radius) * 16.0;
+            let c = b.pos * 16.0;
+            physics
+                .host
+                .edited((c - r).floor().as_ivec3(), (c + r).ceil().as_ivec3());
+            baked += 1;
+        }
+    }
+    baked
 }
 
 #[cfg(test)]
@@ -418,10 +453,12 @@ mod tests {
         let block =
             Arc::new(BodyShape::from_voxels(IVec3::splat(16), vec![ids::GRANITE; 4096]).unwrap());
         let rot = block.principal;
-        game.world
-            .resource_mut::<Physics>()
-            .world
-            .spawn(block, DVec3::new(10.5, 4.5, 10.5), rot);
+        game.world.resource_mut::<Physics>().host.spawn(
+            block,
+            DVec3::new(10.5, 4.5, 10.5),
+            rot,
+            Vec3::ZERO,
+        );
         game.spawn_player(DVec3::new(10.5, 7.0, 10.5), 0.0, 0.0);
         for _ in 0..120 {
             game.update(1.0 / 60.0);
@@ -436,10 +473,11 @@ mod tests {
             Arc::new(BodyShape::from_voxels(IVec3::splat(4), vec![ids::PLANKS; 64]).unwrap());
         assert!(chip.mass < KICK_MASS_KG);
         let rot = chip.principal;
-        let id = game.world.resource_mut::<Physics>().world.spawn(
+        let id = game.world.resource_mut::<Physics>().host.spawn(
             chip,
             DVec3::new(14.0, 4.125, 19.0),
             rot,
+            Vec3::ZERO,
         );
         game.spawn_player(DVec3::new(14.0, 4.0, 17.0), 0.0, 0.0);
         game.input().captured = true;
@@ -451,7 +489,7 @@ mod tests {
         let chip_z = game
             .world
             .resource::<Physics>()
-            .world
+            .host
             .body(id)
             .unwrap()
             .pos

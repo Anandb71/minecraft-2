@@ -178,7 +178,7 @@ pub fn pose_bodies(game: &Game, renderer: &mut mc2_render::Renderer) {
     let alpha = game.world.resource::<mc2_game::input::Time>().alpha;
     let physics = game.world.resource::<mc2_game::physics::Physics>();
     renderer.bodies.clear();
-    renderer.bodies.extend(physics.world.bodies.iter().map(|b| {
+    renderer.bodies.extend(physics.host.bodies().map(|b| {
         let (grid_origin, grid_rotation) = b.grid_pose_at(alpha);
         mc2_render::bodies::BodyInstance {
             key: b.id.0,
@@ -192,11 +192,17 @@ pub fn pose_bodies(game: &Game, renderer: &mut mc2_render::Renderer) {
 /// One HUD line on debris physics.
 pub fn physics_line(game: &Game, renderer: &mc2_render::Renderer) -> String {
     let physics = game.world.resource::<mc2_game::physics::Physics>();
-    let s = physics.world.stats;
+    let frame = physics.host.frame();
+    let s = frame.stats;
     let drawn = renderer.world.bodies.stats;
     format!(
-        "physics: {} bodies ({} awake, {} drawn), {} fuses, contacts {} + {} pairs, tick {:.2} ms (pairs {:.2}), blasts {}",
-        s.bodies,
+        "physics ({}): {} bodies ({} awake, {} drawn), {} fuses, contacts {} + {} pairs, step {:.2} ms (pairs {:.2}), job {:.2} ms / {} steps, {} cells mirrored, blasts {}",
+        if physics.host.is_threaded() {
+            "thread"
+        } else {
+            "inline"
+        },
+        physics.host.body_count(),
         s.awake,
         drawn.drawn,
         physics.fuses.len(),
@@ -204,6 +210,9 @@ pub fn physics_line(game: &Game, renderer: &mc2_render::Renderer) -> String {
         s.pair_contacts,
         s.step_ms,
         s.pair_ms,
+        frame.job_ms,
+        frame.steps,
+        frame.mirrored_cells,
         physics.blasts_total
     )
 }

@@ -34,9 +34,18 @@ impl Demo {
 }
 
 fn tick(game: &mut Game, frames: u32) {
+    let threaded = game
+        .world
+        .resource::<mc2_game::physics::Physics>()
+        .host
+        .is_threaded();
     for _ in 0..frames {
         game.update(1.0 / 60.0);
         mc2_core::profiler::end_frame();
+        if threaded {
+            // Physics runs beside the script in real time, as in the window.
+            std::thread::sleep(std::time::Duration::from_secs_f32(1.0 / 60.0));
+        }
     }
 }
 
@@ -189,7 +198,7 @@ pub fn run(game: &mut Game, demo: Demo) {
                 "blast demo: {} blasts after {:.2} s, {} bodies, last {:?}",
                 p.blasts_total,
                 f64::from(waited) / 60.0,
-                p.world.bodies.len(),
+                p.host.body_count(),
                 p.last_blast
             );
         }
@@ -205,4 +214,13 @@ pub fn run(game: &mut Game, demo: Demo) {
         "demo {demo:?}: {edits} edits, game.update mean {:.3} ms, worst frame {:.2} ms",
         update.0, update.1
     );
+    let mut slow: Vec<(String, f32)> = mc2_core::profiler::rows()
+        .into_iter()
+        .filter(|r| r.stats.max() > 5.0)
+        .map(|r| (r.name.to_string(), r.stats.max()))
+        .collect();
+    slow.sort_by(|a, b| b.1.total_cmp(&a.1));
+    for (name, max) in slow {
+        eprintln!("  slowest {name}: {max:.2} ms");
+    }
 }
