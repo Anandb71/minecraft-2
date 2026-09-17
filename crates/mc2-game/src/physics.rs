@@ -9,7 +9,7 @@
 
 use crate::collide::{Aabb, SolidField};
 use crate::input::{Input, Key, Time};
-use crate::interact::{Interaction, prepare_edit};
+use crate::interact::{Interaction, prepare_edit_where};
 use crate::physics_host::PhysicsHost;
 use crate::{Streaming, Voxels};
 use bevy_ecs::prelude::*;
@@ -198,12 +198,22 @@ pub fn detonate(
     let hi = (c + r).ceil().as_ivec3();
     {
         mc2_core::scope!("blast.restore");
-        prepare_edit(
+        // Cells the blast clears whole never have their voxels read, so
+        // only the shell it cuts through needs its detail back.
+        let inner = (r - 14.0).max(0.0);
+        prepare_edit_where(
             world,
             streaming.0.as_mut(),
             &mut interaction.touched,
             lo,
             hi,
+            |cell_min, cell_max| {
+                let near = c.clamp(cell_min.as_dvec3(), cell_max.as_dvec3() + 1.0);
+                let far = (c - cell_min.as_dvec3())
+                    .abs()
+                    .max((c - cell_max.as_dvec3() - 1.0).abs());
+                near.distance(c) <= r && far.length() > inner
+            },
         );
     }
     // Chain reaction: every TNT block the blast reaches is lit.

@@ -159,6 +159,21 @@ pub fn prepare_edit(
     min: IVec3,
     max: IVec3,
 ) {
+    prepare_edit_where(world, streamer, touched, min, max, |_, _| true);
+}
+
+/// [`prepare_edit`] for an edit that does not need every cell of its box:
+/// `detail` decides, per brick cell (given its minimum and maximum voxel),
+/// whether the edit will read voxels there. A blast that clears whole cells
+/// only needs detail where it cuts.
+pub fn prepare_edit_where(
+    world: &mut VoxelWorld,
+    streamer: Option<&mut ChunkStreamer>,
+    touched: &mut FxHashSet<(ChunkPos, IVec3)>,
+    min: IVec3,
+    max: IVec3,
+    detail: impl Fn(IVec3, IVec3) -> bool,
+) {
     let mut chunks = FxHashSet::default();
     let mut restore: FxHashMap<ChunkPos, Vec<IVec3>> = FxHashMap::default();
     let (lo_cell, hi_cell) = (min >> BRICK_SHIFT, max >> BRICK_SHIFT);
@@ -169,6 +184,10 @@ pub fn prepare_edit(
                 let pos = ChunkPos::of_voxel(cell_world << BRICK_SHIFT);
                 let local = cell_world - (pos.0 << (CHUNK_SHIFT - BRICK_SHIFT));
                 chunks.insert(pos);
+                let cell_min = cell_world << BRICK_SHIFT;
+                if !detail(cell_min, cell_min + (1 << BRICK_SHIFT) - 1) {
+                    continue;
+                }
                 if !touched.insert((pos, local)) || streamer.is_none() {
                     continue;
                 }
