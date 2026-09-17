@@ -10,6 +10,8 @@
 
 pub mod node;
 pub mod solve;
+pub mod split;
 
 pub use node::{NodeInfo, block_info};
 pub use solve::{Outcome, Params, RegionNode, solve};
+pub use split::cut;
