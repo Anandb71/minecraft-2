@@ -19,6 +19,8 @@ pub enum Demo {
     /// Place two TNT blocks down the view, light one, and stop while the
     /// debris of both blasts is in the air.
     Blast,
+    /// Raise a stone tower, blow its base out and stop while it comes down.
+    Collapse,
 }
 
 impl Demo {
@@ -28,6 +30,7 @@ impl Demo {
             "lights" => Some(Self::Lights),
             "mirror" => Some(Self::Mirror),
             "blast" => Some(Self::Blast),
+            "collapse" => Some(Self::Collapse),
             _ => None,
         }
     }
@@ -154,6 +157,71 @@ pub fn run(game: &mut Game, demo: Demo) {
                 );
             }
             look(game, 0.0, 60.0);
+        }
+        Demo::Collapse => {
+            use mc2_game::physics::{Blast, Physics};
+            use mc2_game::structure::Structure;
+            use mc2_voxel::material::ids;
+            let (feet, yaw) = {
+                let mut q = game.world.query::<&mc2_game::player::Body>();
+                let feet = q.iter(&game.world).next().map(|b| b.feet);
+                (feet, game.view().yaw)
+            };
+            let Some(feet) = feet else {
+                return;
+            };
+            let ahead = glam::DVec3::new(f64::from(yaw).sin(), 0.0, f64::from(yaw).cos());
+            let base = feet + ahead * 11.0;
+            let b0: glam::IVec3 = (base * 16.0).floor().as_ivec3() >> 4;
+            // A 3 m square stone tower 14 m tall under a 5 m cap.
+            let tower = [
+                (
+                    b0 + glam::IVec3::new(-1, 0, -1),
+                    b0 + glam::IVec3::new(1, 13, 1),
+                ),
+                (
+                    b0 + glam::IVec3::new(-2, 14, -2),
+                    b0 + glam::IVec3::new(2, 14, 2),
+                ),
+            ];
+            for (lo, hi) in tower {
+                let (a, b) = (
+                    lo * mc2_voxel::coords::VOXELS_PER_BLOCK,
+                    (hi + 1) * mc2_voxel::coords::VOXELS_PER_BLOCK - 1,
+                );
+                game.world
+                    .resource_mut::<mc2_game::Voxels>()
+                    .0
+                    .fill_box(a, b, ids::STONE_BRICK);
+                let s = &mut *game.world.resource_mut::<Structure>();
+                s.mark_built(a, b);
+                s.edited(a, b);
+            }
+            look(game, 0.0, -30.0);
+            // Let it settle, then blow the base out from under it.
+            tick(game, 120);
+            let standing = game.world.resource::<Physics>().host.body_count();
+            game.world.resource_mut::<Physics>().blasts.push(Blast {
+                centre: (b0.as_dvec3() + glam::DVec3::new(0.5, 1.0, 0.5)),
+                radius: 3.5,
+            });
+            let bodies = |g: &Game| g.world.resource::<Physics>().host.body_count();
+            let mut waited = 0;
+            while bodies(game) < standing + 40 && waited < 600 {
+                tick(game, 1);
+                waited += 1;
+            }
+            tick(game, 6);
+            let s = game.world.resource::<Structure>().stats;
+            eprintln!(
+                "collapse demo: {} bodies after {:.2} s, {} failures, {} collapses, {} pieces, worst ratio {:.2}",
+                bodies(game),
+                f64::from(waited) / 60.0,
+                s.failures,
+                s.islands,
+                s.pieces,
+                s.worst_ratio
+            );
         }
         Demo::Blast => {
             // TNT sits in hotbar slot 9. Two blocks about two metres apart,

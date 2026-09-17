@@ -165,6 +165,7 @@ pub fn run(args: &Args) -> Result<(), String> {
                     stats.voxel_mb
                 ),
                 crate::world::physics_line(&game, &renderer),
+                crate::world::structure_line(&game),
             ];
             let input = mc2_render::overlay::OverlayInput {
                 gpu: &renderer.profiler,

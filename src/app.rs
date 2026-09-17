@@ -328,6 +328,7 @@ impl App {
                     s.voxel_mb
                 ),
                 crate::world::physics_line(&self.game, renderer),
+                crate::world::structure_line(&self.game),
                 {
                     let clock = self.game.world.resource::<mc2_game::clock::WorldClock>();
                     let hour = clock.hour();

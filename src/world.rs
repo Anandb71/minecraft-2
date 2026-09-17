@@ -189,6 +189,27 @@ pub fn pose_bodies(game: &Game, renderer: &mut mc2_render::Renderer) {
     }));
 }
 
+/// One HUD line on structural integrity.
+pub fn structure_line(game: &Game) -> String {
+    let s = game
+        .world
+        .resource::<mc2_game::structure::Structure>()
+        .stats;
+    format!(
+        "structure: {} regions ({} nodes, gather {:.2} ms, solve {:.2} ms, worst {:.2}), {} failures, {} collapses, {} pieces, {} dirty, {} falling",
+        s.regions,
+        s.last_nodes,
+        s.last_gather_ms,
+        s.last_solve_ms,
+        s.worst_ratio,
+        s.failures,
+        s.islands,
+        s.pieces,
+        s.dirty,
+        s.falling
+    )
+}
+
 /// One HUD line on debris physics.
 pub fn physics_line(game: &Game, renderer: &mc2_render::Renderer) -> String {
     let physics = game.world.resource::<mc2_game::physics::Physics>();
