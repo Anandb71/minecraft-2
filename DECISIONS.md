@@ -149,3 +149,27 @@ Both were built behind one output with the same hit shading and denoiser, and me
 - **Trace a shadow ray and a sky ray at every hit.** Correct, and triples the ray count of either method.
 - **A world-space radiance cache (hash grid of voxel faces).** Handles off-screen multi-bounce well, but it is a second structure to update on every edit and to budget.
 - **Last frame's surface radiance on screen, the sky map off screen (chosen).** Bounces compound through the previous frame for free; off-screen hits get sun and sky visibility from column heights (texture reads and an 18-step 2D march). Overhangs deeper than the map's 0.5 m column resolution can leak a little sky light.
+
+## D21. Clouds
+
+- **Cloud billboards or a painted sky dome.** Cheap and art-directable, but static: no time of day, no weather, nothing to fly under or cast shadows.
+- **Clouds as voxels in the world structure.** Consistent with everything else, but a cloud layer is kilometres of mostly empty, constantly changing volume; streaming and editing it would cost more than the terrain.
+- **Procedural ray-marched layer (chosen, after Schneider and Vos 2015).** Two tiling noise volumes, height gradients per cloud type, weather-driven coverage, a cone light march with Wrenninge's multiple scattering octaves, one quarter of the half-resolution texels traced per frame and the rest reprojected. 1.3 ms at Realistic, 3.2-3.8 ms at Ultra on the integrated GPU. A 256^2 toroidal shadow map feeds the sun term, fog and indirect hits.
+
+## D22. Local fog and light shafts
+
+- **Analytic height fog in composition.** Free, but it cannot be shadowed: no shafts through clouds or past cliffs.
+- **Ray-marched fog per pixel.** Correct and shadowed, but tens of samples per pixel.
+- **Froxel volume with temporal reprojection (chosen, Hillaire 2015).** 64 exponential slices at 1/8 resolution, lit once per froxel with sky-map sun visibility and cloud shadows, reprojected 90%, integrated once per column. 2.0 ms at Realistic, 4.2 ms at Ultra.
+
+## D23. Glossy reflections
+
+- **Screen-space reflections.** Cheap, but a voxel world is full of off-screen and occluded geometry, and the sky dominates what water and ice reflect.
+- **Pre-filtered environment probes.** Stable, but they misplace everything nearby and go stale with every edit.
+- **Traced reflections through the marcher, denoised (chosen).** One VNDF-sampled ray per half-resolution pixel for surfaces up to roughness 0.5, hits shaded like indirect light, SVGF on the result. Rough surfaces keep the analytic sun highlight only. refl.trace 1.9 ms and refl.denoise 5.0 ms at Realistic when glossy surfaces fill the view.
+
+## D24. Post and photo mode
+
+- **No post beyond tonemapping.** Honest, but images read as renders: no glare around the sun, no film response, no night vision.
+- **Screen-space effects stacked ad hoc.** Every effect a pass with its own resolution and history.
+- **One display-resolution post pass plus the present shader (chosen).** Bloom, motion blur and depth of field on the upsampled HDR image; Purkinje shift, AgX, contrast-adaptive sharpening, vignetting and grain in present, all from one settings struct. Photo mode reuses the same passes, raising quality to the top tier for 96 frames before saving.
