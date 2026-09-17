@@ -1194,6 +1194,7 @@ dependencies = [
  "bevy_ecs",
  "glam 0.33.7",
  "mc2-core",
+ "mc2-physics",
  "mc2-voxel",
  "mc2-worldgen",
 ]

@@ -114,8 +114,11 @@ pub struct Interaction {
     pub inventory: Inventory,
     next_carve: f64,
     /// Brick cells already restored to generated detail (or edited since).
-    touched: FxHashSet<(ChunkPos, IVec3)>,
+    pub(crate) touched: FxHashSet<(ChunkPos, IVec3)>,
     pub edits: u64,
+    /// Voxel boxes edited since physics last looked, so resting debris
+    /// there wakes up.
+    pub edited: Vec<(IVec3, IVec3)>,
 }
 
 impl Default for Interaction {
@@ -133,6 +136,7 @@ impl Default for Interaction {
             next_carve: 0.0,
             touched: FxHashSet::default(),
             edits: 0,
+            edited: Vec::new(),
         }
     }
 }
@@ -342,6 +346,7 @@ pub fn interact(
                 }
                 layer.set(t.block, None);
                 state.edits += 1;
+                state.edited.push((o, o + 15));
             } else if input.button_pressed(Button::Secondary) {
                 let kind = HOTBAR[state.slot];
                 let bill = kind.bill_of_materials();
@@ -364,6 +369,7 @@ pub fn interact(
                     let explicit = !matches!(kind, BlockKind::Solid(_));
                     layer.set(t.place, explicit.then_some(kind));
                     state.edits += 1;
+                    state.edited.push((o, o + 15));
                 }
             }
         }
@@ -414,6 +420,7 @@ pub fn interact(
                 added.into_iter().map(|(m, n)| (m, n as u32)).collect();
             state.inventory.spend(&spent);
             state.edits += 1;
+            state.edited.push((lo, hi));
         }
     }
 }

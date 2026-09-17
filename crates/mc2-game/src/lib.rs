@@ -5,6 +5,7 @@ pub mod clock;
 pub mod collide;
 pub mod input;
 pub mod interact;
+pub mod physics;
 pub mod player;
 pub mod view;
 
@@ -46,13 +47,14 @@ impl Game {
         world.insert_resource(interact::Interaction::default());
         world.insert_resource(view::ViewCamera::default());
         world.insert_resource(clock::WorldClock::default());
+        world.insert_resource(physics::Physics::default());
 
         let mut frame = Schedule::default();
         frame.add_systems((clock::advance_clock, player::look, player::toggles).chain());
         let mut fixed = Schedule::default();
-        fixed.add_systems(player::movement);
+        fixed.add_systems((player::movement, physics::step_physics).chain());
         let mut late = Schedule::default();
-        late.add_systems((view::update_view, interact::interact).chain());
+        late.add_systems((view::update_view, interact::interact, physics::light_fuses).chain());
         Self {
             world,
             frame,
