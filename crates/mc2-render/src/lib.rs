@@ -1,5 +1,6 @@
 //! The renderer: frame graph passes over the voxel acceleration structure.
 
+pub mod bodies;
 pub mod calibration;
 pub mod camera;
 pub mod clouds;
