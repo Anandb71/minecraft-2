@@ -7,6 +7,8 @@ pub mod body;
 pub mod eigen;
 pub mod probe;
 pub mod shape;
+pub mod world;
 
 pub use body::{Body, BodyId};
 pub use shape::BodyShape;
+pub use world::{PhysicsStats, PhysicsWorld};
