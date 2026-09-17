@@ -4,7 +4,7 @@
 use crate::body::{Body, BodyId};
 use crate::shape::{BodyShape, VOXEL_M};
 use crate::world::PhysicsWorld;
-use glam::{DVec3, IVec3, Vec3};
+use glam::{DVec3, IVec3, Quat, Vec3};
 use mc2_voxel::brick::Brick;
 use mc2_voxel::coords::{BRICK_SHIFT, CHUNK_SHIFT, ChunkPos};
 use mc2_voxel::material::{MaterialId, ids};
@@ -197,27 +197,36 @@ fn carve(world: &mut VoxelWorld, c: DVec3, r_vox: f64) -> Carved {
     carved
 }
 
-/// Blasts a sphere of `radius` metres out of the world. Solid voxels inside
-/// are removed; material from the outer shell is thrown out as up to
-/// `max_debris` fragments of a few decimetres, and bodies within twice the
-/// radius are pushed away. Materials weaker than the blast (by compressive
-/// strength) break further out.
-pub fn explode(
+/// A fragment thrown by a blast, before it becomes a body.
+#[derive(Clone, Debug)]
+pub struct Debris {
+    pub shape: Arc<BodyShape>,
+    /// Centre of mass, world metres.
+    pub pos: DVec3,
+    /// Principal frame to world.
+    pub rot: Quat,
+    pub vel: Vec3,
+    pub ang_vel: Vec3,
+}
+
+/// Blasts a sphere of `radius` metres out of the world and cuts up to
+/// `max_debris` fragments of a few decimetres from the outer shell of what
+/// it removed. Solid voxels inside are removed; materials weaker than the
+/// blast (by compressive strength) break further out.
+pub fn blast(
     world: &mut VoxelWorld,
-    physics: &mut PhysicsWorld,
     centre: DVec3,
     radius: f32,
     max_debris: usize,
     seed: u64,
-) -> ExplosionReport {
+) -> (ExplosionReport, Vec<Debris>) {
     let mut report = ExplosionReport::default();
+    let mut debris = Vec::new();
     let mut rng = Lcg(seed ^ 0x9e37_79b9_7f4a_7c15);
     let c = centre * 16.0;
     let r_vox = f64::from(radius) * 16.0;
     let carved = carve(world, c, r_vox);
     report.removed_voxels = carved.count;
-    // Bodies present before the blast; debris gets its own velocities.
-    let existing = physics.bodies.len();
 
     // Debris: fragments seeded on the outer shell of what was removed.
     let mut carved = carved;
@@ -270,35 +279,74 @@ pub fn explode(
         let shape = Arc::new(shape);
         let com_world = (origin.as_dvec3() + shape.com.as_dvec3()) * f64::from(VOXEL_M);
         let rot = shape.principal;
-        let id = physics.spawn(shape, com_world, rot);
         let out = (com_world - centre).as_vec3();
         // Ground throws material up and out, never down into itself.
         let away = out.normalize_or(Vec3::Y);
         let dir = Vec3::new(away.x, away.y.abs(), away.z) + Vec3::Y * 0.6;
         let falloff = (1.0 - out.length() / (radius * 1.3)).clamp(0.2, 1.0);
-        if let Some(b) = physics.body_mut(id) {
-            b.vel = dir.normalize() * (6.0 + 10.0 * falloff) * (0.7 + 0.6 * rng.next());
-            b.ang_vel = Vec3::new(rng.next() - 0.5, rng.next() - 0.5, rng.next() - 0.5) * 20.0;
-        }
+        let vel = dir.normalize() * (6.0 + 10.0 * falloff) * (0.7 + 0.6 * rng.next());
+        let ang_vel = Vec3::new(rng.next() - 0.5, rng.next() - 0.5, rng.next() - 0.5) * 20.0;
+        debris.push(Debris {
+            shape,
+            pos: com_world,
+            rot,
+            vel,
+            ang_vel,
+        });
         report.debris += 1;
     }
+    (report, debris)
+}
 
-    // Push bodies already in the world.
-    let reach = f64::from(radius) * 2.0;
-    for b in &mut physics.bodies[..existing] {
-        let d = b.pos - centre;
-        let dist = d.length();
-        if dist > reach {
-            continue;
+impl PhysicsWorld {
+    /// Pushes bodies within twice a blast's radius away from its centre and
+    /// wakes them. Returns how many were pushed.
+    pub fn blast_impulse(&mut self, centre: DVec3, radius: f32) -> usize {
+        let reach = f64::from(radius) * 2.0;
+        let mut pushed = 0;
+        for b in &mut self.bodies {
+            let d = b.pos - centre;
+            let dist = d.length();
+            if dist > reach {
+                continue;
+            }
+            let strength = (1.0 - dist / reach) as f32;
+            let dir = d.as_vec3().normalize_or(Vec3::Y);
+            b.wake();
+            // An impulse of 2000 N s at the centre, tapering to nothing.
+            b.vel += dir * (2000.0 * strength * b.inv_mass).min(30.0);
+            pushed += 1;
         }
-        let strength = (1.0 - dist / reach) as f32;
-        let dir = d.as_vec3().normalize_or(Vec3::Y);
-        b.wake();
-        // An impulse of 2000 N s at the centre, tapering to nothing.
-        b.vel += dir * (2000.0 * strength * b.inv_mass).min(30.0);
-        report.pushed += 1;
+        self.wake_region(DVec3::splat(-reach) + centre, DVec3::splat(reach) + centre);
+        pushed
     }
-    physics.wake_region(DVec3::splat(-reach) + centre, DVec3::splat(reach) + centre);
+
+    /// Adds a blast fragment as a body.
+    pub fn spawn_debris(&mut self, id: BodyId, d: &Debris) {
+        self.spawn_with_id(id, d.shape.clone(), d.pos, d.rot);
+        if let Some(b) = self.body_mut(id) {
+            b.vel = d.vel;
+            b.ang_vel = d.ang_vel;
+        }
+    }
+}
+
+/// A whole blast against a world stepped in place: carve, push the bodies
+/// already there, then add the fragments.
+pub fn explode(
+    world: &mut VoxelWorld,
+    physics: &mut PhysicsWorld,
+    centre: DVec3,
+    radius: f32,
+    max_debris: usize,
+    seed: u64,
+) -> ExplosionReport {
+    let (mut report, debris) = blast(world, centre, radius, max_debris, seed);
+    report.pushed = physics.blast_impulse(centre, radius);
+    for d in &debris {
+        let id = physics.next_id();
+        physics.spawn_debris(id, d);
+    }
     report
 }
 
