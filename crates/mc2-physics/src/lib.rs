@@ -4,6 +4,7 @@
 //! terrain into bodies; and baking of settled bodies back into the world.
 
 pub mod body;
+pub mod collision;
 pub mod eigen;
 pub mod explode;
 mod pair_contact;
