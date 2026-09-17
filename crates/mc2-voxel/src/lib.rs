@@ -7,4 +7,5 @@ pub mod march;
 pub mod material;
 pub mod samples;
 pub mod tree;
+pub mod window;
 pub mod world;
