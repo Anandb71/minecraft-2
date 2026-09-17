@@ -2,6 +2,7 @@
 //! Algorithm 2 with one position iteration per substep).
 
 use crate::body::{Body, BodyId};
+use crate::collision::{CollisionWindow, SolidCells};
 use crate::pair_contact::{
     candidate_pairs, find_pair_contacts, solve_pair_positions, solve_pair_velocities,
 };
@@ -10,9 +11,7 @@ use crate::shape::BodyShape;
 use crate::world_contact::{
     Contact, find_world_contacts, solve_world_positions, solve_world_velocities,
 };
-use glam::{DVec3, Quat, Vec3};
-use mc2_voxel::window::VoxelWindow;
-use mc2_voxel::world::VoxelWorld;
+use glam::{DVec3, IVec3, Quat, Vec3};
 use rayon::prelude::*;
 use std::sync::Arc;
 
@@ -48,6 +47,9 @@ pub struct PhysicsWorld {
     pub bodies: Vec<Body>,
     /// Kinematic boxes for the next step.
     pub obstacles: Vec<Obstacle>,
+    /// Brick cells the last step needed and the collision source lacked.
+    /// Bodies that needed them were held in place.
+    pub missing_cells: Vec<IVec3>,
     next_id: u64,
     pub substeps: u32,
     pub stats: PhysicsStats,
@@ -64,6 +66,7 @@ impl PhysicsWorld {
         Self {
             bodies: Vec::new(),
             obstacles: Vec::new(),
+            missing_cells: Vec::new(),
             next_id: 1,
             substeps: 8,
             stats: PhysicsStats::default(),
@@ -72,9 +75,20 @@ impl PhysicsWorld {
 
     pub fn spawn(&mut self, shape: Arc<BodyShape>, pos: DVec3, rot: Quat) -> BodyId {
         let id = BodyId(self.next_id);
-        self.next_id += 1;
-        self.bodies.push(Body::new(id, shape, pos, rot));
+        self.spawn_with_id(id, shape, pos, rot);
         id
+    }
+
+    /// Spawns under an id chosen by the caller (who hands out ids before the
+    /// physics thread sees the body). Later automatic ids skip past it.
+    pub fn spawn_with_id(&mut self, id: BodyId, shape: Arc<BodyShape>, pos: DVec3, rot: Quat) {
+        self.next_id = self.next_id.max(id.0 + 1);
+        self.bodies.push(Body::new(id, shape, pos, rot));
+    }
+
+    /// The id the next automatic spawn will take.
+    pub fn next_id(&self) -> BodyId {
+        BodyId(self.next_id)
     }
 
     pub fn body(&self, id: BodyId) -> Option<&Body> {
@@ -101,8 +115,8 @@ impl PhysicsWorld {
         }
     }
 
-    /// Advances by `dt` seconds.
-    pub fn step(&mut self, dt: f32, world: &VoxelWorld) {
+    /// Advances by `dt` seconds against the solid cells of `world`.
+    pub fn step<S: SolidCells>(&mut self, dt: f32, world: &S) {
         let start = std::time::Instant::now();
         let substeps = self.substeps.max(1);
         let h = dt / substeps as f32;
@@ -125,11 +139,24 @@ impl PhysicsWorld {
         let obstacles = &self.obstacles;
         // The world around each awake body, over everywhere it can reach
         // this step, read once instead of per sample and substep.
-        let windows: Vec<Option<VoxelWindow>> = self
+        let windows: Vec<Option<CollisionWindow<S>>> = self
             .bodies
             .par_iter()
             .map(|b| (!b.asleep).then(|| reach_window(b, dt, world)))
             .collect();
+        // A body whose surroundings are not known yet waits, held like a
+        // sleeper, until they arrive.
+        self.missing_cells.clear();
+        let mut held = vec![false; self.bodies.len()];
+        for (i, w) in windows.iter().enumerate() {
+            if let Some(w) = w.as_ref().filter(|w| !w.missing.is_empty()) {
+                self.missing_cells.extend_from_slice(&w.missing);
+                held[i] = true;
+                self.bodies[i].asleep = true;
+            }
+        }
+        self.missing_cells.sort_unstable_by_key(|c| (c.x, c.y, c.z));
+        self.missing_cells.dedup();
         let mut paired = vec![false; self.bodies.len()];
         for &(i, j) in &pairs {
             paired[i] = true;
@@ -168,7 +195,7 @@ impl PhysicsWorld {
             for _ in 0..substeps {
                 let begin = |(b, window, contacts): (
                     &mut Body,
-                    &Option<VoxelWindow>,
+                    &Option<CollisionWindow<S>>,
                     &mut Vec<Contact>,
                 )| {
                     contacts.clear();
@@ -219,7 +246,11 @@ impl PhysicsWorld {
                 pair_contacts += pc.len();
             }
         }
-        for b in &mut self.bodies {
+        for (b, held) in self.bodies.iter_mut().zip(&held) {
+            if *held {
+                b.asleep = false;
+                continue;
+            }
             if b.asleep {
                 // Still counts how long the body has been at rest.
                 b.still_time += dt;
@@ -259,12 +290,12 @@ impl PhysicsWorld {
 /// Voxels a body's samples can touch during a step of `dt`: its bounding
 /// sphere at the start and at the ballistic end point, plus a sample radius
 /// and a voxel of slack.
-fn reach_window<'a>(b: &Body, dt: f32, world: &'a VoxelWorld) -> VoxelWindow<'a> {
+fn reach_window<'a, S: SolidCells>(b: &Body, dt: f32, world: &'a S) -> CollisionWindow<'a, S> {
     let end = b.pos + ((b.vel + GRAVITY * dt * 0.5) * dt).as_dvec3();
     let r = f64::from(b.shape.radius + SAMPLE_RADIUS) + 1.0 / 16.0;
     let lo = b.pos.min(end) - r;
     let hi = b.pos.max(end) + r;
-    VoxelWindow::new(
+    CollisionWindow::new(
         world,
         (lo * 16.0).floor().as_ivec3(),
         (hi * 16.0).floor().as_ivec3(),
@@ -273,13 +304,13 @@ fn reach_window<'a>(b: &Body, dt: f32, world: &'a VoxelWorld) -> VoxelWindow<'a>
 
 /// World and obstacle contacts of a body this substep, already solved for
 /// position.
-fn solve_world(
+fn solve_world<S: SolidCells>(
     b: &mut Body,
-    window: Option<&VoxelWindow>,
+    window: Option<&CollisionWindow<S>>,
     obstacles: &[Obstacle],
     h: f32,
 ) -> Vec<Contact> {
-    let window = window.filter(|w| w.any_matter());
+    let window = window.filter(|w| w.any_solid());
     if window.is_none() && obstacles.is_empty() {
         return Vec::new();
     }
@@ -314,8 +345,8 @@ fn derive_velocities(b: &mut Body, h: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::IVec3;
     use mc2_voxel::material::ids;
+    use mc2_voxel::world::VoxelWorld;
 
     fn ground() -> VoxelWorld {
         let mut w = VoxelWorld::new();
@@ -410,6 +441,32 @@ mod tests {
             assert!(!inside, "cube at {} inside box at {x}", b.pos.x);
         }
         assert!(p.body(id).unwrap().pos.x > x + 0.3, "not pushed ahead");
+    }
+
+    #[test]
+    fn bodies_wait_for_missing_collision_cells() {
+        use crate::collision::{CollisionMap, world_occ};
+        let w = ground();
+        let mut map = CollisionMap::default();
+        let mut p = PhysicsWorld::new();
+        let id = p.spawn(cube(8), DVec3::new(8.0, 3.0, 8.0), Quat::IDENTITY);
+        p.step(1.0 / 120.0, &map);
+        assert!(!p.missing_cells.is_empty());
+        assert_eq!(
+            p.body(id).unwrap().pos.y,
+            3.0,
+            "moved without its surroundings"
+        );
+        // Hand over what each step asked for, as the world's thread would.
+        for _ in 0..600 {
+            for c in std::mem::take(&mut p.missing_cells) {
+                map.insert(c, world_occ(&w, c).into_owned());
+            }
+            p.step(1.0 / 120.0, &map);
+        }
+        let b = p.body(id).unwrap();
+        assert!((b.pos.y - 2.25).abs() < 0.05, "rest height {}", b.pos.y);
+        assert!(b.asleep);
     }
 
     #[test]

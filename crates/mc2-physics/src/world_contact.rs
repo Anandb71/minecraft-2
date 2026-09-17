@@ -4,10 +4,10 @@
 //! restitution (Müller et al. 2020, Sections 3.5 and 3.6).
 
 use crate::body::Body;
+use crate::collision::{CollisionWindow, SolidCells};
 use crate::probe::{SAMPLE_RADIUS, sample_contacts};
 use crate::world::{GRAVITY, Obstacle};
 use glam::{DVec3, Vec3};
-use mc2_voxel::window::VoxelWindow;
 
 /// Hard cap on contacts a body keeps per substep.
 const MAX_CONTACTS: usize = 48;
@@ -70,9 +70,9 @@ fn obstacle_contacts(obstacles: &[Obstacle], p: DVec3, out: &mut Vec<(Vec3, f32,
 
 /// Contacts of a body with the world (when the window holds any matter)
 /// and with obstacles.
-pub fn find_world_contacts(
+pub fn find_world_contacts<S: SolidCells>(
     b: &Body,
-    world: Option<&VoxelWindow>,
+    world: Option<&CollisionWindow<S>>,
     obstacles: &[Obstacle],
 ) -> Vec<Contact> {
     let mut raw = Vec::new();
