@@ -12,6 +12,7 @@ use crate::amplify::{Surface, SurfaceSample, material_at};
 use crate::flora::{self, FLORA_HEIGHT_M, GROUND_COVER_M};
 use crate::noise::Perlin;
 use crate::noise::{hash_unit, hash3};
+use crate::settlement::Settlements;
 use crate::strata::{Column, Strata};
 use crate::terrain::CoarseTerrain;
 use glam::IVec3;
@@ -47,9 +48,15 @@ pub struct ChunkGenerator {
     seed: u64,
     /// Edges of leaf clusters and stones.
     flora_noise: Perlin,
-    /// Grow plants (off for terrain-only tests and measurements).
+    /// Grow plants and build villages (off for terrain-only tests and
+    /// measurements).
     pub flora: bool,
+    pub settlements: Settlements,
+    /// Plants by chunk column: every chunk stacked in a column shares them.
+    plant_cache: std::sync::Mutex<PlantCache>,
 }
+
+type PlantCache = mc2_core::FxHashMap<(i32, i32), Arc<Vec<flora::Plant>>>;
 
 /// Dense generation target turned into a tree in one pass.
 struct Builder {
@@ -149,6 +156,8 @@ impl ChunkGenerator {
             seed,
             flora_noise: Perlin::new(seed ^ 0x1eaf_b10b),
             flora: true,
+            settlements: Settlements::new(seed),
+            plant_cache: Default::default(),
         }
     }
 
@@ -257,6 +266,9 @@ impl ChunkGenerator {
             self.generate_coarse(&mut b, pos, lod);
             let mut tree = ChunkTree::from_dense(&b.cells, b.bricks);
             flora::stamp_coarse(&mut tree, pos.origin(), &self.plants_near(pos), 1);
+            for v in self.villages_near(pos) {
+                v.stamp_coarse(&mut tree, pos.origin(), &self.surface, 1);
+            }
             return tree;
         }
         let s = self.samples(pos);
@@ -273,7 +285,20 @@ impl ChunkGenerator {
             &self.plants_near(pos),
             &self.flora_noise,
         );
+        for v in self.villages_near(pos) {
+            v.stamp_full(&mut tree, pos.origin(), &self.surface);
+        }
         tree
+    }
+
+    /// Villages that may reach into a chunk.
+    fn villages_near(&self, pos: ChunkPos) -> Vec<std::sync::Arc<crate::settlement::Village>> {
+        if !self.flora {
+            return Vec::new();
+        }
+        let lo = pos.origin().as_vec3() * VOXEL_M;
+        let hi = lo + glam::Vec3::splat(CHUNK_VOXELS as f32 * VOXEL_M);
+        self.settlements.near(&self.surface, lo, hi)
     }
 
     /// Plants that may reach into a chunk; none for chunks far from the
@@ -285,7 +310,30 @@ impl ChunkGenerator {
         if !self.flora || hi.y < ground_lo {
             return Vec::new();
         }
-        flora::plants_near(&self.surface, lo, hi, self.seed)
+        self.column_plants(pos.0.x, pos.0.z)
+            .iter()
+            .filter(|p| p.hi.cmpge(lo).all() && p.lo.cmple(hi).all())
+            .cloned()
+            .collect()
+    }
+
+    /// Every plant reaching into a chunk column, built once and cached.
+    fn column_plants(&self, cx: i32, cz: i32) -> Arc<Vec<flora::Plant>> {
+        if let Some(p) = self.plant_cache.lock().expect("plant cache").get(&(cx, cz)) {
+            return p.clone();
+        }
+        let size = CHUNK_VOXELS as f32 * VOXEL_M;
+        let lo = glam::Vec3::new(cx as f32 * size, -1e4, cz as f32 * size);
+        let hi = lo + glam::Vec3::new(size, 2e4, size);
+        let villages = self.settlements.near(&self.surface, lo, hi);
+        let taken = |x: f32, z: f32| villages.iter().any(|v| v.claims(x, z));
+        let plants = Arc::new(flora::plants_near(&self.surface, lo, hi, self.seed, &taken));
+        let mut cache = self.plant_cache.lock().expect("plant cache");
+        if cache.len() > 8192 {
+            cache.clear();
+        }
+        cache.insert((cx, cz), plants.clone());
+        plants
     }
 
     /// Coarse levels sample one surface column per node or cell and give
@@ -358,6 +406,9 @@ impl ChunkGenerator {
         });
         if lod == Lod::Node2 {
             flora::stamp_coarse(&mut tree, pos.origin(), &self.plants_near(pos), 4);
+            for v in self.villages_near(pos) {
+                v.stamp_coarse(&mut tree, pos.origin(), &self.surface, 4);
+            }
         }
         tree
     }

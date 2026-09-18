@@ -13,11 +13,21 @@ fn main() {
     let terrain =
         mc2_worldgen::cache::load_or_generate(path, 42, TerrainParams::world(), &mut |_, _| {})
             .expect("terrain");
-    let generator = ChunkGenerator::new(Arc::new(terrain));
-    // A 6x6 patch of columns around the map centre, every non-air height.
+    let mut generator = ChunkGenerator::new(Arc::new(terrain));
+    // Plants and villages on unless NO_FLORA is set; the patch centred on
+    // chunk column CX, CZ (default the map centre).
+    generator.flora = std::env::var("NO_FLORA").is_err();
+    let env = |k: &str, d: i32| {
+        std::env::var(k)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(d)
+    };
+    let (cx, cz) = (env("CX", 256), env("CZ", 256));
+    // A 6x6 patch of columns, every non-air height.
     let mut positions = Vec::new();
-    for z in 253..259 {
-        for x in 253..259 {
+    for z in cz - 3..cz + 3 {
+        for x in cx - 3..cx + 3 {
             let (lo, hi) = generator.column_range(x, z);
             for y in 0..16 {
                 let bottom = (y * 32) as f32;
