@@ -203,10 +203,7 @@ cargo test --workspace
 ## Author
 
 **[Anand B](https://anandb71.in)** ([@Anandb71](https://github.com/Anandb71))
-builds this from Tamil Nadu, India.
 
-Co-founder of [Arbor](https://getarbor.dev). Available for hire.
-Mail: [anandbiju71@gmail.com](mailto:anandbiju71@gmail.com).
 
 I care about engines you can measure. If a pass is over budget, the HUD
 turns red. If two architectures are on the table, [DECISIONS.md](DECISIONS.md)
