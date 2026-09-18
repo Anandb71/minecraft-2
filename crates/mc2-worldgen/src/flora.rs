@@ -287,6 +287,7 @@ impl Prim {
     }
 }
 
+#[derive(Clone)]
 pub struct Plant {
     prims: Vec<Prim>,
     pub lo: Vec3,
@@ -653,14 +654,21 @@ fn fallen_log(root: Vec3, rng: &mut Rand) -> Plant {
     ])
 }
 
-/// The plant rooted in grid cell (i, k), if any.
-pub fn plant_in_cell(surface: &Surface, i: i32, k: i32, seed: u64) -> Option<Plant> {
+/// The plant rooted in grid cell (i, k), if any, unless `taken` claims
+/// its spot.
+pub fn plant_in_cell(
+    surface: &Surface,
+    i: i32,
+    k: i32,
+    seed: u64,
+    taken: &dyn Fn(f32, f32) -> bool,
+) -> Option<Plant> {
     let h = hash3(i, 7, k, seed ^ 0x000f_107a);
     let x = (i as f32 + 0.1 + 0.8 * unit(h, 0)) * FLORA_CELL_M;
     let z = (k as f32 + 0.1 + 0.8 * unit(h, 17)) * FLORA_CELL_M;
     let s = surface.sample(x, z);
     let sea = surface.terrain.params.sea_level;
-    if s.slope > 0.75 || s.river > 0.35 || s.height < sea + 0.4 {
+    if s.slope > 0.75 || s.river > 0.35 || s.height < sea + 0.4 || taken(x, z) {
         return None;
     }
     let biome = s.biome(sea);
@@ -700,8 +708,15 @@ pub fn plant_in_cell(surface: &Surface, i: i32, k: i32, seed: u64) -> Option<Pla
     }
 }
 
-/// Plants whose bounds may reach into the box `lo..hi` (metres).
-pub fn plants_near(surface: &Surface, lo: Vec3, hi: Vec3, seed: u64) -> Vec<Plant> {
+/// Plants whose bounds may reach into the box `lo..hi` (metres), none
+/// where `taken` says the ground is built on.
+pub fn plants_near(
+    surface: &Surface,
+    lo: Vec3,
+    hi: Vec3,
+    seed: u64,
+    taken: &dyn Fn(f32, f32) -> bool,
+) -> Vec<Plant> {
     let c0 = ((lo.x - FLORA_REACH_M) / FLORA_CELL_M).floor() as i32;
     let c1 = ((hi.x + FLORA_REACH_M) / FLORA_CELL_M).floor() as i32;
     let k0 = ((lo.z - FLORA_REACH_M) / FLORA_CELL_M).floor() as i32;
@@ -709,7 +724,7 @@ pub fn plants_near(surface: &Surface, lo: Vec3, hi: Vec3, seed: u64) -> Vec<Plan
     let mut out = Vec::new();
     for k in k0..=k1 {
         for i in c0..=c1 {
-            if let Some(p) = plant_in_cell(surface, i, k, seed)
+            if let Some(p) = plant_in_cell(surface, i, k, seed, taken)
                 && p.hi.cmpge(lo).all()
                 && p.lo.cmple(hi).all()
             {
@@ -723,6 +738,83 @@ pub fn plants_near(surface: &Surface, lo: Vec3, hi: Vec3, seed: u64) -> Vec<Plan
 /// What a plant may grow into: air, or ground cover it pushes aside.
 fn replaceable(m: MaterialId) -> bool {
     m.is_air() || (m.get().kind == Kind::Foliage && m != ids::LEAVES && m != ids::PINE_NEEDLES)
+}
+
+/// Edge noise of a blob over one brick cell: sampled at the cell's
+/// corners and interpolated inside, eight noise evaluations a cell instead
+/// of one a voxel.
+struct CellNoise {
+    lo: Vec3,
+    corners: [f32; 8],
+}
+
+impl CellNoise {
+    fn new(noise: &Perlin, lo: Vec3, salt: u32) -> Self {
+        let s = salt as f32 * 17.13;
+        let mut corners = [0.0; 8];
+        for (i, c) in corners.iter_mut().enumerate() {
+            let p = lo + Vec3::new((i & 1) as f32, ((i >> 1) & 1) as f32, (i >> 2) as f32) * 0.5;
+            *c = noise.noise3(p.x * 0.9 + s, p.y * 0.9 - s, p.z * 0.9 + s * 0.5);
+        }
+        Self { lo, corners }
+    }
+
+    fn at(&self, p: Vec3) -> f32 {
+        let f = ((p - self.lo) * 2.0).clamp(Vec3::ZERO, Vec3::ONE);
+        let c = &self.corners;
+        let x0 = c[0] + (c[1] - c[0]) * f.x;
+        let x1 = c[2] + (c[3] - c[2]) * f.x;
+        let x2 = c[4] + (c[5] - c[4]) * f.x;
+        let x3 = c[6] + (c[7] - c[6]) * f.x;
+        let y0 = x0 + (x1 - x0) * f.y;
+        let y1 = x2 + (x3 - x2) * f.y;
+        y0 + (y1 - y0) * f.z
+    }
+}
+
+impl Prim {
+    /// `sample` with the blob's edge noise already known for the cell.
+    fn sample_in(
+        &self,
+        cell_noise: Option<&CellNoise>,
+        p: Vec3,
+        voxel: IVec3,
+    ) -> Option<MaterialId> {
+        match *self {
+            Prim::Wood { a, b, ra, rb, m } => {
+                let (d, t) = segment(p, a, b);
+                (d <= ra + (rb - ra) * t).then_some(m)
+            }
+            Prim::Blob {
+                c,
+                r,
+                m,
+                fill,
+                cap,
+                salt,
+            } => {
+                let n = cell_noise.map_or(0.0, |cn| cn.at(p));
+                let depth = ((p - c) / r).length() - n * 0.15;
+                if depth > 1.0 {
+                    return None;
+                }
+                if depth > 0.72 {
+                    let h = hash3(voxel.x, voxel.y, voxel.z, salt as u64 ^ 0x1eaf);
+                    if hash_unit(h) > fill {
+                        return None;
+                    }
+                }
+                if let Some(cap) = cap {
+                    let above = p + Vec3::Y * 0.14;
+                    let n_above = cell_noise.map_or(0.0, |cn| cn.at(above));
+                    if ((above - c) / r).length() - n_above * 0.15 > 1.0 {
+                        return Some(cap);
+                    }
+                }
+                Some(m)
+            }
+        }
+    }
 }
 
 /// Stamps plants into a chunk generated voxel by voxel.
@@ -741,29 +833,57 @@ pub fn stamp_full(tree: &mut ChunkTree, origin: IVec3, plants: &[Plant], noise: 
             for cz in lo.z..=hi.z {
                 for cx in lo.x..=hi.x {
                     let cell = IVec3::new(cx, cy, cz);
-                    let centre = origin_m + (cell.as_vec3() + 0.5) * 0.5;
+                    let cell_lo = origin_m + cell.as_vec3() * 0.5;
+                    let centre = cell_lo + 0.25;
                     match plant.relate(centre, 0.25) {
-                        Relation::Outside => {}
+                        Relation::Outside => continue,
                         Relation::Inside(m) if tree.cell(cell) == Cell::Empty => {
                             tree.set_cell(cell, Cell::Uniform(m));
+                            continue;
                         }
-                        _ => {
-                            let base = origin + cell * 8;
-                            tree.edit_brick(cell, |brick| {
-                                for i in 0..512 {
-                                    let l = IVec3::new(i & 7, (i >> 6) & 7, (i >> 3) & 7);
-                                    if !replaceable(brick.get(l)) {
-                                        continue;
-                                    }
-                                    let v = base + l;
-                                    let p = (v.as_vec3() + 0.5) * VOXEL_M;
-                                    if let Some(m) = plant.sample(noise, p, v) {
-                                        brick.set(l, m);
-                                    }
-                                }
-                            });
-                        }
+                        _ => {}
                     }
+                    // Only the parts reaching this cell, wood first, each
+                    // blob with its edge noise for the cell.
+                    let cell_hi = cell_lo + 0.5;
+                    let mut parts: Vec<(&Prim, Option<CellNoise>)> = plant
+                        .prims
+                        .iter()
+                        .filter(|prim| {
+                            let (a, b) = prim.bounds();
+                            a.cmple(cell_hi).all() && b.cmpge(cell_lo).all()
+                        })
+                        .map(|prim| {
+                            let cn = match *prim {
+                                Prim::Blob { salt, .. } => {
+                                    Some(CellNoise::new(noise, cell_lo, salt))
+                                }
+                                Prim::Wood { .. } => None,
+                            };
+                            (prim, cn)
+                        })
+                        .collect();
+                    if parts.is_empty() {
+                        continue;
+                    }
+                    parts.sort_by_key(|(prim, _)| !prim.is_wood());
+                    let base = origin + cell * 8;
+                    tree.edit_brick(cell, |brick| {
+                        for i in 0..512 {
+                            let l = IVec3::new(i & 7, (i >> 6) & 7, (i >> 3) & 7);
+                            if !replaceable(brick.get(l)) {
+                                continue;
+                            }
+                            let v = base + l;
+                            let p = (v.as_vec3() + 0.5) * VOXEL_M;
+                            for (prim, cn) in &parts {
+                                if let Some(m) = prim.sample_in(cn.as_ref(), p, v) {
+                                    brick.set(l, m);
+                                    break;
+                                }
+                            }
+                        }
+                    });
                 }
             }
         }
