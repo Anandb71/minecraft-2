@@ -16,6 +16,66 @@ pub enum Kind {
     Solid = 3,
 }
 
+impl Kind {
+    pub fn from_bits(b: u8) -> Self {
+        match b & 3 {
+            0 => Kind::Gas,
+            1 => Kind::Interface,
+            2 => Kind::Liquid,
+            _ => Kind::Solid,
+        }
+    }
+}
+
+/// Transitions a cell takes in a step (see `sim::surface`).
+pub(crate) const TO_LIQUID: u8 = 1;
+pub(crate) const TO_GAS: u8 = 2;
+pub(crate) const FROM_GAS: u8 = 3;
+
+/// A cell's kind before this step's conversions and the transition it
+/// takes, packed so the passes after it never read a neighbour's kind while
+/// that neighbour rewrites it.
+#[inline]
+pub(crate) fn pack(kind: Kind, transition: u8) -> u8 {
+    kind as u8 | transition << 2
+}
+
+#[inline]
+pub(crate) fn kind_of(next: u8) -> Kind {
+    Kind::from_bits(next)
+}
+
+#[inline]
+pub(crate) fn transition_of(next: u8) -> u8 {
+    next >> 2
+}
+
+/// Water within this many cells of a tile's side asks for the tile beyond.
+const MARGIN: i32 = 3;
+
+/// The neighbouring tiles (bits by `near_slot`, the tile itself included)
+/// that water in cell `l` needs allocated.
+pub(crate) fn need_of(l: IVec3) -> u32 {
+    let side = |v: i32| -> [i32; 2] {
+        if v < MARGIN {
+            [0, -1]
+        } else if v >= TILE - MARGIN {
+            [0, 1]
+        } else {
+            [0, 0]
+        }
+    };
+    let mut bits = 0;
+    for dz in side(l.z) {
+        for dy in side(l.y) {
+            for dx in side(l.x) {
+                bits |= 1 << near_slot(IVec3::new(dx, dy, dz));
+            }
+        }
+    }
+    bits
+}
+
 #[derive(Clone)]
 pub(crate) struct Tile {
     pub pos: IVec3,
@@ -24,9 +84,20 @@ pub(crate) struct Tile {
     pub mass: Vec<f32>,
     pub rho: Vec<f32>,
     pub u: Vec<Vec3>,
+    /// What each interface cell asked to become in streaming.
+    pub conv: Vec<u8>,
+    /// Each cell's kind and transition this step (`pack`).
+    pub next: Vec<u8>,
+    /// Mass a converting cell hands on, and its share per neighbour.
+    pub excess: Vec<f32>,
+    pub massex: Vec<f32>,
     /// Neighbouring tiles, 27 slots (dx, dy, dz in -1..=1), or u32::MAX.
     pub near: [u32; 27],
+    /// Tiles around this one its water needs allocated (`need_of`).
+    pub need: u32,
     pub awake: bool,
+    /// Something in the tile moved or converted this step.
+    pub moving: bool,
     pub still_steps: u32,
 }
 
@@ -38,6 +109,7 @@ impl Tile {
                 *k = Kind::Solid;
             }
         }
+        let next = kind.iter().map(|&k| pack(k, 0)).collect();
         Self {
             pos,
             f: vec![0.0; TILE_CELLS * Q],
@@ -45,8 +117,14 @@ impl Tile {
             mass: vec![0.0; TILE_CELLS],
             rho: vec![1.0; TILE_CELLS],
             u: vec![Vec3::ZERO; TILE_CELLS],
+            conv: vec![0; TILE_CELLS],
+            next,
+            excess: vec![0.0; TILE_CELLS],
+            massex: vec![0.0; TILE_CELLS],
             near: [u32::MAX; 27],
+            need: 0,
             awake: true,
+            moving: false,
             still_steps: 0,
         }
     }
@@ -66,6 +144,13 @@ pub(crate) fn index_of(l: IVec3) -> usize {
 #[inline]
 pub(crate) fn near_slot(d: IVec3) -> usize {
     ((d.x + 1) + 3 * ((d.y + 1) + 3 * (d.z + 1))) as usize
+}
+
+/// Inverse of `near_slot`.
+#[inline]
+pub(crate) fn slot_offset(slot: usize) -> IVec3 {
+    let s = slot as i32;
+    IVec3::new(s % 3 - 1, (s / 3) % 3 - 1, s / 9 - 1)
 }
 
 /// Where a flat wall reflects population `q` of cell `l` in tile `t` from,
