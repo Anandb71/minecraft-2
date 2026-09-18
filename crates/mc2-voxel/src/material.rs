@@ -126,6 +126,20 @@ materials! {
     FARMLAND = 48 => Material { name: "farmland", albedo: [0.22, 0.14, 0.08], roughness: 0.95, density: 1300.0, compressive: 0.3, tensile: 0.02, hardness: 0.5, absorption: 0.2, ..BASE },
     WHEAT = 49 => Material { name: "wheat", kind: Kind::Foliage, albedo: [0.72, 0.62, 0.30], roughness: 0.9, density: 100.0, compressive: 0.0, tensile: 0.01, hardness: 0.05, flammability: 0.8, ignition_c: 220.0, absorption: 0.5, ..BASE },
     GLOWING_ROCK = 50 => Material { name: "cooling rock", albedo: [0.15, 0.12, 0.11], roughness: 0.8, emission: [60.0, 12.0, 2.0], density: 2900.0, compressive: 150.0, tensile: 9.0, hardness: 5.0, conductivity: 1.8, ..BASE },
+    TALL_GRASS = 51 => Material { name: "tall grass", kind: Kind::Foliage, albedo: [0.20, 0.40, 0.08], roughness: 0.85, density: 100.0, compressive: 0.0, tensile: 0.01, hardness: 0.05, conductivity: 0.1, specific_heat: 2500.0, flammability: 0.8, ignition_c: 220.0, absorption: 0.5, ..BASE },
+    FLOWER_RED = 52 => Material { name: "poppy", kind: Kind::Foliage, albedo: [0.72, 0.06, 0.05], roughness: 0.7, density: 100.0, compressive: 0.0, tensile: 0.01, hardness: 0.05, flammability: 0.8, ignition_c: 220.0, absorption: 0.5, ..BASE },
+    FLOWER_YELLOW = 53 => Material { name: "buttercup", kind: Kind::Foliage, albedo: [0.88, 0.70, 0.08], roughness: 0.6, density: 100.0, compressive: 0.0, tensile: 0.01, hardness: 0.05, flammability: 0.8, ignition_c: 220.0, absorption: 0.5, ..BASE },
+    FLOWER_BLUE = 54 => Material { name: "cornflower", kind: Kind::Foliage, albedo: [0.18, 0.28, 0.78], roughness: 0.6, density: 100.0, compressive: 0.0, tensile: 0.01, hardness: 0.05, flammability: 0.8, ignition_c: 220.0, absorption: 0.5, ..BASE },
+    FLOWER_WHITE = 55 => Material { name: "daisy", kind: Kind::Foliage, albedo: [0.88, 0.88, 0.82], roughness: 0.6, density: 100.0, compressive: 0.0, tensile: 0.01, hardness: 0.05, flammability: 0.8, ignition_c: 220.0, absorption: 0.5, ..BASE },
+    BIRCH_LOG = 56 => Material { name: "birch log", albedo: [0.80, 0.78, 0.72], roughness: 0.7, density: 670.0, compressive: 40.0, tensile: 55.0, hardness: 1.7, conductivity: 0.17, specific_heat: 1700.0, flammability: 0.4, ignition_c: 290.0, absorption: 0.1, ..BASE },
+    BIRCH_LEAVES = 57 => Material { name: "birch leaves", kind: Kind::Foliage, albedo: [0.26, 0.44, 0.10], roughness: 0.75, density: 200.0, compressive: 0.01, tensile: 0.05, hardness: 0.1, conductivity: 0.1, specific_heat: 2500.0, flammability: 0.6, ignition_c: 250.0, absorption: 0.5, ..BASE },
+    CACTUS = 58 => Material { name: "cactus", albedo: [0.20, 0.38, 0.14], roughness: 0.6, density: 900.0, compressive: 1.0, tensile: 2.0, hardness: 0.4, conductivity: 0.5, specific_heat: 3500.0, flammability: 0.05, ignition_c: 400.0, absorption: 0.3, ..BASE },
+    MOSS = 59 => Material { name: "moss", kind: Kind::Foliage, albedo: [0.16, 0.28, 0.07], roughness: 0.95, density: 300.0, compressive: 0.01, tensile: 0.02, hardness: 0.1, conductivity: 0.3, flammability: 0.3, ignition_c: 260.0, absorption: 0.6, ..BASE },
+    RED_BRICK = 60 => Material { name: "brick", albedo: [0.50, 0.20, 0.13], roughness: 0.8, density: 1900.0, compressive: 30.0, tensile: 2.0, hardness: 3.0, conductivity: 0.7, specific_heat: 840.0, absorption: 0.05, ..BASE },
+    CONCRETE = 61 => Material { name: "concrete", albedo: [0.60, 0.59, 0.56], roughness: 0.85, density: 2400.0, compressive: 40.0, tensile: 3.0, hardness: 4.0, conductivity: 1.7, specific_heat: 880.0, absorption: 0.02, ..BASE },
+    ASPHALT = 62 => Material { name: "asphalt", albedo: [0.10, 0.10, 0.11], roughness: 0.9, density: 2300.0, compressive: 10.0, tensile: 1.0, hardness: 2.0, conductivity: 0.75, specific_heat: 920.0, absorption: 0.03, ..BASE },
+    DARK_PLANKS = 63 => Material { name: "dark planks", albedo: [0.26, 0.16, 0.09], roughness: 0.7, density: 700.0, compressive: 35.0, tensile: 45.0, hardness: 1.4, conductivity: 0.13, specific_heat: 1700.0, flammability: 0.45, ignition_c: 285.0, absorption: 0.12, ..BASE },
+    THATCH = 64 => Material { name: "thatch", albedo: [0.55, 0.44, 0.22], roughness: 0.95, density: 150.0, compressive: 0.1, tensile: 0.2, hardness: 0.3, conductivity: 0.06, specific_heat: 1500.0, flammability: 0.9, ignition_c: 220.0, absorption: 0.6, ..BASE },
 }
 
 impl MaterialId {
@@ -159,7 +173,7 @@ mod tests {
         assert_eq!(ids::AIR.get().name, "air");
         assert_eq!(ids::GRANITE.get().name, "granite");
         assert_eq!(ids::GLOWING_ROCK.get().name, "cooling rock");
-        assert_eq!(count(), ids::GLOWING_ROCK.0 as usize + 1);
+        assert_eq!(count(), ids::THATCH.0 as usize + 1);
         assert!(ids::LAVA.is_emissive());
         assert!(!ids::AIR.is_solid());
     }
