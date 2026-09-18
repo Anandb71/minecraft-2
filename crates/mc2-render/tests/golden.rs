@@ -207,7 +207,10 @@ fn generated_world() -> (mc2_voxel::world::VoxelWorld, mc2_render::camera::Camer
         },
     };
     let terrain = std::sync::Arc::new(CoarseTerrain::generate(7, params, &mut |_, _| {}));
-    let generator = ChunkGenerator::new(terrain.clone());
+    let mut generator = ChunkGenerator::new(terrain.clone());
+    // Terrain alone: these images guard the renderer, and plants and
+    // villages multiply the software adapter's time several fold.
+    generator.flora = false;
     let (cx, cz) = (256, 258);
     let mut world = mc2_voxel::world::VoxelWorld::new();
     for z in cz - 1..=cz + 1 {
