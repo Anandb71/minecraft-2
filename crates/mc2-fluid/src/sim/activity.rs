@@ -5,9 +5,9 @@ use super::FluidWorld;
 use crate::tile::Kind;
 
 /// Steps a tile must stay still before it sleeps.
-const SLEEP_STEPS: u32 = 240;
+pub const SLEEP_STEPS: u32 = 240;
 /// Below this speed (lattice units, about 1 cm/s) a cell counts as still.
-pub(super) const STILL_SPEED: f32 = 1e-4;
+pub const STILL_SPEED: f32 = 1e-4;
 
 impl FluidWorld {
     /// Every tile (asleep or not) counts the steps since anything moved in

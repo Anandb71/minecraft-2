@@ -33,7 +33,7 @@ use rayon::prelude::*;
 mod activity;
 mod surface;
 
-use activity::STILL_SPEED;
+pub use activity::{SLEEP_STEPS, STILL_SPEED};
 #[cfg(test)]
 mod tests;
 
@@ -69,6 +69,15 @@ impl Default for Params {
             fill_slack: 1e-2,
             wall_slip: 0.995,
         }
+    }
+}
+
+impl Params {
+    /// Density of still water under `water_above` cells of water (counted
+    /// from the top of this cell), matching the surface pressure `step`
+    /// applies, so still water starts at rest.
+    pub fn hydrostatic_rho(&self, water_above: f32) -> f32 {
+        self.rho_gas + 3.0 * self.gravity.length() * (water_above + 0.5)
     }
 }
 
@@ -214,7 +223,6 @@ impl FluidWorld {
         }
         // Start at hydrostatic pressure, the weight of the water above
         // (see the surface pressure in `step`), or the body rings.
-        let g = self.params.gravity.length();
         for &c in &added {
             let mut above = 0.0;
             let mut n = c + IVec3::Y;
@@ -222,7 +230,7 @@ impl FluidWorld {
                 above += self.fill(n);
                 n += IVec3::Y;
             }
-            let rho = self.params.rho_gas + 3.0 * g * (above + 0.5);
+            let rho = self.params.hydrostatic_rho(above);
             let (tp, i) = Self::tile_of(c);
             let tile = &mut self.tiles[self.index[&tp]];
             tile.rho[i] = rho;

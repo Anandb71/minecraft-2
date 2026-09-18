@@ -55,7 +55,7 @@ const MARGIN: i32 = 3;
 
 /// The neighbouring tiles (bits by `near_slot`, the tile itself included)
 /// that water in cell `l` needs allocated.
-pub(crate) fn need_of(l: IVec3) -> u32 {
+pub fn need_of(l: IVec3) -> u32 {
     let side = |v: i32| -> [i32; 2] {
         if v < MARGIN {
             [0, -1]
@@ -131,24 +131,24 @@ impl Tile {
 }
 
 #[inline]
-pub(crate) fn local_of(i: usize) -> IVec3 {
+pub fn local_of(i: usize) -> IVec3 {
     let i = i as i32;
     IVec3::new(i & 7, (i >> 3) & 7, i >> 6)
 }
 
 #[inline]
-pub(crate) fn index_of(l: IVec3) -> usize {
+pub fn index_of(l: IVec3) -> usize {
     (l.x + 8 * (l.y + 8 * l.z)) as usize
 }
 
 #[inline]
-pub(crate) fn near_slot(d: IVec3) -> usize {
+pub fn near_slot(d: IVec3) -> usize {
     ((d.x + 1) + 3 * ((d.y + 1) + 3 * (d.z + 1))) as usize
 }
 
 /// Inverse of `near_slot`.
 #[inline]
-pub(crate) fn slot_offset(slot: usize) -> IVec3 {
+pub fn slot_offset(slot: usize) -> IVec3 {
     let s = slot as i32;
     IVec3::new(s % 3 - 1, (s / 3) % 3 - 1, s / 9 - 1)
 }
