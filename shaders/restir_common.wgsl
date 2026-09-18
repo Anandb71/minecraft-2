@@ -151,5 +151,7 @@ fn shadow_ray_to(s: Shading, face: vec3<f32>, point: vec3<f32>) -> Ray {
     r.lod_scale = frame.pixel_angle * frame.lod_pixels * 8.0;
     r.feedback = false;
     r.coarse = false;
+    // Lanterns shine through their glass and windows.
+    r.pass_kinds = PASS_CLEAR;
     return r;
 }

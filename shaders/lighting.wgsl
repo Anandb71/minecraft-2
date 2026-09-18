@@ -40,6 +40,8 @@ fn secondary_ray(s: Surface, dir: vec3<f32>, t_max_m: f32) -> Ray {
     r.lod_scale = frame.pixel_angle * frame.lod_pixels * 8.0;
     r.feedback = false;
     r.coarse = false;
+    // Sun, moon and sky reach through glass and into water.
+    r.pass_kinds = PASS_CLEAR;
     return r;
 }
 
