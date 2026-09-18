@@ -179,15 +179,9 @@ fn fill_index(cell: u32, half: u32) -> u32 {
 // The neighbouring tiles water in cell `l` needs allocated, as bits by
 // near_slot (the tile itself included).
 fn need_of(l: vec3<i32>) -> u32 {
-    var lo = vec3<i32>(0);
-    var hi = vec3<i32>(0);
-    for (var a = 0; a < 3; a++) {
-        if l[a] < MARGIN {
-            lo[a] = -1;
-        } else if l[a] >= 8 - MARGIN {
-            hi[a] = 1;
-        }
-    }
+    // Vector writes through a dynamic index are not l-values under FXC.
+    let lo = select(vec3<i32>(0), vec3<i32>(-1), l < vec3<i32>(MARGIN));
+    let hi = select(vec3<i32>(0), vec3<i32>(1), l >= vec3<i32>(8 - MARGIN));
     var bits = 0u;
     for (var z = lo.z; z <= hi.z; z++) {
         for (var y = lo.y; y <= hi.y; y++) {

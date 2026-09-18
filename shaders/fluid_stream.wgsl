@@ -42,10 +42,8 @@ fn specular(l: vec3<i32>, q: u32) -> vec2<u32> {
     let a1 = select(0u, 1u, plane == 2u);
     let a2 = select(2u, 1u, plane == 0u);
     let c = velocity(q);
-    var b1 = vec3<i32>(0);
-    b1[a1] = -c[a1];
-    var b2 = vec3<i32>(0);
-    b2[a2] = -c[a2];
+    let b1 = select(vec3<i32>(0), -c, vec3<u32>(a1) == vec3<u32>(0u, 1u, 2u));
+    let b2 = select(vec3<i32>(0), -c, vec3<u32>(a2) == vec3<u32>(0u, 1u, 2u));
     let n1 = neighbour_near(l, b1).x;
     let n2 = neighbour_near(l, b2).x;
     let s1 = n1 != NONE && kind[n1] == SOLID;
