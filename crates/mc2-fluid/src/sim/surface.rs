@@ -157,4 +157,67 @@ impl FluidWorld {
         tile.awake = true;
         tile.still_steps = 0;
     }
+
+    /// Terrain changed in the cells `lo..=hi`: refresh solidity there and
+    /// wake the tiles around it.
+    pub fn terrain_changed(&mut self, lo: IVec3, hi: IVec3, terrain: &dyn Terrain) {
+        let (tlo, thi) = (
+            (lo - 1).div_euclid(IVec3::splat(TILE)),
+            (hi + 1).div_euclid(IVec3::splat(TILE)),
+        );
+        for z in tlo.z..=thi.z {
+            for y in tlo.y..=thi.y {
+                for x in tlo.x..=thi.x {
+                    let Some(&t) = self.index.get(&IVec3::new(x, y, z)) else {
+                        continue;
+                    };
+                    let tile = &mut self.tiles[t];
+                    for i in 0..TILE_CELLS {
+                        let c = tile.pos * TILE + local_of(i);
+                        let solid = terrain.solid(c);
+                        match (tile.kind[i], solid) {
+                            (Kind::Solid, false) => tile.kind[i] = Kind::Gas,
+                            (Kind::Gas, true) => tile.kind[i] = Kind::Solid,
+                            _ => {}
+                        }
+                    }
+                    tile.awake = true;
+                    tile.still_steps = 0;
+                }
+            }
+        }
+        // Liquid that now faces open space is surface: it must track its
+        // mass, or it would stream into the gas without accounting.
+        self.close_surface();
+        // Water next to newly opened space has somewhere to go.
+        for c in self.gas_neighbours_of_interfaces() {
+            let (tp, _) = Self::tile_of(c);
+            self.ensure_tile(tp, terrain);
+        }
+    }
+
+    /// Liquid cells touching gas become full interface cells, so the
+    /// interface layer between liquid and gas stays closed.
+    fn close_surface(&mut self) {
+        let mut exposed = Vec::new();
+        for (t, tile) in self.tiles.iter().enumerate() {
+            for i in 0..TILE_CELLS {
+                if tile.kind[i] != Kind::Liquid {
+                    continue;
+                }
+                let c = tile.pos * TILE + local_of(i);
+                if C.iter()
+                    .skip(1)
+                    .any(|d| self.kind(c + IVec3::from_array(*d)) == Kind::Gas)
+                {
+                    exposed.push((t, i));
+                }
+            }
+        }
+        for (t, i) in exposed {
+            let tile = &mut self.tiles[t];
+            tile.kind[i] = Kind::Interface;
+            tile.mass[i] = tile.rho[i];
+        }
+    }
 }
