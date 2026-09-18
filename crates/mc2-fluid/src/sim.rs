@@ -21,10 +21,11 @@
 //! Tiles whose cells have been still for a second go to sleep and cost
 //! nothing; motion at a tile's face wakes its neighbour.
 
-use crate::lattice::{C, Q, W};
-use crate::tile::{Kind, TILE, TILE_CELLS, Tile, index_of, local_of, near_slot};
+use crate::lattice::{C, Q, W, equilibrium, guo, les_tau, moments, opp};
+use crate::tile::{Kind, TILE, TILE_CELLS, Tile, index_of, local_of, near_slot, neighbour};
 use glam::{IVec3, Vec3};
 use mc2_core::FxHashMap;
+use rayon::prelude::*;
 
 /// Cell edge, metres: one brick cell.
 pub const CELL_M: f64 = 0.5;
@@ -72,6 +73,9 @@ pub struct FluidStats {
     pub lost_mass: f64,
     pub step_ms: f32,
 }
+
+/// A tile's new populations, mass, density and velocity.
+type TileState = (Vec<f32>, Vec<f32>, Vec<f32>, Vec<Vec3>);
 
 pub struct FluidWorld {
     tiles: Vec<Tile>,
@@ -249,4 +253,117 @@ impl FluidWorld {
     pub fn volume_m3(&self) -> f64 {
         self.mass() * CELL_M * CELL_M * CELL_M
     }
+
+    /// Advances one lattice step (`STEP_S` seconds).
+    pub fn step(&mut self, _terrain: &dyn Terrain) {
+        let start = std::time::Instant::now();
+        let p = self.params;
+        let tiles = &self.tiles;
+        // 1-3. Stream, exchange mass, collide: every awake tile reads the
+        // old state of all tiles and writes its own new state.
+        let updated: Vec<Option<TileState>> = tiles
+            .par_iter()
+            .enumerate()
+            .map(|(t, tile)| {
+                if !tile.awake {
+                    return None;
+                }
+                let mut f = tile.f.clone();
+                let mut mass = tile.mass.clone();
+                let mut rho = tile.rho.clone();
+                let mut u = tile.u.clone();
+                for i in 0..TILE_CELLS {
+                    let k = tile.kind[i];
+                    if k != Kind::Liquid && k != Kind::Interface {
+                        continue;
+                    }
+                    let l = local_of(i);
+                    let fill_here = if k == Kind::Interface {
+                        (tile.mass[i] / tile.rho[i].max(1e-6)).clamp(0.0, 1.0)
+                    } else {
+                        1.0
+                    };
+                    let mut fi = [0.0f32; Q];
+                    let mut dm = 0.0f32;
+                    fi[0] = tile.f[i * Q];
+                    // The pressure the free surface presses on the cell
+                    // centre: the gas, plus the weight of whatever part of
+                    // the cell's water stands above its centre. Without it
+                    // a half-full cell and a nearly full one push the same
+                    // and sub-cell bumps never level out.
+                    let rho_gas = p.rho_gas + 3.0 * p.gravity.length() * (fill_here - 0.5);
+                    for q in 1..Q {
+                        let d = IVec3::from_array(C[q]);
+                        let out_q = tile.f[i * Q + opp(q)];
+                        match neighbour(tiles, t, l, -d) {
+                            Some((st, si)) => {
+                                let src = &tiles[st];
+                                match src.kind[si] {
+                                    Kind::Solid => fi[q] = out_q,
+                                    Kind::Gas => {
+                                        fi[q] = equilibrium(q, rho_gas, tile.u[i])
+                                            + equilibrium(opp(q), rho_gas, tile.u[i])
+                                            - out_q;
+                                    }
+                                    nk => {
+                                        let incoming = src.f[si * Q + q];
+                                        fi[q] = incoming;
+                                        if k == Kind::Interface {
+                                            let exchange = incoming - out_q;
+                                            dm += if nk == Kind::Liquid {
+                                                exchange
+                                            } else {
+                                                let fill_there = (src.mass[si]
+                                                    / src.rho[si].max(1e-6))
+                                                .clamp(0.0, 1.0);
+                                                0.5 * (fill_here + fill_there) * exchange
+                                            };
+                                        }
+                                    }
+                                }
+                            }
+                            // Beyond the allocated tiles lies gas.
+                            None => {
+                                fi[q] = equilibrium(q, rho_gas, tile.u[i])
+                                    + equilibrium(opp(q), rho_gas, tile.u[i])
+                                    - out_q;
+                            }
+                        }
+                    }
+                    let force = p.gravity;
+                    let (r, v) = moments(&fi, force * rho_guess(&fi));
+                    let force = force * r;
+                    let tau = les_tau(&fi, r, v, p.tau, p.smagorinsky);
+                    for q in 0..Q {
+                        let feq = equilibrium(q, r, v);
+                        f[i * Q + q] = fi[q] - (fi[q] - feq) / tau + guo(q, tau, v, force);
+                    }
+                    rho[i] = r;
+                    u[i] = v;
+                    if k == Kind::Interface {
+                        mass[i] += dm;
+                    } else {
+                        mass[i] = r;
+                    }
+                }
+                Some((f, mass, rho, u))
+            })
+            .collect();
+        for (tile, new) in self.tiles.iter_mut().zip(updated) {
+            if let Some((f, mass, rho, u)) = new {
+                tile.f = f;
+                tile.mass = mass;
+                tile.rho = rho;
+                tile.u = u;
+            }
+        }
+
+        self.stats.step_ms = start.elapsed().as_secs_f32() * 1000.0;
+    }
+}
+
+/// Density estimate for the force term before the moments are known.
+#[inline]
+fn rho_guess(f: &[f32; Q]) -> f32 {
+    f.iter().sum()
 }
