@@ -40,6 +40,8 @@
 @group(2) @binding(18) var fog_volume: texture_3d<f32>;
 // Denoised glossy reflections at GI resolution.
 @group(2) @binding(19) var reflections: texture_2d<f32>;
+// What is seen through clear surfaces (glass, ice, water), full resolution.
+@group(2) @binding(20) var refraction: texture_2d<f32>;
 const REFLECT_MAX_ROUGHNESS: f32 = 0.5;
 
 const FOG_NEAR_M: f32 = 0.5;
@@ -240,7 +242,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     // Indirect light.
     irradiance += half_res_upsample(gi, pixel, rel_m, face_normal, depth_m);
-    let surface = mat.emission + diffuse * irradiance;
+    var surface = mat.emission + diffuse * irradiance;
+    if mat.kind == KIND_TRANSPARENT || mat.kind == KIND_LIQUID {
+        // Clear: what lies behind, less what the surface reflects (the
+        // reflection itself is added below), frosted where it is opaque.
+        let cos_v = clamp(abs(dot(normal, v)), 0.0, 1.0);
+        let r0 = pow((mat.ior - 1.0) / (mat.ior + 1.0), 2.0);
+        let fresnel = r0 + (1.0 - r0) * pow(1.0 - cos_v, 5.0);
+        let behind = textureLoad(refraction, pixel, 0).rgb * (1.0 - fresnel);
+        surface = mix(behind, surface, detail.cover);
+    }
     textureStore(out_surface, pixel, vec4<f32>(surface, 1.0));
     var light = surface + specular;
     if mat.roughness <= REFLECT_MAX_ROUGHNESS {
