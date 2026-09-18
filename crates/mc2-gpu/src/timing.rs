@@ -58,6 +58,22 @@ impl TimestampScope {
             })
     }
 
+    /// For work split over several compute passes timed as one: the begin
+    /// timestamp on the first pass, the end on the last.
+    pub fn compute_part(
+        &self,
+        first: bool,
+        last: bool,
+    ) -> Option<wgpu::ComputePassTimestampWrites<'_>> {
+        self.query_set.as_ref().filter(|_| first || last).map(|qs| {
+            wgpu::ComputePassTimestampWrites {
+                query_set: qs,
+                beginning_of_pass_write_index: first.then_some(self.begin),
+                end_of_pass_write_index: last.then_some(self.begin + 1),
+            }
+        })
+    }
+
     pub fn render(&self) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
         self.query_set
             .as_ref()
