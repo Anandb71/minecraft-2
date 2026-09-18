@@ -5,6 +5,7 @@
 #import "common.wgsl"
 #import "frame.wgsl"
 #import "voxel_data.wgsl"
+#import "surface_detail.wgsl"
 #import "atmosphere.wgsl"
 #import "brdf.wgsl"
 
@@ -202,26 +203,29 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let depth_m = textureLoad(vis_depth, pixel, 0).r;
-    let normal = oct_decode(textureLoad(vis_motion, pixel, 0).ba);
+    let face_normal = oct_decode(textureLoad(vis_motion, pixel, 0).ba);
     let mat = materials[id.w & 0xffffu];
     let rel_m = dir * depth_m;
     let altitude_km = ((f32(frame.camera_voxel.y) + frame.camera_frac.y) / VOXELS_PER_METRE + rel_m.y) / 1000.0;
     let v = -dir;
     let lv = textureLoad(light_vis, pixel, 0);
-    let voxel_hash = hash_to_unit(pcg(id.x * 73856093u ^ id.y * 19349663u ^ id.z * 83492791u));
-    let albedo = mat.albedo * (0.92 + 0.16 * voxel_hash);
+    let world_m = (vec3<f32>(frame.camera_voxel) + frame.camera_frac) / VOXELS_PER_METRE + rel_m;
+    // The material's pattern within its voxels, and the shading normal it
+    // tilts.
+    let detail = surface_detail(id.w & 0xffffu, mat, vec3<i32>(id.xyz), face_normal, world_m, frame.time);
+    let normal = detail.normal;
+    let albedo = detail.albedo;
     let diffuse = albedo * (1.0 - mat.metallic) * INV_PI;
-    let f0 = mix(vec3<f32>(0.04), mat.albedo, mat.metallic);
+    let f0 = mix(vec3<f32>(0.04), albedo, mat.metallic);
 
     // Irradiance reaching the surface, then the reflected specular.
     var irradiance = vec3<f32>(0.0);
     var specular = vec3<f32>(0.0);
-    let world_m = (vec3<f32>(frame.camera_voxel) + frame.camera_frac) / VOXELS_PER_METRE + rel_m;
     let nl_sun = max(dot(normal, sun), 0.0);
     if nl_sun > 0.0 && lv.r > 0.0 {
         let e = frame.sun_illuminance * light_transmittance(altitude_km, sun) * lv.r * cloud_shadow(world_m, sun);
         irradiance += e * nl_sun;
-        specular += e * ggx_specular(normal, v, sun, mat.roughness, f0);
+        specular += e * ggx_specular(normal, v, sun, detail.roughness, f0);
     }
     let moon = normalize(frame.moon_dir);
     let nl_moon = max(dot(normal, moon), 0.0);
@@ -235,12 +239,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         irradiance += textureLoad(direct_lights, pixel, 0).rgb;
     }
     // Indirect light.
-    irradiance += half_res_upsample(gi, pixel, rel_m, normal, depth_m);
+    irradiance += half_res_upsample(gi, pixel, rel_m, face_normal, depth_m);
     let surface = mat.emission + diffuse * irradiance;
     textureStore(out_surface, pixel, vec4<f32>(surface, 1.0));
     var light = surface + specular;
     if mat.roughness <= REFLECT_MAX_ROUGHNESS {
-        light += half_res_upsample(reflections, pixel, rel_m, normal, depth_m);
+        light += half_res_upsample(reflections, pixel, rel_m, face_normal, depth_m);
     }
 
     // Aerial perspective.
