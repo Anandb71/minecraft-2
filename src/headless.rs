@@ -152,6 +152,10 @@ pub fn run(args: &Args) -> Result<(), String> {
                 screen,
             );
         }
+        if args.demo.is_some() {
+            let screen = renderer.output_size();
+            crate::demo::overlay(&mut game, &mut renderer.frame.hud, screen, args.demo);
+        }
         if args.hud {
             let cpu = mc2_core::profiler::rows();
             let stats = renderer.world.stats;

@@ -3,8 +3,12 @@
 //! exercise real interaction code.
 
 use mc2_game::Game;
+use mc2_game::blocks::BlockKind;
+use mc2_game::crafting;
 use mc2_game::input::{Button, Key};
 use mc2_game::interact::Interaction;
+use mc2_game::items::{Item, Tier, ToolKind};
+use mc2_render::hud::HudCanvas;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Demo {
@@ -24,6 +28,13 @@ pub enum Demo {
     /// A pool of water over a gravel bed and a glass wall with coloured
     /// blocks behind it: refraction and absorption to look at.
     Glass,
+    /// Survival: turn a few logs and some stone into a crafting table,
+    /// tools and a furnace, set them down, and stop with the inventory open
+    /// at the table.
+    Craft,
+    /// The craft demo's workshop from outside: table and furnace set down,
+    /// a torch beside them, and a block of ground half broken.
+    Workshop,
 }
 
 impl Demo {
@@ -35,6 +46,8 @@ impl Demo {
             "blast" => Some(Self::Blast),
             "collapse" => Some(Self::Collapse),
             "glass" => Some(Self::Glass),
+            "craft" => Some(Self::Craft),
+            "workshop" => Some(Self::Workshop),
             _ => None,
         }
     }
@@ -73,6 +86,105 @@ fn select(game: &mut Game, slot: u8) {
 fn look(game: &mut Game, dx: f32, dy: f32) {
     game.input().mouse_delta += glam::Vec2::new(dx, dy);
     tick(game, 1);
+}
+
+/// Makes `output` from what is carried, if it can, and says so.
+fn make(game: &mut Game, output: Item, times: u32) {
+    let near = crafting::Near {
+        table: true,
+        furnace: true,
+    };
+    let now = game.world.resource::<mc2_game::input::Time>().elapsed;
+    let recipe = crafting::recipes()
+        .iter()
+        .find(|r| r.output == output)
+        .expect("recipe");
+    let mut state = game.world.resource_mut::<Interaction>();
+    let mut made = 0;
+    for _ in 0..times {
+        if crafting::craft(&mut state.inventory, recipe, near).is_ok() {
+            made += recipe.count;
+        }
+    }
+    state.say(now, format!("made {made} {}", output.name()));
+}
+
+/// Selects the hotbar slot holding `item`, moving it there if need be.
+fn hold(game: &mut Game, item: Item) {
+    let slot = {
+        let mut state = game.world.resource_mut::<Interaction>();
+        let inv = &mut state.inventory;
+        let at = inv
+            .slots
+            .iter()
+            .position(|s| s.is_some_and(|s| s.item == item));
+        match at {
+            Some(i) if i < 9 => i,
+            Some(i) => {
+                inv.slots.swap(i, 8);
+                8
+            }
+            None => return,
+        }
+    };
+    select(game, slot as u8);
+}
+
+/// Survival from a handful of materials: planks, sticks, a crafting table,
+/// tools, a furnace, glass, iron, torches and gunpowder, with the table and
+/// furnace set down side by side ahead.
+fn workshop(game: &mut Game) {
+    use mc2_voxel::material::ids;
+    *game.world.resource_mut::<Interaction>() = Interaction::new(false);
+    {
+        let mut state = game.world.resource_mut::<Interaction>();
+        let inv = &mut state.inventory;
+        for (item, n) in [
+            (Item::solid(ids::OAK_LOG), 7),
+            (Item::solid(ids::COBBLESTONE), 24),
+            (Item::Coal, 6),
+            (Item::solid(ids::SAND), 12),
+            (Item::RawIron, 4),
+            (Item::Flint, 3),
+            (Item::solid(ids::GRAVEL), 4),
+        ] {
+            inv.add(item, n);
+        }
+    }
+    make(game, Item::solid(ids::PLANKS), 7);
+    make(game, Item::Stick, 3);
+    make(game, Item::Block(BlockKind::CraftingTable), 1);
+    make(game, Item::Tool(ToolKind::Pickaxe, Tier::Wood), 1);
+    make(game, Item::Tool(ToolKind::Pickaxe, Tier::Stone), 1);
+    make(game, Item::Tool(ToolKind::Axe, Tier::Stone), 1);
+    make(game, Item::Block(BlockKind::Furnace), 1);
+    make(game, Item::solid(ids::GLASS), 3);
+    make(game, Item::IronIngot, 3);
+    make(game, Item::Block(BlockKind::Torch), 2);
+    make(game, Item::Gunpowder, 2);
+    // Set the table and furnace down side by side ahead.
+    look(game, 0.0, 150.0);
+    hold(game, Item::Block(BlockKind::CraftingTable));
+    click(game, Button::Secondary);
+    look(game, -60.0, 0.0);
+    hold(game, Item::Block(BlockKind::Furnace));
+    click(game, Button::Secondary);
+    look(game, 30.0, -60.0);
+}
+
+/// Screens a demo shows over its capture: the craft demo's inventory, open
+/// at the crafting table with the cursor over a recipe.
+pub fn overlay(game: &mut Game, hud: &mut HudCanvas, screen: (u32, u32), demo: Option<Demo>) {
+    if demo != Some(Demo::Craft) {
+        return;
+    }
+    let mut inv = crate::inventory_ui::Screen::default();
+    inv.open_at(Some(crafting::Station::Table));
+    let (w, h) = (screen.0 as f32, screen.1 as f32);
+    inv.mouse_move(w * 0.72, h * 0.5 - 150.0);
+    // Once aside to lay out, then for real with the cursor's hover.
+    inv.draw(game, &mut HudCanvas::default(), screen);
+    inv.draw(game, hud, screen);
 }
 
 /// Runs the script. Streaming must already cover the player.
@@ -348,6 +460,23 @@ pub fn run(game: &mut Game, demo: Demo) {
                 p.host.body_count(),
                 p.last_blast
             );
+        }
+        Demo::Craft => {
+            workshop(game);
+            hold(game, Item::Tool(ToolKind::Pickaxe, Tier::Stone));
+        }
+        Demo::Workshop => {
+            workshop(game);
+            // A torch on the ground to the left, then break the ground
+            // between it and the table, stopping a third of the way.
+            look(game, -70.0, 10.0);
+            hold(game, Item::Block(BlockKind::Torch));
+            click(game, Button::Secondary);
+            look(game, 110.0, -30.0);
+            hold(game, Item::Tool(ToolKind::Pickaxe, Tier::Stone));
+            look(game, -20.0, 30.0);
+            game.input().button_down(Button::Primary);
+            tick(game, 9);
         }
     }
     mc2_core::profiler::end_frame();
