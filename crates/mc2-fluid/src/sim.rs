@@ -1,0 +1,175 @@
+//! Free-surface lattice Boltzmann over sparse tiles: the CPU reference.
+//!
+//! Cells are 0.5 m (one brick cell) and live in 8^3 tiles allocated where
+//! water is. Liquid and interface cells carry D3Q19 populations; gas cells
+//! carry nothing. Each step (Körner et al. 2005, with the "only missing"
+//! reconstruction recommended by Schwarzmeier et al. 2022):
+//!
+//! 1. Stream by pulling: a population arrives from the neighbour behind it;
+//!    one arriving from solid mostly slides along the wall (the rest
+//!    bounces back), one that would arrive from gas is rebuilt from the gas
+//!    pressure and the cell's velocity.
+//! 2. Interface cells exchange mass along each link with what streams across
+//!    it, weighted by the mean fill of the two cells when both are
+//!    interface.
+//! 3. Collide with BGK plus a Smagorinsky subgrid term and Guo gravity.
+//! 4. Interface cells that overfill become liquid (gas neighbours become
+//!    interface, initialised from their neighbours' average), cells that
+//!    empty become gas (liquid neighbours become interface), and the excess
+//!    mass of each conversion is shared among the interface cells around it.
+//!
+//! Tiles whose cells have been still for a second go to sleep and cost
+//! nothing; motion at a tile's face wakes its neighbour.
+
+use crate::tile::{Kind, TILE, TILE_CELLS, Tile, index_of, near_slot};
+use glam::{IVec3, Vec3};
+use mc2_core::FxHashMap;
+
+/// Cell edge, metres: one brick cell.
+pub const CELL_M: f64 = 0.5;
+/// Simulated seconds per step.
+pub const STEP_S: f64 = 1.0 / 240.0;
+
+#[derive(Clone, Copy, Debug)]
+pub struct Params {
+    /// Base relaxation time; the subgrid model raises it where it shears.
+    pub tau: f32,
+    pub smagorinsky: f32,
+    /// Gravity in lattice units.
+    pub gravity: Vec3,
+    /// Gas density, the pressure the free surface sees.
+    pub rho_gas: f32,
+    /// Fill beyond [0, 1] by this much converts an interface cell.
+    pub fill_slack: f32,
+}
+
+impl Default for Params {
+    fn default() -> Self {
+        let g = 9.81 * STEP_S * STEP_S / CELL_M;
+        Self {
+            tau: 0.51,
+            smagorinsky: 0.127,
+            gravity: Vec3::new(0.0, -g as f32, 0.0),
+            rho_gas: 1.0,
+            fill_slack: 1e-2,
+        }
+    }
+}
+
+/// Which cells of the world are solid.
+pub trait Terrain: Sync {
+    fn solid(&self, cell: IVec3) -> bool;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FluidStats {
+    pub tiles: usize,
+    pub awake: usize,
+    pub liquid: usize,
+    pub interface: usize,
+    /// Excess mass that found no interface cell to go to, lattice units.
+    pub lost_mass: f64,
+    pub step_ms: f32,
+}
+
+pub struct FluidWorld {
+    tiles: Vec<Tile>,
+    index: FxHashMap<IVec3, usize>,
+    pub params: Params,
+    pub stats: FluidStats,
+}
+
+impl Default for FluidWorld {
+    fn default() -> Self {
+        Self::new(Params::default())
+    }
+}
+
+impl FluidWorld {
+    pub fn new(params: Params) -> Self {
+        Self {
+            tiles: Vec::new(),
+            index: FxHashMap::default(),
+            params,
+            stats: FluidStats::default(),
+        }
+    }
+
+    fn tile_of(cell: IVec3) -> (IVec3, usize) {
+        (
+            cell.div_euclid(IVec3::splat(TILE)),
+            index_of(cell.rem_euclid(IVec3::splat(TILE))),
+        )
+    }
+
+    /// The tile holding `pos`, allocating it (all gas and solid) if needed.
+    fn ensure_tile(&mut self, pos: IVec3, terrain: &dyn Terrain) -> usize {
+        if let Some(&t) = self.index.get(&pos) {
+            return t;
+        }
+        let t = self.tiles.len();
+        self.tiles.push(Tile::new(pos, |c| terrain.solid(c)));
+        self.index.insert(pos, t);
+        // Link it with its neighbours both ways.
+        for dz in -1..=1 {
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let d = IVec3::new(dx, dy, dz);
+                    if let Some(&o) = self.index.get(&(pos + d)) {
+                        self.tiles[t].near[near_slot(d)] = o as u32;
+                        self.tiles[o].near[near_slot(-d)] = t as u32;
+                    }
+                }
+            }
+        }
+        t
+    }
+
+    pub fn kind(&self, cell: IVec3) -> Kind {
+        let (tp, i) = Self::tile_of(cell);
+        self.index
+            .get(&tp)
+            .map_or(Kind::Gas, |&t| self.tiles[t].kind[i])
+    }
+
+    /// Fill of a cell: 1 for liquid, the interface fill, 0 otherwise.
+    pub fn fill(&self, cell: IVec3) -> f32 {
+        let (tp, i) = Self::tile_of(cell);
+        let Some(&t) = self.index.get(&tp) else {
+            return 0.0;
+        };
+        let tile = &self.tiles[t];
+        match tile.kind[i] {
+            Kind::Liquid => 1.0,
+            Kind::Interface => (tile.mass[i] / tile.rho[i].max(1e-6)).clamp(0.0, 1.0),
+            _ => 0.0,
+        }
+    }
+
+    pub fn velocity(&self, cell: IVec3) -> Vec3 {
+        let (tp, i) = Self::tile_of(cell);
+        self.index
+            .get(&tp)
+            .map_or(Vec3::ZERO, |&t| self.tiles[t].u[i])
+    }
+
+    /// Liquid mass, lattice units (cells of rest density).
+    pub fn mass(&self) -> f64 {
+        let mut m = 0.0f64;
+        for tile in &self.tiles {
+            for i in 0..TILE_CELLS {
+                m += match tile.kind[i] {
+                    Kind::Liquid => f64::from(tile.rho[i]),
+                    Kind::Interface => f64::from(tile.mass[i]),
+                    _ => 0.0,
+                };
+            }
+        }
+        m
+    }
+
+    /// Water volume, cubic metres at rest density.
+    pub fn volume_m3(&self) -> f64 {
+        self.mass() * CELL_M * CELL_M * CELL_M
+    }
+}
