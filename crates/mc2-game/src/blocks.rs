@@ -24,7 +24,7 @@ pub enum BlockKind {
     Lantern,
     /// Glass pane in a plank frame, 2 voxels thick.
     Window,
-        /// A lower half slab.
+    /// A lower half slab.
     Slab(MaterialId),
     /// Plank workbench with a grid inlaid in its top and tools laid on it.
     CraftingTable,
@@ -39,13 +39,13 @@ impl BlockKind {
             BlockKind::Torch => "torch".into(),
             BlockKind::Lantern => "lantern".into(),
             BlockKind::Window => "window".into(),
-                        BlockKind::Slab(m) => format!("{} slab", m.get().name),
+            BlockKind::Slab(m) => format!("{} slab", m.get().name),
             BlockKind::CraftingTable => "crafting table".into(),
             BlockKind::Furnace => "furnace".into(),
         }
     }
 
-        /// Material at block-local voxel `l` of the block turned `turns` quarter
+    /// Material at block-local voxel `l` of the block turned `turns` quarter
     /// turns about the vertical, its front (model -z) then facing -x, +z and
     /// +x in turn.
     pub fn voxel_turned(&self, l: IVec3, turns: u8) -> MaterialId {
@@ -109,7 +109,7 @@ impl BlockKind {
                     MaterialId(0)
                 } else if l.x <= 1 || l.x >= 14 || l.y <= 1 || l.y >= 14 {
                     ids::PLANKS
-                                } else {
+                } else {
                     ids::GLASS
                 }
             }
@@ -191,7 +191,11 @@ fn furnace(l: IVec3) -> MaterialId {
     if y <= 1 || y >= 14 {
         // Cap is inset a voxel over a plinth that is not.
         let inset = y >= 14 && (x == 0 || x == 15 || z == 0 || z == 15);
-        return if inset { MaterialId(0) } else { ids::STONE_BRICK };
+        return if inset {
+            MaterialId(0)
+        } else {
+            ids::STONE_BRICK
+        };
     }
     let mouth_x = (4..=11).contains(&x);
     let mouth_y = (3..=8).contains(&y);
@@ -282,7 +286,7 @@ mod tests {
         );
         let torch = BlockKind::Torch.bill_of_materials();
         assert!(torch.iter().any(|(m, _)| *m == ids::TORCH_FLAME));
-                for kind in [BlockKind::CraftingTable, BlockKind::Furnace] {
+        for kind in [BlockKind::CraftingTable, BlockKind::Furnace] {
             let bill = kind.bill_of_materials();
             let total: u32 = bill.iter().map(|(_, n)| n).sum();
             assert!(total > 1500 && total < 4096, "{kind:?} {total}");
@@ -293,7 +297,7 @@ mod tests {
         assert_eq!(glass, 12 * 12 * 2);
     }
 
-        #[test]
+    #[test]
     fn turning_keeps_the_model_and_moves_its_front() {
         let f = BlockKind::Furnace;
         // The mouth's iron frame, on the front.

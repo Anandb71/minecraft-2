@@ -145,8 +145,18 @@ fn build() -> Vec<Recipe> {
     let it = Ingredient::Item;
     let stick = it(Item::Stick);
     let mut r = vec![
-        recipe(Item::solid(ids::PLANKS), 4, Hand, &[(solid(ids::OAK_LOG), 1)]),
-        recipe(Item::solid(ids::PLANKS), 4, Hand, &[(solid(ids::BIRCH_LOG), 1)]),
+        recipe(
+            Item::solid(ids::PLANKS),
+            4,
+            Hand,
+            &[(solid(ids::OAK_LOG), 1)],
+        ),
+        recipe(
+            Item::solid(ids::PLANKS),
+            4,
+            Hand,
+            &[(solid(ids::BIRCH_LOG), 1)],
+        ),
         recipe(
             Item::solid(ids::DARK_PLANKS),
             4,
@@ -197,7 +207,12 @@ fn build() -> Vec<Recipe> {
         ),
         recipe(Item::solid(ids::COBBLESTONE), 1, Table, &[(AnyStone, 1)]),
         recipe(Item::solid(ids::STONE_BRICK), 4, Table, &[(AnyStone, 4)]),
-        recipe(Item::Gunpowder, 2, Table, &[(AnyCoal, 1), (it(Item::Flint), 1)]),
+        recipe(
+            Item::Gunpowder,
+            2,
+            Table,
+            &[(AnyCoal, 1), (it(Item::Flint), 1)],
+        ),
         recipe(
             Item::solid(ids::TNT),
             1,
@@ -254,7 +269,12 @@ fn build() -> Vec<Recipe> {
         ids::CONCRETE,
         ids::MARBLE,
     ] {
-        r.push(recipe(Item::Block(BlockKind::Slab(m)), 2, Table, &[(solid(m), 1)]));
+        r.push(recipe(
+            Item::Block(BlockKind::Slab(m)),
+            2,
+            Table,
+            &[(solid(m), 1)],
+        ));
     }
     let smelt = |out: Item, from: Ingredient| recipe(out, 1, Furnace, &[(from, 1)]);
     r.extend([
