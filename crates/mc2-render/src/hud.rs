@@ -1,4 +1,7 @@
-//! Immediate-mode HUD: text and rectangles drawn over the final image.
+//! Immediate-mode HUD: text, rectangles and icons drawn over the final image.
+//!
+//! Icons come from an RGBA atlas the application paints once and hands
+//! over (`HudCanvas::set_icons`); an icon quad is glyph `ICON_BASE + index`.
 
 use crate::frame::FrameCtx;
 use bytemuck::{Pod, Zeroable};
@@ -6,6 +9,18 @@ use mc2_gpu::{HotRender, Pass, PassBuilder, PassContext, TexHandle, bind, bind_g
 
 pub const GLYPH_PX: f32 = 8.0;
 const FILLED_CELL: u32 = 127;
+/// Glyph ids from here on are icons.
+pub const ICON_BASE: u32 = 256;
+
+/// Square icons in a square sRGB RGBA8 atlas, row-major cells.
+#[derive(Clone, Debug)]
+pub struct IconAtlas {
+    /// Atlas width and height, pixels.
+    pub size: u32,
+    /// Icon width and height, pixels.
+    pub cell: u32,
+    pub pixels: Vec<u8>,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -23,6 +38,9 @@ pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
 #[derive(Default)]
 pub struct HudCanvas {
     instances: Vec<GlyphInstance>,
+    icons: Option<std::sync::Arc<IconAtlas>>,
+    /// Bumped whenever the atlas changes, so the pass re-uploads it.
+    icons_version: u32,
 }
 
 impl HudCanvas {
@@ -77,6 +95,21 @@ impl HudCanvas {
         cx - x
     }
 
+    /// Draws icon `index` of the atlas into a square, tinted by `color`
+    /// (white leaves it as painted).
+    pub fn icon(&mut self, x: f32, y: f32, size: f32, index: u32, color: u32) {
+        self.instances.push(GlyphInstance {
+            rect: [x, y, size, size],
+            glyph: ICON_BASE + index,
+            color,
+        });
+    }
+
+    pub fn set_icons(&mut self, atlas: std::sync::Arc<IconAtlas>) {
+        self.icons = Some(atlas);
+        self.icons_version += 1;
+    }
+
     pub fn text_width(s: &str, scale: f32) -> f32 {
         s.chars().count() as f32 * GLYPH_PX * scale
     }
@@ -108,7 +141,8 @@ fn atlas_pixels() -> Vec<u8> {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct HudUniforms {
     screen: [f32; 2],
-    _pad: [f32; 2],
+    /// Icon cells per atlas row, and the icon cell size in atlas UV.
+    icon_grid: [f32; 2],
 }
 
 pub struct HudPass {
@@ -118,6 +152,12 @@ pub struct HudPass {
     bind_group: wgpu::BindGroup,
     instances: wgpu::Buffer,
     capacity: usize,
+    layout: wgpu::BindGroupLayout,
+    font_view: wgpu::TextureView,
+    sampler: wgpu::Sampler,
+    icons: Option<wgpu::Texture>,
+    icons_version: u32,
+    icon_grid: [f32; 2],
 }
 
 impl HudPass {
@@ -166,16 +206,26 @@ impl HudPass {
             &[
                 bind::uniform(),
                 bind::texture(wgpu::TextureViewDimension::D2, false),
+                bind::texture(wgpu::TextureViewDimension::D2, true),
+                bind::sampler(true),
             ],
         );
-        let bind_group = bind_group(
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("hud icons"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        // Until the application paints icons, a single clear texel.
+        let placeholder = Self::icon_texture(device, 1, 1);
+        let bind_group = Self::bind_group(
             device,
-            "hud",
             &bgl,
-            &[
-                uniforms.as_entire_binding(),
-                wgpu::BindingResource::TextureView(&atlas_view),
-            ],
+            &uniforms,
+            &atlas_view,
+            &placeholder.create_view(&Default::default()),
+            &sampler,
         );
         let pipeline = HotRender::new(
             device,
@@ -224,7 +274,94 @@ impl HudPass {
             bind_group,
             instances: Self::instance_buffer(device, capacity),
             capacity,
+            layout: bgl,
+            font_view: atlas_view,
+            sampler,
+            icons: None,
+            icons_version: 0,
+            icon_grid: [1.0, 1.0],
         }
+    }
+
+    fn icon_texture(device: &wgpu::Device, size: u32, mips: u32) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hud icons"),
+            size: wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: mips,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })
+    }
+
+    fn bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        uniforms: &wgpu::Buffer,
+        font: &wgpu::TextureView,
+        icons: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
+        bind_group(
+            device,
+            "hud",
+            layout,
+            &[
+                uniforms.as_entire_binding(),
+                wgpu::BindingResource::TextureView(font),
+                wgpu::BindingResource::TextureView(icons),
+                wgpu::BindingResource::Sampler(sampler),
+            ],
+        )
+    }
+
+    /// Uploads a new icon atlas with a mip chain, so icons drawn small
+    /// stay smooth.
+    fn upload_icons(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, atlas: &IconAtlas) {
+        let mips = atlas.cell.max(1).ilog2().min(6);
+        let tex = Self::icon_texture(device, atlas.size, mips);
+        let mut level = atlas.pixels.clone();
+        let mut size = atlas.size;
+        for mip in 0..mips {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &tex,
+                    mip_level: mip,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &level,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(size * 4),
+                    rows_per_image: Some(size),
+                },
+                wgpu::Extent3d {
+                    width: size,
+                    height: size,
+                    depth_or_array_layers: 1,
+                },
+            );
+            level = downsample(&level, size);
+            size /= 2;
+        }
+        self.bind_group = Self::bind_group(
+            device,
+            &self.layout,
+            &self.uniforms,
+            &self.font_view,
+            &tex.create_view(&Default::default()),
+            &self.sampler,
+        );
+        let cells = (atlas.size / atlas.cell.max(1)).max(1) as f32;
+        self.icon_grid = [cells, 1.0 / cells];
+        self.icons = Some(tex);
     }
 
     fn instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
@@ -249,6 +386,12 @@ impl Pass<FrameCtx> for HudPass {
     }
 
     fn execute(&mut self, ctx: &mut PassContext<'_, FrameCtx>) {
+        if ctx.frame.hud.icons_version != self.icons_version
+            && let Some(atlas) = ctx.frame.hud.icons.clone()
+        {
+            self.upload_icons(ctx.device, ctx.queue, &atlas);
+            self.icons_version = ctx.frame.hud.icons_version;
+        }
         let quads = ctx.frame.hud.instances();
         if quads.is_empty() {
             return;
@@ -263,7 +406,7 @@ impl Pass<FrameCtx> for HudPass {
             0,
             bytemuck::bytes_of(&HudUniforms {
                 screen: [extent.width as f32, extent.height as f32],
-                _pad: [0.0; 2],
+                icon_grid: self.icon_grid,
             }),
         );
         ctx.queue
@@ -292,9 +435,50 @@ impl Pass<FrameCtx> for HudPass {
     }
 }
 
+/// Halves an sRGB RGBA8 image, averaging in linear light weighted by
+/// alpha so transparent texels do not darken the edges.
+fn downsample(px: &[u8], size: u32) -> Vec<u8> {
+    let half = (size / 2).max(1);
+    let to_lin = |c: u8| (f32::from(c) / 255.0).powf(2.2);
+    let mut out = vec![0u8; (half * half * 4) as usize];
+    for y in 0..half {
+        for x in 0..half {
+            let mut rgb = [0.0f32; 3];
+            let mut a = 0.0f32;
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let sx = (x * 2 + dx).min(size - 1);
+                let sy = (y * 2 + dy).min(size - 1);
+                let i = ((sy * size + sx) * 4) as usize;
+                let alpha = f32::from(px[i + 3]) / 255.0;
+                for c in 0..3 {
+                    rgb[c] += to_lin(px[i + c]) * alpha;
+                }
+                a += alpha;
+            }
+            let o = ((y * half + x) * 4) as usize;
+            for c in 0..3 {
+                let v = if a > 0.0 { rgb[c] / a } else { 0.0 };
+                out[o + c] = (v.powf(1.0 / 2.2) * 255.0).round() as u8;
+            }
+            out[o + 3] = (a / 4.0 * 255.0).round() as u8;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn downsample_keeps_colour_at_transparent_edges() {
+        // One opaque red texel among clear black ones stays pure red.
+        let mut px = vec![0u8; 2 * 2 * 4];
+        px[0..4].copy_from_slice(&[255, 0, 0, 255]);
+        let half = downsample(&px, 2);
+        assert_eq!(&half[0..3], &[255, 0, 0]);
+        assert_eq!(half[3], 64);
+    }
 
     #[test]
     fn atlas_has_glyph_pixels_where_expected() {
