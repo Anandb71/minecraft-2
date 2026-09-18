@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 mc2-core.workspace = true
+mc2-fluid.workspace = true
 mc2-physics.workspace = true
 mc2-structure.workspace = true
 mc2-voxel.workspace = true

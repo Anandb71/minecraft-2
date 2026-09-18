@@ -13,6 +13,7 @@ pub mod physics_host;
 pub mod player;
 pub mod structure;
 pub mod view;
+pub mod water;
 
 use bevy_ecs::prelude::*;
 use bevy_ecs::schedule::Schedule;
@@ -54,6 +55,7 @@ impl Game {
         world.insert_resource(clock::WorldClock::default());
         world.insert_resource(physics::Physics::default());
         world.insert_resource(structure::Structure::default());
+        world.insert_resource(water::Water::default());
 
         let mut frame = Schedule::default();
         frame.add_systems((clock::advance_clock, player::look, player::toggles).chain());
@@ -66,6 +68,7 @@ impl Game {
                 interact::interact,
                 physics::light_fuses,
                 structure::update_structure,
+                water::take_edits,
             )
                 .chain(),
         );

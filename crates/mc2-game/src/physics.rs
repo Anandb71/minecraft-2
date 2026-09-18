@@ -97,6 +97,8 @@ pub struct Physics {
     /// Voxel boxes this module changed (blasts, lit charges, baking), for
     /// other systems to pick up.
     pub edited_out: Vec<(IVec3, IVec3)>,
+    /// The same edits, for the water.
+    pub water_out: Vec<(IVec3, IVec3)>,
     /// Boxes where settled debris became terrain again.
     pub baked_out: Vec<(IVec3, IVec3)>,
     pub blasts_total: u64,
@@ -112,6 +114,7 @@ impl Default for Physics {
             blasts: Vec::new(),
             last_blast: None,
             edited_out: Vec::new(),
+            water_out: Vec::new(),
             baked_out: Vec::new(),
             blasts_total: 0,
             next_bake: 0.0,
@@ -134,6 +137,7 @@ impl Physics {
     pub fn world_edited(&mut self, lo: IVec3, hi: IVec3) {
         self.host.edited(lo, hi);
         self.edited_out.push((lo, hi));
+        self.water_out.push((lo, hi));
     }
 
     /// Whether a body carries a lit fuse.
