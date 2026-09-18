@@ -315,9 +315,11 @@ fn surface_detail(m: u32, mat: Material, voxel: vec3<i32>, normal: vec3<f32>, wo
             // clumps within them, single blades lighter or darker.
             let turf = fbm(pv * vec3<f32>(0.025, 0.05, 0.025), 11u);
             let clump = value_noise(pv * 0.18, 12u);
-            let deep = vec3<f32>(0.10, 0.30, 0.05);
-            let lush = vec3<f32>(0.19, 0.40, 0.08);
-            let dry = vec3<f32>(0.34, 0.40, 0.13);
+            // Darker than a blade: turf seen between and under them, and
+            // seen at a distance where the blades are not generated.
+            let deep = vec3<f32>(0.075, 0.23, 0.035);
+            let lush = vec3<f32>(0.14, 0.32, 0.06);
+            let dry = vec3<f32>(0.28, 0.33, 0.1);
             var c = mix(deep, lush, smoothstep(0.25, 0.55, turf));
             c = mix(c, dry, smoothstep(0.62, 0.85, turf) * 0.7);
             c *= 0.85 + 0.25 * clump;
