@@ -145,8 +145,36 @@ pub fn spawn_camera(terrain: &Arc<CoarseTerrain>) -> Camera {
             return false;
         }
         let at = glam::Vec3::new(x, s.height, z);
-        plants_near(&surface, at - 3.0, at + 3.0, terrain.seed).is_empty()
+        plants_near(&surface, at - 3.0, at + 3.0, terrain.seed, &|_, _| false).is_empty()
     };
+    // The village nearest the middle of the map, if one is close: stand at
+    // the corner of its plaza looking across it.
+    let settlements = mc2_worldgen::settlement::Settlements::new(terrain.seed);
+    let cell = mc2_worldgen::settlement::VILLAGE_CELL_M;
+    let c = (centre / cell).floor() as i32;
+    for ring in 0..4 {
+        for k in c - ring..=c + ring {
+            for i in c - ring..=c + ring {
+                if (i - c).abs() != ring && (k - c).abs() != ring {
+                    continue;
+                }
+                if let Some(v) = settlements.village(&surface, i, k) {
+                    let (x, z) = (v.centre.x - 8.5, v.centre.z - 8.5);
+                    let h = surface.sample(x, z).height;
+                    let mut camera = Camera {
+                        position: DVec3::new(f64::from(x), f64::from(h) + 1.75, f64::from(z)),
+                        ..Default::default()
+                    };
+                    camera.look_at(DVec3::new(
+                        f64::from(v.centre.x + 20.0),
+                        f64::from(v.centre.y + 2.5),
+                        f64::from(v.centre.z + 12.0),
+                    ));
+                    return camera;
+                }
+            }
+        }
+    }
     let mut best = None;
     'search: for ring in 0..200 {
         let r = ring as f32 * 64.0;
