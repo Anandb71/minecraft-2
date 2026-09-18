@@ -23,7 +23,8 @@
 
 use crate::lattice::{C, Q, W, equilibrium, guo, les_tau, moments, opp};
 use crate::tile::{
-    Kind, TILE, TILE_CELLS, Tile, index_of, local_of, near_slot, neighbour, specular,
+    Kind, TILE, TILE_CELLS, TO_GAS, TO_LIQUID, Tile, index_of, local_of, near_slot, need_of,
+    neighbour, pack, slot_offset, specular,
 };
 use glam::{IVec3, Vec3};
 use mc2_core::FxHashMap;
@@ -31,6 +32,8 @@ use rayon::prelude::*;
 
 mod activity;
 mod surface;
+
+use activity::STILL_SPEED;
 #[cfg(test)]
 mod tests;
 
@@ -85,8 +88,15 @@ pub struct FluidStats {
     pub step_ms: f32,
 }
 
-/// A tile's new populations, mass, density and velocity.
-type TileState = (Vec<f32>, Vec<f32>, Vec<f32>, Vec<Vec3>);
+/// What streaming leaves in one tile.
+struct Streamed {
+    f: Vec<f32>,
+    mass: Vec<f32>,
+    rho: Vec<f32>,
+    u: Vec<Vec3>,
+    conv: Vec<u8>,
+    moving: bool,
+}
 
 pub struct FluidWorld {
     tiles: Vec<Tile>,
@@ -181,6 +191,7 @@ impl FluidWorld {
                 continue;
             }
             tile.kind[i] = Kind::Liquid;
+            tile.next[i] = pack(Kind::Liquid, 0);
             tile.rho[i] = 1.0;
             tile.mass[i] = 1.0;
             tile.u[i] = Vec3::ZERO;
@@ -196,6 +207,7 @@ impl FluidWorld {
                     let (tp, i) = Self::tile_of(c);
                     let t = self.index[&tp];
                     self.tiles[t].kind[i] = Kind::Interface;
+                    self.tiles[t].next[i] = pack(Kind::Interface, 0);
                     break;
                 }
             }
@@ -219,30 +231,31 @@ impl FluidWorld {
                 *f = w * rho;
             }
         }
-        for c in self.gas_neighbours_of_interfaces() {
-            let (tp, _) = Self::tile_of(c);
-            self.ensure_tile(tp, terrain);
-        }
+        self.allocate_margins(terrain, true);
     }
 
-    fn gas_neighbours_of_interfaces(&self) -> Vec<IVec3> {
-        let mut out = Vec::new();
+    /// Allocates the tiles water needs around it. `recompute` refreshes
+    /// every tile's needs first (after edits between steps); a step leaves
+    /// them fresh for the tiles it ran.
+    fn allocate_margins(&mut self, terrain: &dyn Terrain, recompute: bool) {
+        if recompute {
+            for tile in &mut self.tiles {
+                tile.need = (0..TILE_CELLS)
+                    .filter(|&i| matches!(tile.kind[i], Kind::Liquid | Kind::Interface))
+                    .fold(0, |n, i| n | need_of(local_of(i)));
+            }
+        }
+        let mut wanted = Vec::new();
         for tile in &self.tiles {
-            for i in 0..TILE_CELLS {
-                if tile.kind[i] != Kind::Interface {
-                    continue;
-                }
-                let c = tile.pos * TILE + local_of(i);
-                for d in C.iter().skip(1) {
-                    let n = c + IVec3::from_array(*d);
-                    let (tp, _) = Self::tile_of(n);
-                    if !self.index.contains_key(&tp) {
-                        out.push(n);
-                    }
+            for slot in 0..27 {
+                if tile.need & (1 << slot) != 0 && tile.near[slot] == u32::MAX {
+                    wanted.push(tile.pos + slot_offset(slot));
                 }
             }
         }
-        out
+        for pos in wanted {
+            self.ensure_tile(pos, terrain);
+        }
     }
 
     /// Liquid mass, lattice units (cells of rest density).
@@ -268,11 +281,26 @@ impl FluidWorld {
     /// Advances one lattice step (`STEP_S` seconds).
     pub fn step(&mut self, terrain: &dyn Terrain) {
         let start = std::time::Instant::now();
+        self.stream_collide();
+        self.flag();
+        self.apply();
+        self.share();
+        self.gather();
+        self.update_activity();
+        self.allocate_margins(terrain, false);
+        self.stats.step_ms = start.elapsed().as_secs_f32() * 1000.0;
+        self.refresh_stats();
+    }
+
+    /// Streams, exchanges interface mass and collides every awake tile,
+    /// reading the old state of all tiles; interface cells that overfilled
+    /// or emptied note it in `conv`. A cell whose neighbours are not all
+    /// awake and allocated may not convert yet: it keeps its tile moving,
+    /// which wakes them.
+    fn stream_collide(&mut self) {
         let p = self.params;
         let tiles = &self.tiles;
-        // 1-3. Stream, exchange mass, collide: every awake tile reads the
-        // old state of all tiles and writes its own new state.
-        let updated: Vec<Option<TileState>> = tiles
+        let updated: Vec<Option<Streamed>> = tiles
             .par_iter()
             .enumerate()
             .map(|(t, tile)| {
@@ -283,6 +311,8 @@ impl FluidWorld {
                 let mut mass = tile.mass.clone();
                 let mut rho = tile.rho.clone();
                 let mut u = tile.u.clone();
+                let mut conv = vec![0u8; TILE_CELLS];
+                let mut moving = false;
                 for i in 0..TILE_CELLS {
                     let k = tile.kind[i];
                     if k != Kind::Liquid && k != Kind::Interface {
@@ -296,6 +326,7 @@ impl FluidWorld {
                     };
                     let mut fi = [0.0f32; Q];
                     let mut dm = 0.0f32;
+                    let (mut gas_near, mut fluid_near, mut blocked) = (false, false, false);
                     fi[0] = tile.f[i * Q];
                     // The pressure the free surface presses on the cell
                     // centre: the gas, plus the weight of whatever part of
@@ -309,6 +340,7 @@ impl FluidWorld {
                         match neighbour(tiles, t, l, -d) {
                             Some((st, si)) => {
                                 let src = &tiles[st];
+                                blocked |= !src.awake;
                                 match src.kind[si] {
                                     Kind::Solid => match specular(tiles, t, l, q) {
                                         Some((mt, mi, mq)) => {
@@ -331,11 +363,13 @@ impl FluidWorld {
                                         None => fi[q] = out_q,
                                     },
                                     Kind::Gas => {
+                                        gas_near = true;
                                         fi[q] = equilibrium(q, rho_gas, tile.u[i])
                                             + equilibrium(opp(q), rho_gas, tile.u[i])
                                             - out_q;
                                     }
                                     nk => {
+                                        fluid_near |= nk == Kind::Liquid;
                                         let incoming = src.f[si * Q + q];
                                         fi[q] = incoming;
                                         if k == Kind::Interface {
@@ -354,6 +388,7 @@ impl FluidWorld {
                             }
                             // Beyond the allocated tiles lies gas.
                             None => {
+                                blocked = true;
                                 fi[q] = equilibrium(q, rho_gas, tile.u[i])
                                     + equilibrium(opp(q), rho_gas, tile.u[i])
                                     - out_q;
@@ -370,29 +405,46 @@ impl FluidWorld {
                     }
                     rho[i] = r;
                     u[i] = v;
-                    if k == Kind::Interface {
-                        mass[i] += dm;
-                    } else {
+                    moving |= v.length() > STILL_SPEED;
+                    if k != Kind::Interface {
                         mass[i] = r;
+                        continue;
+                    }
+                    mass[i] += dm;
+                    let m = mass[i];
+                    let want = if m > (1.0 + p.fill_slack) * r || !gas_near {
+                        TO_LIQUID
+                    } else if m < -p.fill_slack * r || (!fluid_near && m < 0.1 * r) {
+                        TO_GAS
+                    } else {
+                        0
+                    };
+                    if want != 0 && blocked {
+                        moving = true;
+                    } else {
+                        conv[i] = want;
                     }
                 }
-                Some((f, mass, rho, u))
+                Some(Streamed {
+                    f,
+                    mass,
+                    rho,
+                    u,
+                    conv,
+                    moving,
+                })
             })
             .collect();
         for (tile, new) in self.tiles.iter_mut().zip(updated) {
-            if let Some((f, mass, rho, u)) = new {
-                tile.f = f;
-                tile.mass = mass;
-                tile.rho = rho;
-                tile.u = u;
+            if let Some(n) = new {
+                tile.f = n.f;
+                tile.mass = n.mass;
+                tile.rho = n.rho;
+                tile.u = n.u;
+                tile.conv = n.conv;
+                tile.moving |= n.moving;
             }
         }
-
-        // 4. Conversions.
-        let converted = self.convert(terrain);
-        self.update_activity(&converted);
-        self.stats.step_ms = start.elapsed().as_secs_f32() * 1000.0;
-        self.refresh_stats();
     }
 }
 

@@ -1,161 +1,248 @@
-//! The free surface moving: interface cells that fill become liquid and
-//! open the gas beyond them, cells that empty become gas and expose the
-//! liquid behind them, and terrain edits reopen or close space.
+//! The free surface moving. After streaming (which leaves in `conv` what
+//! each interface cell wants to become) four gather passes run, each reading
+//! of its neighbours only what an earlier pass wrote, so the GPU can run
+//! them as they are:
+//!
+//! 1. Flag: interface cells that overfilled become liquid, gas next to them
+//!    becomes interface, and interface cells that emptied become gas unless
+//!    they touch new liquid.
+//! 2. Apply: new interface cells start at the mean state of the water
+//!    around them, liquid next to new gas becomes interface, and each
+//!    converting cell sets aside the mass it gains or loses by converting.
+//! 3. Share: that excess is split among the cell's interface neighbours.
+//! 4. Gather: interface cells collect the shares around them.
+//!
+//! Terrain edits reopen or close space between steps.
 
 use super::{FluidWorld, Terrain};
 use crate::lattice::{C, Q, equilibrium};
-use crate::tile::{Kind, TILE, TILE_CELLS, local_of};
+use crate::tile::{
+    FROM_GAS, Kind, TILE, TILE_CELLS, TO_GAS, TO_LIQUID, Tile, kind_of, local_of, need_of,
+    neighbour, pack, transition_of,
+};
 use glam::{IVec3, Vec3};
-use mc2_core::FxHashMap;
+use rayon::prelude::*;
+
+/// The 18 neighbours of cell `l` in tile `t` that are allocated.
+fn around(tiles: &[Tile], t: usize, l: IVec3) -> impl Iterator<Item = (usize, usize)> + '_ {
+    C[1..]
+        .iter()
+        .filter_map(move |d| neighbour(tiles, t, l, IVec3::from_array(*d)))
+}
+
+/// What pass 2 leaves in one tile.
+struct Applied {
+    kind: Vec<Kind>,
+    mass: Vec<f32>,
+    rho: Vec<f32>,
+    u: Vec<Vec3>,
+    excess: Vec<f32>,
+    /// Cells that became interface from gas, to start at equilibrium.
+    fresh: Vec<usize>,
+    moving: bool,
+}
 
 impl FluidWorld {
-    /// Interface cells that filled or emptied change kind; returns the tiles
-    /// where anything converted.
-    pub(super) fn convert(&mut self, terrain: &dyn Terrain) -> Vec<usize> {
-        let eps = self.params.fill_slack;
-        let mut to_liquid = Vec::new();
-        let mut to_gas = Vec::new();
-        for (t, tile) in self.tiles.iter().enumerate() {
-            if !tile.awake {
-                continue;
-            }
-            for i in 0..TILE_CELLS {
-                if tile.kind[i] != Kind::Interface {
-                    continue;
+    /// Pass 1: each cell's transition, from what streaming asked for.
+    pub(super) fn flag(&mut self) {
+        let tiles = &self.tiles;
+        let out: Vec<Option<Vec<u8>>> = tiles
+            .par_iter()
+            .enumerate()
+            .map(|(t, tile)| {
+                if !tile.awake {
+                    return None;
                 }
-                let rho = tile.rho[i];
-                let m = tile.mass[i];
-                let c = tile.pos * TILE + local_of(i);
-                let mut gas_near = false;
-                let mut fluid_near = false;
-                for d in C.iter().skip(1) {
-                    match self.kind(c + IVec3::from_array(*d)) {
-                        Kind::Gas => gas_near = true,
-                        Kind::Liquid => fluid_near = true,
+                let mut next = vec![0u8; TILE_CELLS];
+                for (i, n) in next.iter_mut().enumerate() {
+                    let k = tile.kind[i];
+                    let filling_near = || {
+                        around(tiles, t, local_of(i))
+                            .any(|(nt, ni)| tiles[nt].conv[ni] == TO_LIQUID)
+                    };
+                    let transition = match (k, tile.conv[i]) {
+                        (Kind::Gas, _) if filling_near() => FROM_GAS,
+                        (Kind::Interface, TO_LIQUID) => TO_LIQUID,
+                        (Kind::Interface, TO_GAS) if !filling_near() => TO_GAS,
+                        _ => 0,
+                    };
+                    *n = pack(k, transition);
+                }
+                Some(next)
+            })
+            .collect();
+        for (tile, next) in self.tiles.iter_mut().zip(out) {
+            if let Some(next) = next {
+                tile.next = next;
+            }
+        }
+    }
+
+    /// Pass 2: conversions take effect.
+    pub(super) fn apply(&mut self) {
+        let tiles = &self.tiles;
+        let out: Vec<Option<Applied>> = tiles
+            .par_iter()
+            .enumerate()
+            .map(|(t, tile)| {
+                if !tile.awake {
+                    return None;
+                }
+                let mut a = Applied {
+                    kind: tile.kind.clone(),
+                    mass: tile.mass.clone(),
+                    rho: tile.rho.clone(),
+                    u: tile.u.clone(),
+                    excess: vec![0.0; TILE_CELLS],
+                    fresh: Vec::new(),
+                    moving: false,
+                };
+                for i in 0..TILE_CELLS {
+                    let next = tile.next[i];
+                    let l = local_of(i);
+                    match transition_of(next) {
+                        FROM_GAS => {
+                            // The mean of the water around it, not counting
+                            // cells that are emptying or new themselves.
+                            let (mut rho, mut u, mut n) = (0.0f32, Vec3::ZERO, 0.0f32);
+                            for (nt, ni) in around(tiles, t, l) {
+                                let o = tiles[nt].next[ni];
+                                if matches!(kind_of(o), Kind::Liquid | Kind::Interface)
+                                    && transition_of(o) != TO_GAS
+                                {
+                                    rho += tiles[nt].rho[ni];
+                                    u += tiles[nt].u[ni];
+                                    n += 1.0;
+                                }
+                            }
+                            let (rho, u) = if n > 0.0 {
+                                (rho / n, u / n)
+                            } else {
+                                (1.0, Vec3::ZERO)
+                            };
+                            a.kind[i] = Kind::Interface;
+                            a.mass[i] = 0.0;
+                            a.rho[i] = rho;
+                            a.u[i] = u;
+                            a.fresh.push(i);
+                            a.moving = true;
+                        }
+                        TO_LIQUID => {
+                            a.excess[i] = tile.mass[i] - tile.rho[i];
+                            a.kind[i] = Kind::Liquid;
+                            a.mass[i] = tile.rho[i];
+                            a.moving = true;
+                        }
+                        TO_GAS => {
+                            a.excess[i] = tile.mass[i];
+                            a.kind[i] = Kind::Gas;
+                            a.mass[i] = 0.0;
+                            a.moving = true;
+                        }
+                        _ => {
+                            let emptying_near = || {
+                                around(tiles, t, l)
+                                    .any(|(nt, ni)| transition_of(tiles[nt].next[ni]) == TO_GAS)
+                            };
+                            if kind_of(next) == Kind::Liquid && emptying_near() {
+                                a.kind[i] = Kind::Interface;
+                                a.mass[i] = tile.rho[i];
+                                a.moving = true;
+                            }
+                        }
+                    }
+                }
+                Some(a)
+            })
+            .collect();
+        for (tile, a) in self.tiles.iter_mut().zip(out) {
+            let Some(a) = a else { continue };
+            for &i in &a.fresh {
+                for q in 0..Q {
+                    tile.f[i * Q + q] = equilibrium(q, a.rho[i], a.u[i]);
+                }
+            }
+            tile.kind = a.kind;
+            tile.mass = a.mass;
+            tile.rho = a.rho;
+            tile.u = a.u;
+            tile.excess = a.excess;
+            tile.moving |= a.moving;
+        }
+    }
+
+    /// Pass 3: each converting cell splits its excess among its interface
+    /// neighbours; with none, the mass is lost (and counted).
+    pub(super) fn share(&mut self) {
+        let tiles = &self.tiles;
+        let out: Vec<Option<(Vec<f32>, f64)>> = tiles
+            .par_iter()
+            .enumerate()
+            .map(|(t, tile)| {
+                if !tile.awake {
+                    return None;
+                }
+                let mut massex = vec![0.0; TILE_CELLS];
+                let mut lost = 0.0f64;
+                for (i, m) in massex.iter_mut().enumerate() {
+                    if !matches!(transition_of(tile.next[i]), TO_LIQUID | TO_GAS) {
+                        continue;
+                    }
+                    let targets = around(tiles, t, local_of(i))
+                        .filter(|&(nt, ni)| tiles[nt].kind[ni] == Kind::Interface)
+                        .count();
+                    if targets == 0 {
+                        lost += f64::from(tile.excess[i]);
+                    } else {
+                        *m = tile.excess[i] / targets as f32;
+                    }
+                }
+                Some((massex, lost))
+            })
+            .collect();
+        for (tile, o) in self.tiles.iter_mut().zip(out) {
+            if let Some((massex, lost)) = o {
+                tile.massex = massex;
+                self.stats.lost_mass += lost;
+            }
+        }
+    }
+
+    /// Pass 4: interface cells collect their neighbours' shares; every tile
+    /// notes which tiles around it its water needs.
+    pub(super) fn gather(&mut self) {
+        let tiles = &self.tiles;
+        let out: Vec<Option<(Vec<f32>, u32)>> = tiles
+            .par_iter()
+            .enumerate()
+            .map(|(t, tile)| {
+                if !tile.awake {
+                    return None;
+                }
+                let mut mass = tile.mass.clone();
+                let mut need = 0;
+                for (i, m) in mass.iter_mut().enumerate() {
+                    let l = local_of(i);
+                    match tile.kind[i] {
+                        Kind::Interface => {
+                            *m += around(tiles, t, l)
+                                .map(|(nt, ni)| tiles[nt].massex[ni])
+                                .sum::<f32>();
+                            need |= need_of(l);
+                        }
+                        Kind::Liquid => need |= need_of(l),
                         _ => {}
                     }
                 }
-                if m > (1.0 + eps) * rho || !gas_near {
-                    to_liquid.push((t, i));
-                } else if m < -eps * rho || (!fluid_near && m < 0.1 * rho) {
-                    to_gas.push((t, i));
-                }
+                Some((mass, need))
+            })
+            .collect();
+        for (tile, o) in self.tiles.iter_mut().zip(out) {
+            if let Some((mass, need)) = o {
+                tile.mass = mass;
+                tile.need = need;
             }
         }
-        let mut touched: Vec<usize> = Vec::new();
-        let mut excess: Vec<(IVec3, f32)> = Vec::new();
-        let mut filled: FxHashMap<IVec3, ()> = FxHashMap::default();
-        // Filling first: a cell next to new liquid must not empty this step.
-        for &(t, i) in &to_liquid {
-            let c = self.tiles[t].pos * TILE + local_of(i);
-            let tile = &mut self.tiles[t];
-            excess.push((c, tile.mass[i] - tile.rho[i]));
-            tile.kind[i] = Kind::Liquid;
-            tile.mass[i] = tile.rho[i];
-            filled.insert(c, ());
-            touched.push(t);
-        }
-        for &(t, i) in &to_liquid {
-            let c = self.tiles[t].pos * TILE + local_of(i);
-            for d in C.iter().skip(1) {
-                let n = c + IVec3::from_array(*d);
-                if self.kind(n) == Kind::Gas {
-                    self.gas_to_interface(n, terrain);
-                    touched.push(self.index[&Self::tile_of(n).0]);
-                }
-            }
-        }
-        for &(t, i) in &to_gas {
-            let c = self.tiles[t].pos * TILE + local_of(i);
-            if self.tiles[t].kind[i] != Kind::Interface {
-                continue;
-            }
-            let next_to_new_liquid = C
-                .iter()
-                .skip(1)
-                .any(|d| filled.contains_key(&(c + IVec3::from_array(*d))));
-            if next_to_new_liquid {
-                continue;
-            }
-            let tile = &mut self.tiles[t];
-            excess.push((c, tile.mass[i]));
-            tile.kind[i] = Kind::Gas;
-            tile.mass[i] = 0.0;
-            touched.push(t);
-            for d in C.iter().skip(1) {
-                let n = c + IVec3::from_array(*d);
-                let (tp, ni) = Self::tile_of(n);
-                if let Some(&nt) = self.index.get(&tp)
-                    && self.tiles[nt].kind[ni] == Kind::Liquid
-                {
-                    let tile = &mut self.tiles[nt];
-                    tile.kind[ni] = Kind::Interface;
-                    tile.mass[ni] = tile.rho[ni];
-                }
-            }
-        }
-        // Share each conversion's excess among the interface cells around it.
-        for (c, m) in excess {
-            let mut targets = Vec::new();
-            for d in C.iter().skip(1) {
-                let n = c + IVec3::from_array(*d);
-                let (tp, ni) = Self::tile_of(n);
-                if let Some(&nt) = self.index.get(&tp)
-                    && self.tiles[nt].kind[ni] == Kind::Interface
-                {
-                    targets.push((nt, ni));
-                }
-            }
-            if targets.is_empty() {
-                self.stats.lost_mass += f64::from(m);
-                continue;
-            }
-            let share = m / targets.len() as f32;
-            for (nt, ni) in targets {
-                self.tiles[nt].mass[ni] += share;
-            }
-        }
-        touched.sort_unstable();
-        touched.dedup();
-        touched
-    }
-
-    /// A gas cell next to new liquid becomes interface, empty, with the
-    /// equilibrium of its liquid and interface neighbours' mean state.
-    fn gas_to_interface(&mut self, c: IVec3, terrain: &dyn Terrain) {
-        let (tp, i) = Self::tile_of(c);
-        let t = self.ensure_tile(tp, terrain);
-        if self.tiles[t].kind[i] != Kind::Gas {
-            return;
-        }
-        let (mut rho, mut u, mut n) = (0.0f32, Vec3::ZERO, 0.0f32);
-        for d in C.iter().skip(1) {
-            let nb = c + IVec3::from_array(*d);
-            let (ntp, ni) = Self::tile_of(nb);
-            if let Some(&nt) = self.index.get(&ntp) {
-                let tile = &self.tiles[nt];
-                if matches!(tile.kind[ni], Kind::Liquid | Kind::Interface) {
-                    rho += tile.rho[ni];
-                    u += tile.u[ni];
-                    n += 1.0;
-                }
-            }
-        }
-        let (rho, u) = if n > 0.0 {
-            (rho / n, u / n)
-        } else {
-            (1.0, Vec3::ZERO)
-        };
-        let tile = &mut self.tiles[t];
-        tile.kind[i] = Kind::Interface;
-        tile.mass[i] = 0.0;
-        tile.rho[i] = rho;
-        tile.u[i] = u;
-        for q in 0..Q {
-            tile.f[i * Q + q] = equilibrium(q, rho, u);
-        }
-        tile.awake = true;
-        tile.still_steps = 0;
     }
 
     /// Terrain changed in the cells `lo..=hi`: refresh solidity there and
@@ -180,6 +267,7 @@ impl FluidWorld {
                             (Kind::Gas, true) => tile.kind[i] = Kind::Solid,
                             _ => {}
                         }
+                        tile.next[i] = pack(tile.kind[i], 0);
                     }
                     tile.awake = true;
                     tile.still_steps = 0;
@@ -190,15 +278,12 @@ impl FluidWorld {
         // mass, or it would stream into the gas without accounting.
         self.close_surface();
         // Water next to newly opened space has somewhere to go.
-        for c in self.gas_neighbours_of_interfaces() {
-            let (tp, _) = Self::tile_of(c);
-            self.ensure_tile(tp, terrain);
-        }
+        self.allocate_margins(terrain, true);
     }
 
-    /// Liquid cells touching gas become full interface cells, so the
-    /// interface layer between liquid and gas stays closed.
-    fn close_surface(&mut self) {
+    /// Liquid cells touching gas (or unallocated space) become full
+    /// interface cells, so the interface layer stays closed.
+    pub(super) fn close_surface(&mut self) {
         let mut exposed = Vec::new();
         for (t, tile) in self.tiles.iter().enumerate() {
             for i in 0..TILE_CELLS {
@@ -217,7 +302,10 @@ impl FluidWorld {
         for (t, i) in exposed {
             let tile = &mut self.tiles[t];
             tile.kind[i] = Kind::Interface;
+            tile.next[i] = pack(Kind::Interface, 0);
             tile.mass[i] = tile.rho[i];
+            tile.awake = true;
+            tile.still_steps = 0;
         }
     }
 }

@@ -1,5 +1,5 @@
 //! Sleep: tiles whose water has been still for a second stop stepping;
-//! motion at a tile's face wakes the neighbour across it.
+//! motion or conversion in a tile keeps it and the tiles around it awake.
 
 use super::FluidWorld;
 use crate::tile::Kind;
@@ -7,42 +7,26 @@ use crate::tile::Kind;
 /// Steps a tile must stay still before it sleeps.
 const SLEEP_STEPS: u32 = 240;
 /// Below this speed (lattice units, about 1 cm/s) a cell counts as still.
-const STILL_SPEED: f32 = 1e-4;
+pub(super) const STILL_SPEED: f32 = 1e-4;
 
 impl FluidWorld {
-    /// Still tiles sleep; motion at a face wakes the neighbour across it.
-    pub(super) fn update_activity(&mut self, converted: &[usize]) {
-        let mut wake: Vec<usize> = Vec::new();
-        for (t, tile) in self.tiles.iter_mut().enumerate() {
-            if !tile.awake {
-                continue;
-            }
-            let moving = tile.u.iter().zip(&tile.kind).any(|(v, k)| {
-                matches!(k, Kind::Liquid | Kind::Interface) && v.length() > STILL_SPEED
-            });
-            if moving || converted.contains(&t) {
-                tile.still_steps = 0;
+    /// Every tile (asleep or not) counts the steps since anything moved in
+    /// it or around it; after a second of stillness it sleeps.
+    pub(super) fn update_activity(&mut self) {
+        let moving: Vec<bool> = self.tiles.iter().map(|t| t.moving).collect();
+        for tile in &mut self.tiles {
+            // `near` includes the tile itself.
+            let stirred = tile
+                .near
+                .iter()
+                .any(|&n| n != u32::MAX && moving[n as usize]);
+            tile.still_steps = if stirred {
+                0
             } else {
-                tile.still_steps += 1;
-            }
-            if tile.still_steps > SLEEP_STEPS {
-                tile.awake = false;
-                continue;
-            }
-            if moving {
-                for &n in &tile.near {
-                    if n != u32::MAX {
-                        wake.push(n as usize);
-                    }
-                }
-            }
-        }
-        for t in wake {
-            let tile = &mut self.tiles[t];
-            if !tile.awake {
-                tile.awake = true;
-                tile.still_steps = 0;
-            }
+                tile.still_steps.saturating_add(1)
+            };
+            tile.awake = tile.still_steps <= SLEEP_STEPS;
+            tile.moving = false;
         }
     }
 
