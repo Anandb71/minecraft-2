@@ -1,7 +1,8 @@
 // Fluid step, pass 0: stream by pulling, exchange interface mass, collide
 // (BGK with a Smagorinsky subgrid term and Guo gravity). Interface cells
-// that overfilled or emptied note it in `conv`; a cell with a neighbour
-// asleep or unallocated may not convert yet and keeps its tile stirred.
+// that overfilled or emptied note it in `conv`, and one filling marks its
+// neighbours; a cell with a neighbour asleep or unallocated may not
+// convert yet and keeps its tile stirred.
 // One workgroup covers 64 cells of one awake tile.
 #import "fluid_common.wgsl"
 
@@ -184,7 +185,6 @@ fn stream_collide(
     let i = wg.y * 64u + li;
     let c = s * TILE_CELLS + i;
     let k = kind[c];
-    conv[c] = 0u;
     if k == LIQUID || k == INTERFACE {
         var fill_here = 1.0;
         if k == INTERFACE {
@@ -277,8 +277,17 @@ fn stream_collide(
             if want != 0u && st.blocked {
                 atomicOr(&bits, MOVED);
             } else if want != 0u {
-                conv[c] = want;
-                atomicOr(&bits, CONVERTING);
+                atomicOr(&conv[c], want);
+                if want == TO_LIQUID {
+                    // Gas around becomes interface; interface around may
+                    // not empty.
+                    for (var q = 1u; q < Q; q++) {
+                        let n = neighbour_near(st.local, velocity(q)).x;
+                        if n != NONE {
+                            atomicOr(&conv[n], FILLING_NEAR);
+                        }
+                    }
+                }
             }
         }
     }

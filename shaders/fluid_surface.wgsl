@@ -8,9 +8,10 @@
 // 4. gather: interface cells collect those shares; tiles note which tiles
 //    around them their water needs.
 //
-// Each pass first asks whether the tiles around it did anything the pass
-// answers to (their step bits); where none did, a cell need not look at
-// its neighbours. One workgroup covers 64 cells of one awake tile.
+// Cells that convert mark their neighbours (bits in `conv`), so a cell
+// learns what happened around it from its own word instead of asking all
+// 18 neighbours; gather clears the marks for the next step. One workgroup
+// covers 64 cells of one awake tile.
 #import "fluid_common.wgsl"
 
 var<workgroup> bits: atomic<u32>;
@@ -40,35 +41,31 @@ fn publish(c: Cell, li: u32) {
 @compute @workgroup_size(64)
 fn flag(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
     let c = cell_of(wg, li);
-    let converting_near = (step_bits_around(c.slot, li) & CONVERTING) != 0u;
     let k = kind[c.global];
+    let marks = atomicLoad(&conv[c.global]);
+    let want = marks & WANT;
+    let filling_near = (marks & FILLING_NEAR) != 0u;
     var transition = 0u;
-    if converting_near && (k == GAS || k == INTERFACE) {
-        var filling_near = false;
+    if k == GAS && filling_near {
+        transition = FROM_GAS;
+    } else if k == INTERFACE && want == TO_LIQUID {
+        transition = TO_LIQUID;
+    } else if k == INTERFACE && want == TO_GAS && !filling_near {
+        transition = TO_GAS;
+        // Liquid around it becomes interface.
         for (var q = 1u; q < Q; q++) {
             let n = neighbour(c.slot, c.local, velocity(q));
-            if n != NONE && conv[n] == TO_LIQUID {
-                filling_near = true;
+            if n != NONE {
+                atomicOr(&conv[n], EMPTIED_NEAR);
             }
-        }
-        let want = conv[c.global];
-        if k == GAS && filling_near {
-            transition = FROM_GAS;
-        } else if k == INTERFACE && want == TO_LIQUID {
-            transition = TO_LIQUID;
-        } else if k == INTERFACE && want == TO_GAS && !filling_near {
-            transition = TO_GAS;
-            atomicOr(&bits, EMPTYING);
         }
     }
     next[c.global] = pack(k, transition);
-    publish(c, li);
 }
 
 @compute @workgroup_size(64)
 fn apply(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
     let c = cell_of(wg, li);
-    let emptying_near = (step_bits_around(c.slot, li) & EMPTYING) != 0u;
     let here = next[c.global];
     let transition = here >> 2u;
     if transition == FROM_GAS {
@@ -114,19 +111,10 @@ fn apply(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) 
         kind[c.global] = GAS;
         mass[c.global] = 0.0;
         atomicOr(&bits, MOVED | HANDING_ON);
-    } else if emptying_near && (here & 3u) == LIQUID {
-        var emptying = false;
-        for (var q = 1u; q < Q; q++) {
-            let o = neighbour(c.slot, c.local, velocity(q));
-            if o != NONE && (next[o] >> 2u) == TO_GAS {
-                emptying = true;
-            }
-        }
-        if emptying {
-            kind[c.global] = INTERFACE;
-            mass[c.global] = rho_u[c.global].w;
-            atomicOr(&bits, MOVED);
-        }
+    } else if (here & 3u) == LIQUID && (atomicLoad(&conv[c.global]) & EMPTIED_NEAR) != 0u {
+        kind[c.global] = INTERFACE;
+        mass[c.global] = rho_u[c.global].w;
+        atomicOr(&bits, MOVED);
     }
     publish(c, li);
 }
@@ -174,6 +162,8 @@ fn gather(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index)
         f = 1.0;
     }
     fill[fill_index(c.global, 1u - params.parity)] = f;
+    // Marks are read; clear them for the next step's streaming.
+    atomicStore(&conv[c.global], 0u);
     if k == INTERFACE || k == LIQUID {
         atomicOr(&needed, need_of(c.local));
     }

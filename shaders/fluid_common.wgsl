@@ -58,7 +58,9 @@ struct Args {
 @group(0) @binding(5) var<storage, read_write> rho_u: array<vec4<f32>>;
 // Two halves, by parity: the fill each cell had at the start of the step.
 @group(0) @binding(6) var<storage, read_write> fill: array<f32>;
-@group(0) @binding(7) var<storage, read_write> conv: array<u32>;
+// Per cell: what streaming asked the cell to become (low two bits), and
+// marks its neighbours leave on it (FILLING_NEAR, EMPTIED_NEAR).
+@group(0) @binding(7) var<storage, read_write> conv: array<atomic<u32>>;
 @group(0) @binding(8) var<storage, read_write> next: array<u32>;
 @group(0) @binding(9) var<storage, read_write> excess: array<f32>;
 @group(0) @binding(10) var<storage, read_write> massex: array<f32>;
@@ -85,6 +87,12 @@ const FROM_GAS: u32 = 3u;
 
 const MARGIN: i32 = 3;
 
+// Marks in `conv`: a neighbour is filling (to liquid) this step, or has
+// emptied (to gas). Set by the converting cell, read by the one it marks.
+const WANT: u32 = 3u;
+const FILLING_NEAR: u32 = 4u;
+const EMPTIED_NEAR: u32 = 8u;
+
 // The 19 lattice velocities (rest, the 6 faces, then the 12 edges, each
 // followed by its opposite; `C` in crates/mc2-fluid lattice.rs) as bits by
 // index: which components are non-zero, and which of those negative. Pure
@@ -102,9 +110,7 @@ fn velocity(q: u32) -> vec3<i32> {
 // Bits a tile's step word collects: something moved (keeps it awake), and
 // which surface passes have work near it.
 const MOVED: u32 = 1u;
-const CONVERTING: u32 = 2u;
-const EMPTYING: u32 = 4u;
-const HANDING_ON: u32 = 8u;
+const HANDING_ON: u32 = 2u;
 
 fn weight(q: u32) -> f32 {
     if q == 0u {

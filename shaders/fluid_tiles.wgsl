@@ -91,7 +91,7 @@ fn edit(@builtin(global_invocation_id) id: vec3<u32>) {
         let rho = bitcast<f32>(e.z);
         kind[c] = LIQUID;
         next[c] = pack(LIQUID, 0u);
-        conv[c] = 0u;
+        atomicStore(&conv[c], 0u);
         mass[c] = rho;
         rho_u[c] = vec4<f32>(0.0, 0.0, 0.0, rho);
         for (var q = 0u; q < Q; q++) {
