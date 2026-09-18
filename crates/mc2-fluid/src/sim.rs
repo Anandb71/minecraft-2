@@ -359,11 +359,9 @@ impl FluidWorld {
                             Some((st, si)) => {
                                 let src = &tiles[st];
                                 blocked |= !src.awake;
+                                ground_near |= src.kind[si] == Kind::Solid;
                                 match src.kind[si] {
-                                    Kind::Solid => match {
-                                        ground_near = true;
-                                        specular(tiles, t, l, q)
-                                    } {
+                                    Kind::Solid => match specular(tiles, t, l, q) {
                                         Some((mt, mi, mq)) => {
                                             let m = &tiles[mt];
                                             let slide = m.f[mi * Q + mq];

@@ -262,8 +262,8 @@ impl FluidWorld {
             let Some(g) = g else { continue };
             for (i, share) in g.liquid {
                 tile.rho[i] += share;
-                for q in 0..Q {
-                    tile.f[i * Q + q] += W[q] * share;
+                for (f, w) in tile.f[i * Q..(i + 1) * Q].iter_mut().zip(W) {
+                    *f += w * share;
                 }
             }
             tile.mass = g.mass;
