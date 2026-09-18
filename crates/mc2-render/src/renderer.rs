@@ -271,6 +271,19 @@ impl Renderer {
                     reflections,
                     GI_SHIFT,
                 )));
+                // What is seen through glass and water, full resolution.
+                let refraction = graph.create_texture(TextureDesc::render_target(
+                    "refraction",
+                    wgpu::TextureFormat::Rgba16Float,
+                    1.0,
+                ));
+                graph.add_pass(Box::new(crate::indirect::RefractionPass::new(
+                    dev,
+                    &frame,
+                    gi_inputs,
+                    refraction,
+                    skymap.view.clone(),
+                )));
                 graph.add_pass(Box::new(ComposePass::new(
                     dev,
                     &frame,
@@ -286,6 +299,7 @@ impl Renderer {
                         cloud_uniforms,
                         fog: fog_targets.integrated,
                         reflections: reflections.output,
+                        refraction,
                     },
                     scene,
                 )));

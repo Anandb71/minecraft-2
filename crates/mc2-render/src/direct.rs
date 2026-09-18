@@ -453,6 +453,8 @@ pub struct ComposeInputs {
     pub fog: TexHandle,
     /// Denoised glossy reflections (GI resolution).
     pub reflections: TexHandle,
+    /// What is seen through clear surfaces (render resolution).
+    pub refraction: TexHandle,
 }
 
 pub struct ComposePass {
@@ -502,6 +504,7 @@ impl ComposePass {
                 bind::uniform(),
                 bind::texture(wgpu::TextureViewDimension::D3, true),
                 unfilterable(),
+                unfilterable(),
             ],
         );
         let pipeline = HotCompute::new(
@@ -546,6 +549,7 @@ impl Pass<FrameCtx> for ComposePass {
         b.read(self.inputs.cloud_shadow);
         b.read(self.inputs.fog);
         b.read(self.inputs.reflections);
+        b.read(self.inputs.refraction);
         b.read(self.sky.transmittance);
         b.read(self.sky.sky_view);
         b.read(self.sky.aerial);
@@ -601,6 +605,9 @@ impl Pass<FrameCtx> for ComposePass {
             ));
             r.push(wgpu::BindingResource::TextureView(
                 ctx.graph.view(self.inputs.reflections),
+            ));
+            r.push(wgpu::BindingResource::TextureView(
+                ctx.graph.view(self.inputs.refraction),
             ));
             self.group = Some((
                 generation,
