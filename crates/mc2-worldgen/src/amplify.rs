@@ -8,6 +8,7 @@
 //! erosion carved. Surface materials follow slope, altitude, sediment and
 //! water, then give way to the strata below.
 
+use crate::flora::{Biome, Climate};
 use crate::noise::Perlin;
 use crate::strata::Strata;
 use crate::terrain::CoarseTerrain;
@@ -20,6 +21,7 @@ pub const TREELINE_M: f32 = 330.0;
 pub struct Surface {
     pub terrain: Arc<CoarseTerrain>,
     detail: Perlin,
+    climate: Climate,
     flow_scale: f32,
 }
 
@@ -33,6 +35,10 @@ pub struct SurfaceSample {
     pub river: f32,
     /// Loose material above the rock: soil, alluvium, beach sand.
     pub soil_depth: f32,
+    /// Climate, each roughly 0..1: temperature (falling with altitude) and
+    /// moisture. Both interpolate, so samples blend across a brick.
+    pub temp: f32,
+    pub wet: f32,
 }
 
 impl Surface {
@@ -41,9 +47,11 @@ impl Surface {
         sorted.sort_by(f32::total_cmp);
         let flow_scale = sorted[sorted.len() * 99 / 100].max(1e-6);
         let detail = Perlin::new(terrain.seed ^ 0x00a3_f11d);
+        let climate = Climate::new(terrain.seed);
         Self {
             terrain,
             detail,
+            climate,
             flow_scale,
         }
     }
@@ -74,17 +82,28 @@ impl Surface {
         } else {
             ((1.0 - slope) * 1.6 + sediment.min(6.0)) * calm.max(0.3)
         };
+        let (temp, wet) = self.climate.at(x, z, height, t.params.sea_level, river);
         SurfaceSample {
             height,
             slope,
             river,
             soil_depth,
+            temp,
+            wet,
         }
     }
 
     /// Material of a voxel `depth` metres below the surface at elevation `y`.
     pub fn loose_material(&self, s: &SurfaceSample, depth: f32, y: f32) -> MaterialId {
         let sea = self.terrain.params.sea_level;
+        if s.height < sea - 0.3 {
+            // The sea floor.
+            return if depth < 0.8 && s.slope < 0.4 {
+                ids::SAND
+            } else {
+                ids::GRAVEL
+            };
+        }
         if s.height < sea + 1.5 && s.slope < 0.25 {
             return if depth < 0.9 { ids::SAND } else { ids::CLAY };
         }
@@ -93,6 +112,11 @@ impl Surface {
         }
         if y > SNOWLINE_M && depth < 0.5 {
             return ids::SNOW;
+        }
+        match s.biome(sea) {
+            Biome::Desert => return ids::SAND,
+            Biome::SnowyTaiga if depth < 0.12 && s.slope < 0.8 => return ids::SNOW,
+            _ => {}
         }
         if depth < 0.2 && y < TREELINE_M && s.slope < 0.9 {
             return ids::GRASS;
@@ -113,7 +137,12 @@ pub fn material_at(
 ) -> MaterialId {
     let depth = s.height - y;
     if depth < 0.0 {
-        return MaterialId(0);
+        // Above the ground: the sea up to its level, then air.
+        return if y < surface.terrain.params.sea_level {
+            ids::WATER
+        } else {
+            MaterialId(0)
+        };
     }
     if depth < s.soil_depth {
         return surface.loose_material(s, depth, y);
