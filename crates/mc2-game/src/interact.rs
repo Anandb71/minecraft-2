@@ -321,6 +321,7 @@ fn eye(p: &Player, b: &Body, alpha: f64) -> DVec3 {
 }
 
 /// Updates the target and preview, then applies clicks. Every frame.
+#[allow(clippy::too_many_arguments)]
 pub fn interact(
     mut voxels: ResMut<Voxels>,
     mut streaming: ResMut<Streaming>,
