@@ -1188,6 +1188,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc2-fluid"
+version = "0.1.0"
+dependencies = [
+ "glam 0.33.7",
+ "mc2-core",
+ "rayon",
+]
+
+[[package]]
 name = "mc2-game"
 version = "0.1.0"
 dependencies = [
