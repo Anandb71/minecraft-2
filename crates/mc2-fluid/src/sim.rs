@@ -21,7 +21,8 @@
 //! Tiles whose cells have been still for a second go to sleep and cost
 //! nothing; motion at a tile's face wakes its neighbour.
 
-use crate::tile::{Kind, TILE, TILE_CELLS, Tile, index_of, near_slot};
+use crate::lattice::{C, Q, W};
+use crate::tile::{Kind, TILE, TILE_CELLS, Tile, index_of, local_of, near_slot};
 use glam::{IVec3, Vec3};
 use mc2_core::FxHashMap;
 
@@ -151,6 +152,82 @@ impl FluidWorld {
         self.index
             .get(&tp)
             .map_or(Vec3::ZERO, |&t| self.tiles[t].u[i])
+    }
+
+    /// Fills cells with still water at hydrostatic pressure. Cells next to
+    /// gas become interface cells, full.
+    pub fn add_water(&mut self, cells: impl IntoIterator<Item = IVec3>, terrain: &dyn Terrain) {
+        let mut added = Vec::new();
+        for c in cells {
+            let (tp, i) = Self::tile_of(c);
+            let t = self.ensure_tile(tp, terrain);
+            let tile = &mut self.tiles[t];
+            if tile.kind[i] == Kind::Solid {
+                continue;
+            }
+            tile.kind[i] = Kind::Liquid;
+            tile.rho[i] = 1.0;
+            tile.mass[i] = 1.0;
+            tile.u[i] = Vec3::ZERO;
+            tile.awake = true;
+            tile.still_steps = 0;
+            added.push(c);
+        }
+        // Close the surface: liquid touching gas is an interface.
+        for &c in &added {
+            for d in C.iter().skip(1) {
+                let n = c + IVec3::from_array(*d);
+                if self.kind(n) == Kind::Gas {
+                    let (tp, i) = Self::tile_of(c);
+                    let t = self.index[&tp];
+                    self.tiles[t].kind[i] = Kind::Interface;
+                    break;
+                }
+            }
+        }
+        // Start at hydrostatic pressure, the weight of the water above
+        // (see the surface pressure in `step`), or the body rings.
+        let g = self.params.gravity.length();
+        for &c in &added {
+            let mut above = 0.0;
+            let mut n = c + IVec3::Y;
+            while matches!(self.kind(n), Kind::Liquid | Kind::Interface) {
+                above += self.fill(n);
+                n += IVec3::Y;
+            }
+            let rho = self.params.rho_gas + 3.0 * g * (above + 0.5);
+            let (tp, i) = Self::tile_of(c);
+            let tile = &mut self.tiles[self.index[&tp]];
+            tile.rho[i] = rho;
+            tile.mass[i] = rho;
+            for (f, w) in tile.f[i * Q..(i + 1) * Q].iter_mut().zip(W) {
+                *f = w * rho;
+            }
+        }
+        for c in self.gas_neighbours_of_interfaces() {
+            let (tp, _) = Self::tile_of(c);
+            self.ensure_tile(tp, terrain);
+        }
+    }
+
+    fn gas_neighbours_of_interfaces(&self) -> Vec<IVec3> {
+        let mut out = Vec::new();
+        for tile in &self.tiles {
+            for i in 0..TILE_CELLS {
+                if tile.kind[i] != Kind::Interface {
+                    continue;
+                }
+                let c = tile.pos * TILE + local_of(i);
+                for d in C.iter().skip(1) {
+                    let n = c + IVec3::from_array(*d);
+                    let (tp, _) = Self::tile_of(n);
+                    if !self.index.contains_key(&tp) {
+                        out.push(n);
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Liquid mass, lattice units (cells of rest density).
