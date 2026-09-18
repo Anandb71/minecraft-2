@@ -7,6 +7,7 @@ pub mod erosion;
 pub mod flora;
 pub mod grid;
 pub mod noise;
+pub mod settlement;
 pub mod strata;
 pub mod stream;
 pub mod terrain;
