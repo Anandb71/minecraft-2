@@ -18,7 +18,7 @@ use mc2_voxel::world::VoxelWorld;
 pub enum BlockKind {
     /// A full cube of one material.
     Solid(MaterialId),
-    /// Plank stick with an emissive flame, the classic light source.
+    /// Wrapped stick with a charcoal head and an emissive flame.
     Torch,
     /// Glass box in a plank frame with a glowing core.
     Lantern,
@@ -77,13 +77,21 @@ impl BlockKind {
                 }
             }
             BlockKind::Torch => {
-                let centre = l.x >= 7 && l.x <= 8 && l.z >= 7 && l.z <= 8;
-                if centre && l.y < 10 {
-                    ids::PLANKS
-                } else if l.x >= 6 && l.x <= 9 && l.z >= 6 && l.z <= 9 && (10..13).contains(&l.y) {
-                    ids::TORCH_FLAME
-                } else {
-                    MaterialId(0)
+                // Dark handle, a cloth wrap, a charcoal head and a flame
+                // that tapers to a tip.
+                let within = |v: i32, lo: i32, hi: i32| (lo..=hi).contains(&v);
+                let core = within(l.x, 7, 8) && within(l.z, 7, 8);
+                let head = within(l.x, 6, 9) && within(l.z, 6, 9);
+                let corner = (l.x == 6 || l.x == 9) && (l.z == 6 || l.z == 9);
+                match l.y {
+                    0..=4 if core => ids::DARK_PLANKS,
+                    5..=6 if core => ids::WOOL,
+                    7..=8 if core => ids::PLANKS,
+                    9 if head && !corner => ids::CHARCOAL,
+                    10..=11 if head => ids::TORCH_FLAME,
+                    12 if core => ids::TORCH_FLAME,
+                    13 if core && (l.x + l.z) % 2 == 0 => ids::TORCH_FLAME,
+                    _ => MaterialId(0),
                 }
             }
             BlockKind::Lantern => {
