@@ -1,0 +1,48 @@
+name: Bug
+description: Something is broken
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The profiler HUD (F3) and `--seed` / `--camera` make bugs much easier to chase.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      placeholder: I lit TNT under a glass tower and the window voxels survived the blast.
+    validations:
+      required: true
+  - type: textarea
+    id: expect
+    attributes:
+      label: What should have happened
+    validations:
+      required: true
+  - type: input
+    id: seed
+    attributes:
+      label: Seed
+      placeholder: "42"
+  - type: input
+    id: repro
+    attributes:
+      label: Command or keys
+      placeholder: cargo run --release -- --seed 7 --time 21.5
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options: [Windows, Linux, macOS]
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and backend
+      placeholder: RTX 3050, Vulkan, driver 591.86
+  - type: textarea
+    id: extra
+    attributes:
+      label: Logs, screenshots, F3 lines

@@ -1,0 +1,38 @@
+name: Feature
+description: Something the game or engine should do
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Name the player-facing outcome. The README build order is the product plan;
+        a surprise rewrite of a finished step is rarely the right move.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What should a player be able to do
+      placeholder: Stand on a frozen river that actually supports the player AABB.
+    validations:
+      required: true
+  - type: textarea
+    id: now
+    attributes:
+      label: What happens today
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Where it lives
+      options:
+        - Play / inventory / UI
+        - Worldgen / flora / settlements
+        - Renderer / lighting
+        - Physics / structure
+        - Engine / tooling
+        - Not sure
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes, references, prior art

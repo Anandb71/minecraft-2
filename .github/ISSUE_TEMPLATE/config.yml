@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Anand B
+    url: https://anandb71.in
+    about: Author site, other work, hire me
+  - name: Security
+    url: https://github.com/Anandb71/minecraft-2/blob/main/SECURITY.md
+    about: Report a vulnerability privately instead of opening an issue
