@@ -331,7 +331,7 @@ fn apply(inv: &mut Inventory, recipe: &Recipe, near: Near) -> Result<(), CraftEr
         if inv.heat == 0 {
             let fuel = FUEL_ORDER
                 .iter()
-                .find_map(|wanted| inv.take(|i| wanted(i), 1))
+                .find_map(|wanted| inv.take(*wanted, 1))
                 .and_then(|t| t.first().copied())
                 .ok_or(CraftError::NoFuel)?;
             inv.heat += fuel.0.fuel();
