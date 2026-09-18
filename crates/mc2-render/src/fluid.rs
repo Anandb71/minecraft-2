@@ -19,6 +19,7 @@ use mc2_gpu::{HotCompute, ShaderLibrary, bind, bind_group, layout};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU8;
 
+mod encode;
 mod table;
 
 const Q: u64 = 19;
