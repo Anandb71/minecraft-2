@@ -31,6 +31,8 @@ use rayon::prelude::*;
 
 mod activity;
 mod surface;
+#[cfg(test)]
+mod tests;
 
 /// Cell edge, metres: one brick cell.
 pub const CELL_M: f64 = 0.5;
