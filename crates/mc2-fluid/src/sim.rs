@@ -22,7 +22,9 @@
 //! nothing; motion at a tile's face wakes its neighbour.
 
 use crate::lattice::{C, Q, W, equilibrium, guo, les_tau, moments, opp};
-use crate::tile::{Kind, TILE, TILE_CELLS, Tile, index_of, local_of, near_slot, neighbour};
+use crate::tile::{
+    Kind, TILE, TILE_CELLS, Tile, index_of, local_of, near_slot, neighbour, specular,
+};
 use glam::{IVec3, Vec3};
 use mc2_core::FxHashMap;
 use rayon::prelude::*;
@@ -46,6 +48,9 @@ pub struct Params {
     pub rho_gas: f32,
     /// Fill beyond [0, 1] by this much converts an interface cell.
     pub fill_slack: f32,
+    /// How much of what reaches a flat wall slides along it (reflected)
+    /// rather than bouncing straight back: 0 is no-slip, 1 free slip.
+    pub wall_slip: f32,
 }
 
 impl Default for Params {
@@ -57,6 +62,7 @@ impl Default for Params {
             gravity: Vec3::new(0.0, -g as f32, 0.0),
             rho_gas: 1.0,
             fill_slack: 1e-2,
+            wall_slip: 0.995,
         }
     }
 }
@@ -302,7 +308,26 @@ impl FluidWorld {
                             Some((st, si)) => {
                                 let src = &tiles[st];
                                 match src.kind[si] {
-                                    Kind::Solid => fi[q] = out_q,
+                                    Kind::Solid => match specular(tiles, t, l, q) {
+                                        Some((mt, mi, mq)) => {
+                                            let m = &tiles[mt];
+                                            let slide = m.f[mi * Q + mq];
+                                            fi[q] =
+                                                p.wall_slip * slide + (1.0 - p.wall_slip) * out_q;
+                                            if k == Kind::Interface {
+                                                let exchange = p.wall_slip * (slide - out_q);
+                                                dm += if m.kind[mi] == Kind::Liquid {
+                                                    exchange
+                                                } else {
+                                                    let fill_there = (m.mass[mi]
+                                                        / m.rho[mi].max(1e-6))
+                                                    .clamp(0.0, 1.0);
+                                                    0.5 * (fill_here + fill_there) * exchange
+                                                };
+                                            }
+                                        }
+                                        None => fi[q] = out_q,
+                                    },
                                     Kind::Gas => {
                                         fi[q] = equilibrium(q, rho_gas, tile.u[i])
                                             + equilibrium(opp(q), rho_gas, tile.u[i])

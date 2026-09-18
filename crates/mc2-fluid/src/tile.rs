@@ -1,7 +1,7 @@
 //! Sparse storage: 8^3 tiles of cells, each with its populations, and the
 //! lookups that cross tile edges.
 
-use crate::lattice::Q;
+use crate::lattice::{C, MIRROR, Q};
 use glam::{IVec3, Vec3};
 
 pub const TILE: i32 = 8;
@@ -66,6 +66,48 @@ pub(crate) fn index_of(l: IVec3) -> usize {
 #[inline]
 pub(crate) fn near_slot(d: IVec3) -> usize {
     ((d.x + 1) + 3 * ((d.y + 1) + 3 * (d.z + 1))) as usize
+}
+
+/// Where a flat wall reflects population `q` of cell `l` in tile `t` from,
+/// when the cell behind it along `q` is solid: the cell one step back along
+/// the axis that runs parallel to the wall, and the population mirrored
+/// across the wall. None for face populations and in corners, which bounce
+/// straight back, and when that cell holds no water.
+pub(crate) fn specular(
+    tiles: &[Tile],
+    t: usize,
+    l: IVec3,
+    q: usize,
+) -> Option<(usize, usize, usize)> {
+    // Faces come first in `C`; only the 12 edges can slide along a wall.
+    if q < 7 {
+        return None;
+    }
+    let c = IVec3::from_array(C[q]);
+    let (a1, a2) = match (c.x != 0, c.y != 0) {
+        (true, true) => (0, 1),
+        (true, false) => (0, 2),
+        _ => (1, 2),
+    };
+    let back = |a: usize| {
+        let mut d = IVec3::ZERO;
+        d[a] = -c[a];
+        d
+    };
+    let solid = |d: IVec3| {
+        neighbour(tiles, t, l, d).is_some_and(|(st, si)| tiles[st].kind[si] == Kind::Solid)
+    };
+    let (d, normal) = match (solid(back(a1)), solid(back(a2))) {
+        (false, true) => (back(a1), a2),
+        (true, false) => (back(a2), a1),
+        _ => return None,
+    };
+    let (mt, mi) = neighbour(tiles, t, l, d)?;
+    matches!(tiles[mt].kind[mi], Kind::Liquid | Kind::Interface).then_some((
+        mt,
+        mi,
+        MIRROR[normal][q],
+    ))
 }
 
 /// The tile and cell a neighbour of cell `l` in tile `t` lies in.

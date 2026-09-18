@@ -63,6 +63,32 @@ pub const fn opp(i: usize) -> usize {
     }
 }
 
+/// `MIRROR[a][i]`: velocity `i` reflected across axis `a` (its `a`
+/// component negated), for walls that reflect rather than bounce back.
+pub const MIRROR: [[usize; Q]; 3] = mirror_table();
+
+const fn mirror_table() -> [[usize; Q]; 3] {
+    let mut t = [[0; Q]; 3];
+    let mut a = 0;
+    while a < 3 {
+        let mut i = 0;
+        while i < Q {
+            let mut m = C[i];
+            m[a] = -m[a];
+            let mut j = 0;
+            while j < Q {
+                if C[j][0] == m[0] && C[j][1] == m[1] && C[j][2] == m[2] {
+                    t[a][i] = j;
+                }
+                j += 1;
+            }
+            i += 1;
+        }
+        a += 1;
+    }
+    t
+}
+
 #[inline]
 pub fn c(i: usize) -> Vec3 {
     Vec3::new(C[i][0] as f32, C[i][1] as f32, C[i][2] as f32)
@@ -144,6 +170,19 @@ mod tests {
             m += w * c(i) * c(i);
         }
         assert!((m - Vec3::splat(1.0 / 3.0)).length() < 1e-6);
+    }
+
+    #[test]
+    fn mirrors_negate_one_axis() {
+        for a in 0..3 {
+            for i in 0..Q {
+                let m = MIRROR[a][i];
+                assert_eq!(MIRROR[a][m], i);
+                let mut e = C[i];
+                e[a] = -e[a];
+                assert_eq!(C[m], e);
+            }
+        }
     }
 
     #[test]
