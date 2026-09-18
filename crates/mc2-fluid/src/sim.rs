@@ -340,6 +340,11 @@ impl FluidWorld {
                     let mut fi = [0.0f32; Q];
                     let mut dm = 0.0f32;
                     let (mut gas_near, mut fluid_near, mut blocked) = (false, false, false);
+                    // Any water around at all, and any ground: interface
+                    // cells with neither liquid nor ground beside them and
+                    // under half full are spray the lattice cannot move
+                    // (water crosses into gas only by filling a cell).
+                    let (mut wet_near, mut ground_near) = (false, false);
                     fi[0] = tile.f[i * Q];
                     // The pressure the free surface presses on the cell
                     // centre: the gas, plus the weight of whatever part of
@@ -355,7 +360,10 @@ impl FluidWorld {
                                 let src = &tiles[st];
                                 blocked |= !src.awake;
                                 match src.kind[si] {
-                                    Kind::Solid => match specular(tiles, t, l, q) {
+                                    Kind::Solid => match {
+                                        ground_near = true;
+                                        specular(tiles, t, l, q)
+                                    } {
                                         Some((mt, mi, mq)) => {
                                             let m = &tiles[mt];
                                             let slide = m.f[mi * Q + mq];
@@ -383,6 +391,7 @@ impl FluidWorld {
                                     }
                                     nk => {
                                         fluid_near |= nk == Kind::Liquid;
+                                        wet_near = true;
                                         let incoming = src.f[si * Q + q];
                                         fi[q] = incoming;
                                         if k == Kind::Interface {
@@ -428,7 +437,11 @@ impl FluidWorld {
                     let m = mass[i];
                     let want = if m > (1.0 + p.fill_slack) * r || !gas_near {
                         TO_LIQUID
-                    } else if m < -p.fill_slack * r || (!fluid_near && m < 0.1 * r) {
+                    } else if m < -p.fill_slack * r
+                        || (!fluid_near && m < 0.1 * r)
+                        || !wet_near
+                        || (!fluid_near && !ground_near && m < 0.5 * r)
+                    {
                         TO_GAS
                     } else {
                         0
