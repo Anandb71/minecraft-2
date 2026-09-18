@@ -26,8 +26,8 @@ cargo run --release -- --bench --frames 600 --size 2560x1440
 The first launch erodes the whole world (about 30 s on a laptop) and caches it
 under `worlds/default`; later launches load it instantly. `--seed <n>` picks
 another world, `--camera x,y,z,lx,ly,lz` places a headless camera, `--time 21.5`
-sets the hour, `--demo build|lights|mirror|blast|collapse` plays a scripted
-scene before capturing, `--dof 12,2.8` renders with a thin lens focused at 12 m
+sets the hour, `--demo build|lights|mirror|blast|collapse|glass|craft|workshop`
+plays a scripted scene before capturing, `--creative` starts in creative play, `--dof 12,2.8` renders with a thin lens focused at 12 m
 at f/2.8, `--hide-bodies` simulates debris without drawing it and
 `--physics-thread` steps physics off the main thread as the window does.
 
@@ -52,8 +52,9 @@ swaps radiance cascades for ReSTIR GI.
 
 | Key | Action |
 |---|---|
-| Left click | Capture mouse; then break block / carve |
-| Right click | Place block / deposit material |
+| Left click | Capture mouse; then break block (hold) / carve |
+| Right click | Place the held block / deposit; use a crafting table or furnace |
+| I | Inventory and recipes |
 | Middle click (held) | Preview the targeted block instead of the placement |
 | W A S D | Move |
 | Space | Jump (fly: up) |
@@ -89,10 +90,30 @@ Time stops and the camera flies free.
 | Enter or F2 | Render 96 frames at Super Ultra Crazy Duper Realistic and save `captures/photo_<time>.png` |
 | P | Leave |
 
+### Survival
+
+The game starts in survival with empty hands. Hold left click to break a
+block: logs and dirt give way to bare hands, rock needs a pickaxe, iron ore a
+stone one, and better tools break things faster until they wear out. Press I
+for the inventory: drag stacks between the pack and the hotbar (right click
+splits, shift click moves) and click a recipe to make it. Logs become planks,
+planks sticks and a crafting table; at the table come tools, a furnace, stone
+bricks, windows, lanterns, concrete and TNT (gunpowder is coal and flint from
+gravel); the furnace, fed coal or wood, makes glass, iron and steel ingots,
+charcoal and bricks. `--creative` gives an endless hotbar and a catalogue of
+every item instead.
+
 ## Features
+
 
 - A 16 km world grown from geology: continents and ridged mountain belts eroded once by a virtual-pipe hydraulic model, stratified rock (basement, cyclic sediments, folds, volcanic provinces) exposed by that erosion, ores that follow their host rock
 - Four levels of detail streamed around the camera on worker threads; buried rock is never generated until someone digs
+- Ten biomes from a climate that cools with height: oak and birch forests, pine taiga, snowy taiga, plains of grass and flowers, deserts with cacti, bare alpine slopes and snowfields, beaches and seas; every tree, bush, boulder and fallen log built from voxels and visible from the horizon
+- Villages round a cobbled square and well (timber, stone, brick and thatched houses, graded streets, lamps, fields) and towns on a street grid with road markings, glass towers, brick apartments over shops, offices and parks, lit at night
+- A pattern on every material at voxel scale: boards and grain, brick bond, cobbles, bark and growth rings, ore seams, grass blades, the letters on TNT
+- Glass, ice and water you can see through: refraction by Snell's law, absorption and scattering with depth, sunlight and lamplight traced through them, Fresnel reflection on top
+- Survival: hardness and tools decide how long a block takes and what it drops; tools in wood, stone, iron and steel wear out; 36 slots of stacks; 44 recipes by hand, at a crafting table and in a furnace that burns fuel
+- An inventory screen and hotbar whose icons are ray cast at start-up from each item's voxel model
 - The world meshes nothing: 6.25 cm voxels in 4-bit palette bricks under per-chunk sparse 64-trees, ray marched in a compute shader
 - Physically based atmosphere (Hillaire 2020): sky-view and aerial perspective LUTs in photometric units, sunsets, moonlit nights with a phased moon, stars rotating with sidereal time
 - Sun and moon positions from latitude, season and time of day

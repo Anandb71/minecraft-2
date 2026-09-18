@@ -806,3 +806,69 @@ down as 182 pieces, 230 bodies at the end.
 **Rejected.** A lock around the voxel world (D29), structural integrity as
 breakable XPBD joints or as finite elements (D30), whole islands as single
 bodies (D31).
+## Interlude: surfaces, living worlds, settlements and survival
+
+Feedback after step 10 was blunt: the world looked blank, glass looked
+wrong, there were no trees, no crafting, no towns. Step 11's solver was done
+but its game integration waited while this was fixed; the work below pulls
+parts of steps 13 (worldgen v2) and 17 (inventory, crafting, tools) forward.
+
+**Surfaces.** Every material now has a voxel-scale pattern, computed in the
+compose pass from the visibility buffer's voxel coordinates and face
+(`surface_detail.wgsl`): boards and grain on planks, a running bond on brick
+and stone brick, cobbles, bark and rings on logs, seams in ore, blades on
+grass, the letters on TNT. Normals tilt per voxel so the patterns catch
+light. A test checks that the shader's material ids match the Rust table.
+
+**Glass and water.** Rays can now pass through chosen kinds of voxel
+(`Ray.pass_kinds`), so the sun, sky and lamps shine through glass and into
+water. A refraction pass at render resolution traces what lies behind each
+clear surface (Snell's law for water, straight through thin glass), with
+Beer-Lambert absorption and scattering in water and a traced sun shadow on
+what it finds; compose blends it with the reflection by Fresnel.
+
+**Living worlds.** A climate (temperature and wetness, cooler with height)
+picks one of ten biomes, and each biome grows its plants: broad oaks with
+low spreading limbs, pines, birches, bushes, cacti, boulders and fallen
+logs, and ground cover of grass, flowers and moss. Plants are built from a
+handful of primitives (capsules for wood, noisy ellipsoids for foliage) and
+stamped at every level of detail, so forests read from the horizon. Stamping
+them voxel by voxel cost 3386 ms a chunk; classifying each 8^3 cell against
+only the parts that reach it, with the edge noise interpolated from the
+cell's corners, brought that to 466 ms.
+
+**Settlements.** Villages grow round a cobbled square and well on a stone
+plinth: streets graded in straight four-metre runs, houses in four styles
+(timber frame, stone, brick, thatched cottage), lanterns, lamp posts and
+fields. About a third of sites that are flat enough become towns: a street
+grid with dashed centre lines, zebra crossings, raised pavements and street
+lights; glass towers on podiums of shops, brick apartment blocks over
+shopfronts, concrete offices with ribbon windows, and parks with fountains.
+Light panels under some floors make windows glow at night. Settlements are
+ordered lists of shapes where the last one wins; chunks ask only the shapes
+whose 8 m tiles they touch. A chunk in the middle of a town generates in 279
+ms at full detail and 9 ms at the coarsest level. The player spawns at the
+corner of the nearest village square.
+
+**Survival.** Blocks have become items. Breaking a block takes time set by
+its hardness and the tool in hand, and drops what it yields: rock needs a
+pickaxe, iron ore a stone one; grass gives dirt, gravel sometimes flint,
+coal ore coal. Tools come in wood, stone, iron and steel and wear out. A
+36-slot inventory holds stacks, and carving collects loose voxel volume that
+becomes a block every 4096 voxels. Forty-odd recipes run from logs to planks
+to sticks and torches, through crafting tables, furnaces and tools, to
+glass, ingots, steel, bricks, concrete, gunpowder and TNT. The furnace burns
+fuel into heat for several smelts at a time.
+
+The inventory screen (I, or use a crafting table or furnace) has the pack,
+the hotbar and a recipe book that lists what can be made now first. Its
+icons are painted at start-up by ray casting each item's voxel model into an
+atlas: blocks in three-quarter view with their textures, tools and sticks
+face-on, lumps and ingots like blocks, each with an outline and a soft
+shadow. `--creative` keeps the old infinite hotbar and adds a catalogue of
+every item.
+
+**Goldens.** The golden images now render terrain without plants or
+settlements: on the software adapter a village multiplies the time several
+fold, and a bless already takes 50 minutes. The test world's centre is snowy
+taiga, so its terrain is white.

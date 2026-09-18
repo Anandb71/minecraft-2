@@ -215,3 +215,31 @@ Both were built behind one output with the same hit shading and denoiser, and me
 - **The whole island as one body.** True to the structure, but a collapsing wall would need a dense voxel grid over its bounding box: a hollow tower would cost a hundred megabytes and one body that cannot break further.
 - **Voxel-level fragmentation.** Every voxel its own body is the most detailed and the least affordable.
 - **Fixed 2 m pieces, half-metre crumbs for failed blocks (chosen).** A collapse becomes a few hundred bodies, each a 32^3 grid built in under half a millisecond, cut a few per frame lowest first so the pile builds from the bottom. Rubble that settles for 15 s becomes terrain again, so a battlefield does not accumulate bodies.
+
+## D32. Surface detail
+
+- **Textures per material, sampled triplanar.** The classic answer, but a 6.25 cm voxel is already about a texel at play distance: a texture either blurs inside the voxel or fights its grid, and every material needs authored images.
+- **Smaller voxels.** Detail for free in the shading, at eight times the memory for each halving.
+- **Procedural patterns keyed by voxel and face (chosen).** Computed in compose from the visibility buffer, so no assets, no extra memory and patterns that line up with the grid: boards, bond, cobbles, bark, rings, seams. A few dozen ALU instructions a pixel.
+
+## D33. Seeing through glass and water
+
+- **Screen-space refraction.** Cheap, but it can only show what is already on screen, and the world behind a window mostly is not.
+- **Blending transparent voxels in the marcher.** Order-dependent, and every ray that crosses water would carry blending state.
+- **A traced ray behind each clear pixel (chosen).** A refraction pass at render resolution follows Snell's law through water (thin glass passes straight), absorbs and scatters by distance, and traces the sun onto what it finds. Compose blends it with the reflection by Fresnel.
+
+## D34. Plants and buildings
+
+- **Stored templates stamped by the generator.** How most voxel games place trees and houses: every design must be authored, and a template cannot bend to the slope it lands on.
+- **Shapes evaluated during generation (chosen).** Trees are capsules and noisy ellipsoids, settlements ordered lists of boxes, prisms, ramps and facade patterns where the last shape wins. Everything follows from the seed, fits the ground it stands on and samples at any level of detail, so a forest or a town reads from the horizon.
+
+## D35. What the inventory holds
+
+- **Material volume only.** The step 5 inventory: true to the voxel world, but it cannot hold a tool, a stick or a torch, stack sizes mean nothing, and "0.37 blocks of granite" is not something to play with.
+- **Slots of items, with loose volume beside them (chosen).** Blocks, materials and tools are items in 36 slots; carving collects voxel volume per material that becomes a block every 4096 voxels, and depositing spends it, breaking blocks open as needed.
+
+## D36. Item icons
+
+- **Hand-drawn pixel art.** Around a hundred images to draw and keep in step with the models.
+- **Rendering icons with the world renderer.** It draws worlds, not models on their own: each icon would need a scene, and the look would change with the time of day.
+- **Ray casting each item's voxel model on the CPU at start-up (chosen).** Blocks use the models the world places, so an icon always matches its block; tools and lumps have small models of their own. All of them are painted in a fraction of a second across the cores and uploaded once with a mip chain.
