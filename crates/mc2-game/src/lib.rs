@@ -5,6 +5,7 @@ pub mod clock;
 pub mod collide;
 pub mod input;
 pub mod interact;
+pub mod items;
 pub mod physics;
 pub mod physics_host;
 pub mod player;
