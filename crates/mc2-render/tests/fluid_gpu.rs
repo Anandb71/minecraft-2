@@ -153,3 +153,55 @@ fn gpu_spreading_column_matches_cpu() {
         40,
     );
 }
+
+#[test]
+fn levels_read_back_each_cells_fill_in_eighths() {
+    let Some(gpu) = mc2_gpu::device::test_gpu() else {
+        return;
+    };
+    let terrain = Basin {
+        size: IVec3::new(13, 0, 13),
+        extra: Vec::new(),
+    };
+    let shaders = mc2_render::shaders::library();
+    let mut fluid = FluidGpu::new(&gpu.device, &shaders, 64, Params::default());
+    fluid.add_water(&cells(IVec3::new(5, 1, 5), IVec3::new(8, 6, 8)), &terrain);
+    let mut levels = None;
+    for _ in 0..40 {
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        fluid.encode(
+            &gpu.device,
+            &gpu.queue,
+            &mut encoder,
+            &shaders,
+            1,
+            &TimestampScope::none(),
+        );
+        fluid.encode_levels(&gpu.device, &gpu.queue, &mut encoder, &shaders);
+        gpu.queue.submit([encoder.finish()]);
+        fluid.after_submit();
+        fluid.wait(&gpu.device);
+        fluid.maintain(&terrain);
+        if let Some(l) = fluid.take_levels() {
+            levels = Some(l);
+        }
+    }
+    // The last levels match the cells as they stand now.
+    let levels = levels.expect("levels arrived");
+    let tiles = fluid.read_tiles(&gpu.device, &gpu.queue);
+    let mut checked = 0;
+    let mut water = 0u32;
+    for t in &tiles {
+        let l = levels.iter().find(|l| l.pos == t.pos).expect("tile levels");
+        for i in 0..mc2_fluid::TILE_CELLS {
+            let want = (t.fill(i) * 8.0).round() as u8;
+            assert_eq!(l.eighths[i], want, "tile {} cell {i}", t.pos);
+            water += u32::from(want);
+            checked += 1;
+        }
+    }
+    assert!(
+        checked >= 512 && water > 8 * 16 * 3,
+        "{checked} cells, {water} eighths"
+    );
+}
