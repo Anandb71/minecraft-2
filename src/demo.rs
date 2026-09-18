@@ -21,6 +21,9 @@ pub enum Demo {
     Blast,
     /// Raise a stone tower, blow its base out and stop while it comes down.
     Collapse,
+    /// A pool of water over a gravel bed and a glass wall with coloured
+    /// blocks behind it: refraction and absorption to look at.
+    Glass,
 }
 
 impl Demo {
@@ -31,6 +34,7 @@ impl Demo {
             "mirror" => Some(Self::Mirror),
             "blast" => Some(Self::Blast),
             "collapse" => Some(Self::Collapse),
+            "glass" => Some(Self::Glass),
             _ => None,
         }
     }
@@ -157,6 +161,80 @@ pub fn run(game: &mut Game, demo: Demo) {
                 );
             }
             look(game, 0.0, 60.0);
+        }
+        Demo::Glass => {
+            use glam::IVec3;
+            use mc2_voxel::material::ids;
+            let feet = {
+                let mut q = game.world.query::<&mc2_game::player::Body>();
+                q.iter(&game.world).next().map(|b| b.feet)
+            };
+            if let Some(feet) = feet {
+                let yaw = game.view().yaw;
+                let ahead = glam::DVec3::new(f64::from(yaw).sin(), 0.0, f64::from(yaw).cos());
+                let side = glam::DVec3::new(ahead.z, 0.0, -ahead.x);
+                let v = |p: glam::DVec3| (p * 16.0).floor().as_ivec3();
+                let ground = v(feet) - IVec3::new(0, 1, 0);
+                let mut voxels = game.world.resource_mut::<mc2_game::Voxels>();
+                let w = &mut voxels.0;
+                let block = |w: &mut mc2_voxel::world::VoxelWorld,
+                             at: glam::DVec3,
+                             dy: i32,
+                             m: mc2_voxel::material::MaterialId| {
+                    let c: IVec3 = (v(at) >> 4) << 4;
+                    let lo = IVec3::new(c.x, ground.y + 1 + dy * 16, c.z);
+                    w.fill_box(lo, lo + 15, m);
+                };
+                // A pool 6 m by 4 m, 1.5 m deep: gravel and sand bed, water,
+                // on the block grid a little ahead.
+                let centre: IVec3 = v(feet + ahead * 4.0) >> 4;
+                let top = ground.y;
+                for bx in -3..3 {
+                    for bz in -2..2 {
+                        let c: IVec3 = (centre + IVec3::new(bx, 0, bz)) << 4;
+                        let bed = if (bx + bz).rem_euclid(3) == 0 {
+                            ids::SAND
+                        } else {
+                            ids::GRAVEL
+                        };
+                        w.fill_box(
+                            IVec3::new(c.x, top - 31, c.z),
+                            IVec3::new(c.x + 15, top - 24, c.z + 15),
+                            bed,
+                        );
+                        w.fill_box(
+                            IVec3::new(c.x, top - 23, c.z),
+                            IVec3::new(c.x + 15, top - 1, c.z + 15),
+                            ids::WATER,
+                        );
+                        w.fill_box(
+                            IVec3::new(c.x, top, c.z),
+                            IVec3::new(c.x + 15, top + 48, c.z + 15),
+                            ids::AIR,
+                        );
+                    }
+                }
+                // Behind the pool: glass blocks in front of coloured ones.
+                for i in -3i32..3 {
+                    let at = feet + side * f64::from(i) + ahead * 7.0;
+                    for dy in 0..3 {
+                        block(w, at, dy, ids::GLASS);
+                    }
+                    let behind = at + ahead * 2.0;
+                    let m = [
+                        ids::GOLD_ORE,
+                        ids::ROOF_TILE,
+                        ids::COPPER_ORE,
+                        ids::WOOL,
+                        ids::TNT,
+                        ids::PLANKS,
+                    ][(i + 3) as usize];
+                    for dy in 0..2 {
+                        block(w, behind, dy, m);
+                    }
+                }
+            }
+            look(game, 0.0, 70.0);
         }
         Demo::Collapse => {
             use mc2_game::physics::{Blast, Physics};
