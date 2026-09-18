@@ -5,6 +5,8 @@ mod cli;
 mod demo;
 mod game_hud;
 mod headless;
+mod icons;
+mod inventory_ui;
 mod logger;
 mod measure;
 mod photo;

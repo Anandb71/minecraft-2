@@ -155,6 +155,8 @@ impl App {
                 ..Default::default()
             },
         );
+        let mut renderer = renderer;
+        renderer.frame.hud.set_icons(crate::icons::icons().atlas());
         self.running = Some(Running {
             window,
             surface,

@@ -126,6 +126,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         );
     }
     let tex = target(&gpu, args.size);
+    renderer.frame.hud.set_icons(crate::icons::icons().atlas());
     let mut frame_ms = RollingStats::default();
     let start = Instant::now();
     let mut last = Instant::now();

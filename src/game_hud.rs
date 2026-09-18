@@ -3,7 +3,6 @@
 use mc2_game::Game;
 use mc2_game::blocks::BlockLayer;
 use mc2_game::interact::{Interaction, Mode, Preview};
-use mc2_game::inventory::HOTBAR_SLOTS;
 use mc2_game::player::{MoveMode, Player};
 use mc2_game::{Voxels, view::ViewCamera};
 use mc2_render::gizmo::{AMBER, Gizmos, RED, WHITE};
@@ -32,37 +31,8 @@ pub fn draw(game: &mut Game, hud: &mut HudCanvas, gizmos: &mut Gizmos, screen: (
         None => {}
     }
 
-    // Hotbar.
-    let slot_w = (w / HOTBAR_SLOTS as f32).min(150.0);
-    let total = slot_w * HOTBAR_SLOTS as f32;
-    let x0 = (w - total) * 0.5;
-    let y0 = h - 44.0;
-    hud.rect(x0 - 6.0, y0 - 6.0, total + 12.0, 40.0, rgba(0, 0, 0, 140));
-    for (i, stack) in state.inventory.slots[..HOTBAR_SLOTS].iter().enumerate() {
-        let x = x0 + i as f32 * slot_w;
-        let selected = i == state.slot;
-        if selected {
-            hud.rect(x, y0 - 4.0, slot_w - 6.0, 36.0, rgba(255, 255, 255, 60));
-        }
-        let color = if selected {
-            rgba(255, 230, 120, 255)
-        } else {
-            rgba(220, 220, 220, 255)
-        };
-        hud.text(
-            x + 4.0,
-            y0,
-            1.0,
-            color,
-            &match stack {
-                Some(s) if s.count > 1 && !state.inventory.creative => {
-                    format!("{} {} x{}", i + 1, s.item.name(), s.count)
-                }
-                Some(s) => format!("{} {}", i + 1, s.item.name()),
-                None => format!("{}", i + 1),
-            },
-        );
-    }
+    // Hotbar, held item, break progress and news.
+    let (x0, y0) = crate::inventory_ui::draw_hotbar(game, hud, screen);
     let mode = match state.mode {
         Mode::Block => "BLOCK  (Tab: carve)".to_owned(),
         Mode::Carve => format!(
