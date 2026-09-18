@@ -127,12 +127,26 @@ pub fn stream_settled(game: &Game) -> bool {
         .is_some_and(ChunkStreamer::settled)
 }
 
-/// A camera standing on open land near the middle of the map, looking at
-/// the highest ground within a few kilometres.
-pub fn spawn_camera(terrain: &CoarseTerrain) -> Camera {
+/// A camera standing on open land near the middle of the map (grassland,
+/// clear of any tree), looking at the highest ground within a few
+/// kilometres.
+pub fn spawn_camera(terrain: &Arc<CoarseTerrain>) -> Camera {
+    use mc2_worldgen::flora::{Biome, plants_near};
+    let surface = mc2_worldgen::amplify::Surface::new(terrain.clone());
     let extent = terrain.params.extent_m();
     let sea = terrain.params.sea_level;
     let centre = extent * 0.5;
+    let open = |x: f32, z: f32| {
+        let s = surface.sample(x, z);
+        if !matches!(
+            s.biome(sea),
+            Biome::Plains | Biome::Forest | Biome::BirchForest
+        ) {
+            return false;
+        }
+        let at = glam::Vec3::new(x, s.height, z);
+        plants_near(&surface, at - 3.0, at + 3.0, terrain.seed).is_empty()
+    };
     let mut best = None;
     'search: for ring in 0..200 {
         let r = ring as f32 * 64.0;
@@ -143,7 +157,7 @@ pub fn spawn_camera(terrain: &CoarseTerrain) -> Camera {
             let h = terrain.height_at(x, z);
             let slope =
                 (terrain.height_at(x + 16.0, z) - terrain.height_at(x - 16.0, z)).abs() / 32.0;
-            if h > sea + 12.0 && h < 300.0 && slope < 0.25 {
+            if h > sea + 12.0 && h < 300.0 && slope < 0.25 && open(x, z) {
                 best = Some((x, z, h));
                 break 'search;
             }
