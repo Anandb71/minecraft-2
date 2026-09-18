@@ -1,0 +1,197 @@
+// Free-surface lattice Boltzmann over sparse 8^3 tiles of half-metre cells:
+// the bindings every fluid pass shares, the D3Q19 lattice and the lookups
+// that cross tile edges. A GPU port of crates/mc2-fluid, pass for pass.
+//
+// Cells are addressed globally as slot * 512 + index within the tile.
+// Populations are stored per tile, population-major, so neighbouring
+// invocations read neighbouring words: (slot * 19 + q) * 512 + index.
+
+struct FluidParams {
+    gravity: vec3<f32>,
+    tau: f32,
+    smagorinsky: f32,
+    rho_gas: f32,
+    fill_slack: f32,
+    wall_slip: f32,
+    // Step parity: which population buffer, fill half, and moving and need
+    // words are this step's sources.
+    parity: u32,
+    slot_count: u32,
+    max_slots: u32,
+    sleep_steps: u32,
+    still_speed: f32,
+    edit_count: u32,
+    touched_count: u32,
+    _pad: u32,
+}
+
+struct TileState {
+    // 1 while the slot holds a tile.
+    alloc: u32,
+    awake: u32,
+    still: u32,
+    // 1 while the tile holds water, as of the last step it ran.
+    water: u32,
+    moving: array<atomic<u32>, 2>,
+    need: array<atomic<u32>, 2>,
+}
+
+// Indirect dispatch arguments for the awake tiles and for tiles that just
+// fell asleep, then the mass lost for want of interface cells (fixed point).
+struct Args {
+    active_x: atomic<u32>,
+    active_y: u32,
+    active_z: u32,
+    copy_x: atomic<u32>,
+    copy_y: u32,
+    copy_z: u32,
+    lost: atomic<i32>,
+    _pad: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: FluidParams;
+@group(0) @binding(1) var<storage, read_write> pops_src: array<f32>;
+@group(0) @binding(2) var<storage, read_write> pops_dst: array<f32>;
+@group(0) @binding(3) var<storage, read_write> kind: array<u32>;
+@group(0) @binding(4) var<storage, read_write> mass: array<f32>;
+@group(0) @binding(5) var<storage, read_write> rho_u: array<vec4<f32>>;
+// Two halves, by parity: the fill each cell had at the start of the step.
+@group(0) @binding(6) var<storage, read_write> fill: array<f32>;
+@group(0) @binding(7) var<storage, read_write> conv: array<u32>;
+@group(0) @binding(8) var<storage, read_write> next: array<u32>;
+@group(0) @binding(9) var<storage, read_write> excess: array<f32>;
+@group(0) @binding(10) var<storage, read_write> massex: array<f32>;
+@group(0) @binding(11) var<storage, read> near: array<u32>;
+@group(0) @binding(12) var<storage, read_write> tile_state: array<TileState>;
+@group(0) @binding(13) var<storage, read_write> args: Args;
+// The awake list, then (from max_slots) the list of tiles to copy.
+@group(0) @binding(14) var<storage, read_write> lists: array<u32>;
+// Edits from the CPU: (cell, op, value bits, 0), then touched slots.
+@group(0) @binding(15) var<storage, read> edits: array<vec4<u32>>;
+
+const TILE_CELLS: u32 = 512u;
+const Q: u32 = 19u;
+const NONE: u32 = 0xffffffffu;
+
+const GAS: u32 = 0u;
+const INTERFACE: u32 = 1u;
+const LIQUID: u32 = 2u;
+const SOLID: u32 = 3u;
+
+const TO_LIQUID: u32 = 1u;
+const TO_GAS: u32 = 2u;
+const FROM_GAS: u32 = 3u;
+
+const MARGIN: i32 = 3;
+
+// Rest, the 6 faces, then the 12 edges, each followed by its opposite.
+const C = array<vec3<i32>, 19>(
+    vec3<i32>(0, 0, 0),
+    vec3<i32>(1, 0, 0), vec3<i32>(-1, 0, 0),
+    vec3<i32>(0, 1, 0), vec3<i32>(0, -1, 0),
+    vec3<i32>(0, 0, 1), vec3<i32>(0, 0, -1),
+    vec3<i32>(1, 1, 0), vec3<i32>(-1, -1, 0),
+    vec3<i32>(1, 0, 1), vec3<i32>(-1, 0, -1),
+    vec3<i32>(0, 1, 1), vec3<i32>(0, -1, -1),
+    vec3<i32>(1, -1, 0), vec3<i32>(-1, 1, 0),
+    vec3<i32>(1, 0, -1), vec3<i32>(-1, 0, 1),
+    vec3<i32>(0, 1, -1), vec3<i32>(0, -1, 1),
+);
+
+fn weight(q: u32) -> f32 {
+    if q == 0u {
+        return 1.0 / 3.0;
+    }
+    return select(1.0 / 36.0, 1.0 / 18.0, q < 7u);
+}
+
+fn opp(q: u32) -> u32 {
+    if q == 0u {
+        return 0u;
+    }
+    return select(q - 1u, q + 1u, (q & 1u) == 1u);
+}
+
+// Velocity `q` with its `axis` component negated.
+fn mirror(q: u32, axis: u32) -> u32 {
+    var m = C[q];
+    m[axis] = -m[axis];
+    for (var j = 0u; j < Q; j++) {
+        if all(C[j] == m) {
+            return j;
+        }
+    }
+    return q;
+}
+
+fn equilibrium(q: u32, rho: f32, u: vec3<f32>) -> f32 {
+    let cu = dot(vec3<f32>(C[q]), u);
+    return weight(q) * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * dot(u, u));
+}
+
+fn guo(q: u32, tau: f32, u: vec3<f32>, force: vec3<f32>) -> f32 {
+    let c = vec3<f32>(C[q]);
+    return (1.0 - 0.5 / tau) * weight(q) * dot(3.0 * (c - u) + 9.0 * dot(c, u) * c, force);
+}
+
+fn pack(k: u32, transition: u32) -> u32 {
+    return k | (transition << 2u);
+}
+
+fn local_of(i: u32) -> vec3<i32> {
+    return vec3<i32>(i32(i & 7u), i32((i >> 3u) & 7u), i32(i >> 6u));
+}
+
+fn index_of(l: vec3<i32>) -> u32 {
+    return u32(l.x + 8 * (l.y + 8 * l.z));
+}
+
+fn near_slot(d: vec3<i32>) -> u32 {
+    return u32((d.x + 1) + 3 * ((d.y + 1) + 3 * (d.z + 1)));
+}
+
+// Global index of the cell at offset `d` from cell `l` of slot `s`, or NONE
+// where that tile is not allocated.
+fn neighbour(s: u32, l: vec3<i32>, d: vec3<i32>) -> u32 {
+    let n = l + d;
+    let step = clamp(n >> vec3<u32>(3u), vec3<i32>(-1), vec3<i32>(1));
+    var slot = s;
+    if any(step != vec3<i32>(0)) {
+        slot = near[s * 27u + near_slot(step)];
+        if slot == NONE {
+            return NONE;
+        }
+    }
+    return slot * TILE_CELLS + index_of(n & vec3<i32>(7));
+}
+
+fn pop_index(cell: u32, q: u32) -> u32 {
+    return ((cell / TILE_CELLS) * Q + q) * TILE_CELLS + cell % TILE_CELLS;
+}
+
+fn fill_index(cell: u32, half: u32) -> u32 {
+    return half * params.max_slots * TILE_CELLS + cell;
+}
+
+// The neighbouring tiles water in cell `l` needs allocated, as bits by
+// near_slot (the tile itself included).
+fn need_of(l: vec3<i32>) -> u32 {
+    var lo = vec3<i32>(0);
+    var hi = vec3<i32>(0);
+    for (var a = 0; a < 3; a++) {
+        if l[a] < MARGIN {
+            lo[a] = -1;
+        } else if l[a] >= 8 - MARGIN {
+            hi[a] = 1;
+        }
+    }
+    var bits = 0u;
+    for (var z = lo.z; z <= hi.z; z++) {
+        for (var y = lo.y; y <= hi.y; y++) {
+            for (var x = lo.x; x <= hi.x; x++) {
+                bits |= 1u << near_slot(vec3<i32>(x, y, z));
+            }
+        }
+    }
+    return bits;
+}
