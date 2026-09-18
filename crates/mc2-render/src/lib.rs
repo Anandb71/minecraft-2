@@ -145,6 +145,20 @@ mod tests {
             ("M_GNEISS", ids::GNEISS),
             ("M_FARMLAND", ids::FARMLAND),
             ("M_WHEAT", ids::WHEAT),
+            ("M_TALL_GRASS", ids::TALL_GRASS),
+            ("M_FLOWER_RED", ids::FLOWER_RED),
+            ("M_FLOWER_YELLOW", ids::FLOWER_YELLOW),
+            ("M_FLOWER_BLUE", ids::FLOWER_BLUE),
+            ("M_FLOWER_WHITE", ids::FLOWER_WHITE),
+            ("M_BIRCH_LOG", ids::BIRCH_LOG),
+            ("M_BIRCH_LEAVES", ids::BIRCH_LEAVES),
+            ("M_CACTUS", ids::CACTUS),
+            ("M_MOSS", ids::MOSS),
+            ("M_RED_BRICK", ids::RED_BRICK),
+            ("M_CONCRETE", ids::CONCRETE),
+            ("M_ASPHALT", ids::ASPHALT),
+            ("M_DARK_PLANKS", ids::DARK_PLANKS),
+            ("M_THATCH", ids::THATCH),
         ];
         let src = super::shaders::EMBEDDED
             .iter()

@@ -52,6 +52,20 @@ const M_CHALK: u32 = 46u;
 const M_GNEISS: u32 = 47u;
 const M_FARMLAND: u32 = 48u;
 const M_WHEAT: u32 = 49u;
+const M_TALL_GRASS: u32 = 51u;
+const M_FLOWER_RED: u32 = 52u;
+const M_FLOWER_YELLOW: u32 = 53u;
+const M_FLOWER_BLUE: u32 = 54u;
+const M_FLOWER_WHITE: u32 = 55u;
+const M_BIRCH_LOG: u32 = 56u;
+const M_BIRCH_LEAVES: u32 = 57u;
+const M_CACTUS: u32 = 58u;
+const M_MOSS: u32 = 59u;
+const M_RED_BRICK: u32 = 60u;
+const M_CONCRETE: u32 = 61u;
+const M_ASPHALT: u32 = 62u;
+const M_DARK_PLANKS: u32 = 63u;
+const M_THATCH: u32 = 64u;
 
 struct Detail {
     albedo: vec3<f32>,
@@ -222,6 +236,70 @@ fn water_ripple(p: vec2<f32>, time: f32) -> vec2<f32> {
     return t;
 }
 
+// Planks: boards four voxels wide with dark seams, grain running along
+// each board, nail heads at the ends, the odd knot.
+fn planks(d_in: Detail, a: vec3<f32>, voxel: vec3<i32>, b: vec3<i32>, uv: vec2<i32>, axis: u32) -> Detail {
+    var d = d_in;
+    let pv = vec3<f32>(voxel);
+    var along = uv.x;
+    var across = uv.y;
+    if axis == 1u {
+        along = b.x;
+        across = b.z;
+    }
+    let board = vec3<i32>(voxel.x >> 4u, (across >> 2u) + (voxel.y >> 4u) * 8, (voxel.z >> 4u) + i32(axis) * 1000);
+    let tone = 0.82 + 0.3 * lattice_hash(board, 81u);
+    let grain = 1.0 + 0.1 * sin(f32(along) * 0.8 + lattice_hash(board, 82u) * 20.0 + 2.5 * value_noise(pv * vec3<f32>(0.1, 0.6, 0.1), 83u));
+    var c = a * tone * grain * jitter(voxel, 84u, 0.04);
+    if (across & 3) == 0 {
+        c *= 0.55;
+        d.roughness = 0.9;
+    } else if ((along & 15) == 1 || (along & 15) == 14) && (across & 3) == 2 {
+        c = vec3<f32>(0.12, 0.12, 0.13);
+        d.roughness = 0.4;
+    }
+    if voxel_hash(voxel, 85u) < 0.02 {
+        // Knots.
+        c *= 0.6;
+    }
+    d.albedo = c;
+    return d;
+}
+
+// Masonry in running bond: bricks `w` voxels long and `h` high with a voxel
+// of mortar between, each brick its own shade, edges bevelled. Follows the
+// world grid so courses run on across blocks.
+fn masonry(d_in: Detail, a: vec3<f32>, mortar: vec3<f32>, voxel: vec3<i32>, axis: u32, normal: vec3<f32>, w: i32, h: i32, salt: u32) -> Detail {
+    var d = d_in;
+    let q = plane2(voxel, axis);
+    let row = i32(floor(f32(q.y) / f32(h + 1)));
+    let in_v = q.y - row * (h + 1);
+    let shift = select(0, (w + 1) / 2, (row & 1) == 1);
+    let col = i32(floor(f32(q.x + shift) / f32(w + 1)));
+    let in_u = q.x + shift - col * (w + 1);
+    let joint = in_u == w || in_v == h;
+    let id = vec3<i32>(col, row, i32(axis) * 7919 + i32(salt));
+    let tone = 0.78 + 0.36 * lattice_hash(id, salt);
+    var c = a * tone * jitter(voxel, salt + 1u, 0.06);
+    let hue = lattice_hash(id, salt + 2u);
+    if hue < 0.15 {
+        c *= vec3<f32>(0.92, 0.96, 0.84);
+    } else if hue > 0.85 {
+        c *= vec3<f32>(1.06, 0.98, 0.92);
+    }
+    if joint {
+        c = mortar * jitter(voxel, salt + 3u, 0.1);
+        d.roughness = 0.95;
+    } else {
+        var t = vec2<f32>(0.0);
+        t.x = select(0.0, 0.3, in_u == 0) - select(0.0, 0.3, in_u == w - 1);
+        t.y = select(0.0, 0.3, in_v == 0) - select(0.0, 0.3, in_v == h - 1);
+        d.normal = tilt(normal, axis, t);
+    }
+    d.albedo = c;
+    return d;
+}
+
 fn surface_detail(m: u32, mat: Material, voxel: vec3<i32>, normal: vec3<f32>, world_m: vec3<f32>, time: f32) -> Detail {
     var d = Detail(mat.albedo, mat.roughness, normal, 0.0);
     let axis = face_axis(normal);
@@ -361,59 +439,15 @@ fn surface_detail(m: u32, mat: Material, voxel: vec3<i32>, normal: vec3<f32>, wo
             d.normal = tilt(normal, axis, c.offset * 0.9);
         }
         case 27u: {
-            // Stone brick: bricks 8 x 4 voxels in a running bond, a voxel of
-            // mortar between, edges bevelled.
-            let row = uv.y >> 2u;
-            let shift = select(0, 4, (row & 1) == 1);
-            let col = (uv.x + shift) >> 3u;
-            let in_u = (uv.x + shift) & 7;
-            let in_v = uv.y & 3;
-            let joint = in_u == 0 || in_v == 0;
-            let brick_id = vec3<i32>(voxel.x >> 4u, row + (voxel.y >> 4u) * 4, col + (voxel.z >> 4u) * 2 + i32(axis) * 1000);
-            let tone = 0.78 + 0.36 * lattice_hash(brick_id, 73u);
-            var c = a * tone * jitter(voxel, 74u, 0.06);
-            let hue = lattice_hash(brick_id, 75u);
-            if hue < 0.15 {
-                c *= vec3<f32>(0.92, 0.96, 0.84);
-            } else if hue > 0.85 {
-                c *= vec3<f32>(1.06, 0.98, 0.92);
-            }
-            if joint {
-                c = vec3<f32>(0.24, 0.23, 0.21) * jitter(voxel, 76u, 0.1);
-                d.roughness = 0.95;
-            } else {
-                var t = vec2<f32>(0.0);
-                t.x = select(0.0, 0.35, in_u == 1) - select(0.0, 0.35, in_u == 7);
-                t.y = select(0.0, 0.35, in_v == 1) - select(0.0, 0.35, in_v == 3);
-                d.normal = tilt(normal, axis, t);
-            }
-            d.albedo = c;
+            // Stone brick: blocks two to a metre, four courses to a metre.
+            d = masonry(d, a, vec3<f32>(0.24, 0.23, 0.21), voxel, axis, normal, 7, 3, 73u);
         }
-        case 21u: {
-            // Planks: boards four voxels wide with dark seams, grain running
-            // along each board, nail heads at the ends.
-            var along = uv.x;
-            var across = uv.y;
-            if axis == 1u {
-                along = b.x;
-                across = b.z;
-            }
-            let board = vec3<i32>(voxel.x >> 4u, (across >> 2u) + (voxel.y >> 4u) * 8, (voxel.z >> 4u) + i32(axis) * 1000);
-            let tone = 0.82 + 0.3 * lattice_hash(board, 81u);
-            let grain = 1.0 + 0.1 * sin(f32(along) * 0.8 + lattice_hash(board, 82u) * 20.0 + 2.5 * value_noise(pv * vec3<f32>(0.1, 0.6, 0.1), 83u));
-            var c = a * tone * grain * jitter(voxel, 84u, 0.04);
-            if (across & 3) == 0 {
-                c *= 0.55;
-                d.roughness = 0.9;
-            } else if ((along & 15) == 1 || (along & 15) == 14) && (across & 3) == 2 {
-                c = vec3<f32>(0.12, 0.12, 0.13);
-                d.roughness = 0.4;
-            }
-            if voxel_hash(voxel, 85u) < 0.02 {
-                // Knots.
-                c *= 0.6;
-            }
-            d.albedo = c;
+        case 60u: {
+            // Clay brick: 25 x 12 cm with dark mortar.
+            d = masonry(d, a, vec3<f32>(0.30, 0.28, 0.26), voxel, axis, normal, 4, 1, 201u);
+        }
+        case 21u, 63u: {
+            d = planks(d, a, voxel, b, uv, axis);
         }
         case 19u, 20u: {
             // Logs: furrowed bark on the sides; growth rings on the ends.
@@ -564,6 +598,74 @@ fn surface_detail(m: u32, mat: Material, voxel: vec3<i32>, normal: vec3<f32>, wo
         }
         case 12u: {
             d.albedo = a * (0.9 + 0.2 * value_noise(pv * 0.12, 192u)) * jitter(voxel, 193u, 0.04);
+        }
+        case 51u: {
+            // Tall grass: blades a shade off the turf around them, lighter
+            // at the tips.
+            let turf = fbm(pv * vec3<f32>(0.025, 0.05, 0.025), 11u);
+            var c = mix(vec3<f32>(0.14, 0.34, 0.06), vec3<f32>(0.36, 0.42, 0.14), smoothstep(0.55, 0.85, turf));
+            let tip = voxel_hash(voxel, 211u);
+            c *= 0.75 + 0.5 * tip;
+            d.albedo = c;
+            d.normal = tilt(normal, axis, (vec2<f32>(voxel_hash(voxel, 212u), voxel_hash(voxel, 213u)) - 0.5) * 1.5);
+        }
+        case 52u, 53u, 54u, 55u: {
+            d.albedo = a * jitter(voxel, 221u, 0.15);
+        }
+        case 56u: {
+            // Birch: white bark with dark lenticels and black scars.
+            var c = a * jitter(voxel, 231u, 0.04);
+            if axis != 1u {
+                let dash = ((voxel.y % 5) == 0) && voxel_hash(vec3<i32>(voxel.x >> 1u, voxel.y, voxel.z >> 1u), 232u) < 0.55;
+                let scar = value_noise(pv * vec3<f32>(0.3, 0.15, 0.3), 233u) > 0.74;
+                if dash || scar {
+                    c = vec3<f32>(0.08, 0.08, 0.07);
+                }
+            } else {
+                c = vec3<f32>(0.75, 0.62, 0.45) * jitter(voxel, 234u, 0.06);
+            }
+            d.albedo = c;
+        }
+        case 57u, 59u: {
+            let h = voxel_hash(voxel, 241u);
+            var c = a * (0.72 + 0.56 * value_noise(pv * 0.25, 242u));
+            if h < 0.06 {
+                c = mix(c, vec3<f32>(0.5, 0.48, 0.12), 0.6);
+            }
+            d.albedo = c * jitter(voxel, 243u, 0.1);
+            d.normal = tilt(normal, axis, (vec2<f32>(voxel_hash(voxel, 244u), voxel_hash(voxel, 245u)) - 0.5) * 1.2);
+        }
+        case 58u: {
+            // Cactus: ribs, a spine here and there.
+            var c = a * select(0.8, 1.05, (uv.x % 3) != 0);
+            if voxel_hash(voxel, 251u) < 0.04 {
+                c = vec3<f32>(0.85, 0.82, 0.65);
+            }
+            d.albedo = c * jitter(voxel, 252u, 0.05);
+        }
+        case 61u: {
+            // Concrete: cast in 1 m forms (seams at block edges), tie holes,
+            // blotches of cure.
+            var c = a * (0.9 + 0.2 * fbm(pv * 0.05, 261u)) * jitter(voxel, 262u, 0.04);
+            if uv.x == 0 || uv.y == 0 {
+                c *= 0.82;
+            }
+            if (uv.x == 3 || uv.x == 12) && (uv.y == 3 || uv.y == 12) && axis != 1u {
+                c *= 0.35;
+            }
+            d.albedo = c;
+        }
+        case 62u: {
+            var c = a * (0.85 + 0.3 * value_noise(pv * 0.1, 271u)) * jitter(voxel, 272u, 0.12);
+            if voxel_hash(voxel, 273u) < 0.05 {
+                c = vec3<f32>(0.3, 0.3, 0.3);
+            }
+            d.albedo = c;
+        }
+        case 64u: {
+            // Thatch: straw in bundles running down the roof.
+            let streak = value_noise(vec3<f32>(pv.x * 0.9, pv.y * 0.12, pv.z * 0.9), 281u);
+            d.albedo = a * (0.75 + 0.45 * streak) * jitter(voxel, 282u, 0.08);
         }
         default: {
             d.albedo = a * jitter(voxel, 199u, 0.06);
