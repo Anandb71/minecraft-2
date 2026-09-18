@@ -43,6 +43,12 @@ struct Ray {
     // Beam mode: return the entry of the first occupied brick cell instead
     // of marching into it.
     coarse: bool,
+    // Voxels the ray passes through instead of stopping: one material (a
+    // refraction ray inside water or glass; 0 for none, air is never hit)
+    // and whole kinds, as bits by kind (shadow rays through glass and
+    // water). Zero, as a fresh `var r: Ray` has it, passes nothing.
+    skip: u32,
+    pass_kinds: u32,
 }
 
 struct Hit {
@@ -55,6 +61,13 @@ struct Hit {
     iterations: u32,
     // Leaf word of the brick hit, 0 for uniform and LOD hits.
     leaf: u32,
+}
+
+// Voxels of the kinds clear to light: glass and ice, and liquids.
+const PASS_CLEAR: u32 = (1u << KIND_TRANSPARENT) | (1u << KIND_LIQUID);
+
+fn ray_passes(r: Ray, m: u32) -> bool {
+    return m == r.skip || ((r.pass_kinds >> materials[m].kind) & 1u) != 0u;
 }
 
 fn miss_hit(iterations: u32) -> Hit {
@@ -128,7 +141,9 @@ fn march_brick(r: Ray, inv: vec3<f32>, step: vec3<i32>, leaf: u32, brick_min: ve
                 if occupied {
                     let local = s * 4 + v;
                     let m = brick_material(leaf, local);
-                    return Hit(HIT_VOXEL, t_v, brick_min + local, v_axis, m, 0u, *iterations, leaf);
+                    if !ray_passes(r, m) {
+                        return Hit(HIT_VOXEL, t_v, brick_min + local, v_axis, m, 0u, *iterations, leaf);
+                    }
                 }
                 let a = min_axis(v_tmax);
                 let t_next = v_tmax[a];
@@ -260,40 +275,44 @@ fn march(r_in: Ray) -> Hit {
                     let word = ptr + slot;
                     let leaf = tree[word];
                     if (leaf & UNIFORM) != 0u {
-                        return Hit(HIT_VOXEL, t_cell, voxel_at(r, t_cell, cell_min, cell_max), axis, leaf & 0xffffu, 0u, iterations, 0u);
-                    }
-                    if (leaf & NOT_RESIDENT) != 0u {
+                        if !ray_passes(r, leaf & 0xffffu) {
+                            return Hit(HIT_VOXEL, t_cell, voxel_at(r, t_cell, cell_min, cell_max), axis, leaf & 0xffffu, 0u, iterations, 0u);
+                        }
+                    } else if (leaf & NOT_RESIDENT) != 0u {
                         if r.feedback {
                             request_upload(word);
                         }
                         return Hit(HIT_LOD, t_cell, voxel_at(r, t_cell, cell_min, cell_max), axis, leaf & 0xffffu, 0u, iterations, 0u);
-                    }
-                    if r.coarse {
+                    } else if r.coarse {
                         return Hit(HIT_LOD, t_cell, cell_min, axis, 0u, 0u, iterations, 0u);
-                    }
-                    // Sub-pixel brick: shade it from its first palette entry.
-                    if f32(size) < t_cell * r.lod_scale {
+                    } else {
+                        // Sub-pixel brick: shade it from its first palette
+                        // entry, unless the ray passes that.
                         let m = (voxels[(leaf & BRICK_PTR_MASK) + 17u] >> 16u) & 0xffffu;
-                        return Hit(HIT_LOD, t_cell, voxel_at(r, t_cell, cell_min, cell_max), axis, m, 0u, iterations, 0u);
-                    }
-                    let t_exit = min(min(tmax.x, tmax.y), min(tmax.z, t_end));
-                    let h = march_brick(r, inv, step, leaf, cell_min, t_cell, t_exit, axis, &iterations);
-                    if h.kind != HIT_NONE {
-                        return h;
+                        if f32(size) < t_cell * r.lod_scale && !ray_passes(r, m) {
+                            return Hit(HIT_LOD, t_cell, voxel_at(r, t_cell, cell_min, cell_max), axis, m, 0u, iterations, 0u);
+                        }
+                        let t_exit = min(min(tmax.x, tmax.y), min(tmax.z, t_end));
+                        let h = march_brick(r, inv, step, leaf, cell_min, t_cell, t_exit, axis, &iterations);
+                        if h.kind != HIT_NONE {
+                            return h;
+                        }
                     }
                 } else {
                     let c = ptr + slot * 4u;
                     let cw0 = tree[c];
                     if (cw0 & UNIFORM_NODE) != 0u {
-                        return Hit(HIT_VOXEL, t_cell, voxel_at(r, t_cell, cell_min, cell_max), axis, cw0 & 0xffffu, 0u, iterations, 0u);
-                    }
-                    if f32(size) < t_cell * r.lod_scale {
+                        if !ray_passes(r, cw0 & 0xffffu) {
+                            return Hit(HIT_VOXEL, t_cell, voxel_at(r, t_cell, cell_min, cell_max), axis, cw0 & 0xffffu, 0u, iterations, 0u);
+                        }
+                    } else if f32(size) < t_cell * r.lod_scale {
                         let lod = tree[c + 3u];
                         return Hit(HIT_LOD, t_cell, voxel_at(r, t_cell, cell_min, cell_max), axis, lod & 0xffffu, lod, iterations, 0u);
+                    } else {
+                        child = c;
+                        child_min = cell_min;
+                        descend = true;
                     }
-                    child = c;
-                    child_min = cell_min;
-                    descend = true;
                 }
             }
         }
