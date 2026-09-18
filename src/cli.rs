@@ -41,6 +41,8 @@ pub struct Args {
     pub gi: Option<mc2_render::indirect::GiMethod>,
     /// Depth of field for headless captures: focus distance (m), f-number.
     pub dof: Option<(f32, f32)>,
+    /// Creative play: nothing runs out, anything can be made anywhere.
+    pub creative: bool,
 }
 
 /// Quality settings from the preset plus command line overrides.
@@ -73,6 +75,7 @@ impl Default for Args {
             time: None,
             gi: None,
             dof: None,
+            creative: false,
         }
     }
 }
@@ -88,6 +91,7 @@ usage: minecraft-2 [options]
   --no-beam              disable the beam prepass (A/B measurement)
   --hide-bodies          do not draw rigid bodies (A/B measurement)
   --physics-thread       headless: physics on its own thread, paced in real time
+  --creative             creative play: nothing runs out (default survival)
   --seed <n>             world seed (default 42)
   --world <dir>          world directory (default worlds/default)
   --camera x,y,z,lx,ly,lz  headless camera position and look-at target (m)
@@ -126,6 +130,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--no-beam" => out.no_beam = true,
             "--hide-bodies" => out.hide_bodies = true,
             "--physics-thread" => out.physics_thread = true,
+            "--creative" => out.creative = true,
             "--seed" => {
                 out.seed = value("--seed")?
                     .parse()
@@ -195,6 +200,12 @@ mod tests {
 
     fn p(s: &str) -> Result<Args, String> {
         parse(s.split_whitespace().map(str::to_owned))
+    }
+
+    #[test]
+    fn creative_is_a_flag() {
+        assert!(!p("").unwrap().creative);
+        assert!(p("--creative").unwrap().creative);
     }
 
     #[test]

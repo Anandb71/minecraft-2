@@ -1,20 +1,652 @@
-//! The hotbar: item icons with their counts and wear, the held item's
-//! name, break progress under the crosshair and recent news.
+//! The hotbar, and the inventory screen: the pack's slots to move stacks
+//! between, and the recipe book to craft from.
+//!
+//! I opens the screen, as does using a crafting table or furnace; the
+//! cursor is free while it is open. Left click picks a stack up or puts it
+//! down (swapping with what is there), right click takes half or puts one,
+//! shift click moves a stack between hotbar and pack. Recipes craftable now
+//! list first; click one to make it, shift click to make up to eight.
 
-use crate::icons::icons;
+use crate::icons::{all_items, icons};
+use glam::Vec2;
 use mc2_game::Game;
+use mc2_game::blocks::{BlockKind, BlockLayer};
+use mc2_game::crafting::{self, CraftError, Near, Recipe, Station};
 use mc2_game::input::Time;
 use mc2_game::interact::{Interaction, MESSAGE_S};
-use mc2_game::inventory::{HOTBAR_SLOTS, Stack};
+use mc2_game::inventory::{HOTBAR_SLOTS, Inventory, SLOTS, Stack};
+use mc2_game::items::Item;
 use mc2_render::hud::{HudCanvas, rgba};
 
+/// Reach of a crafting table or furnace, metres: as far as the player can
+/// use one, to its centre.
+const STATION_REACH_M: f64 = mc2_game::interact::REACH_M + 1.0;
+const SLOT: f32 = 54.0;
+const PITCH: f32 = 58.0;
+const ROW: f32 = 52.0;
+
+const PANEL: u32 = 0xf81a_1612; // rgba(18, 22, 26, 248), little endian
 const INK: u32 = 0xffff_ffff;
+
+fn dim() -> u32 {
+    rgba(150, 156, 168, 255)
+}
+
+fn gold() -> u32 {
+    rgba(255, 222, 140, 255)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tab {
+    All,
+    At(Station),
+    Catalogue,
+}
+
+impl Tab {
+    fn name(self) -> &'static str {
+        match self {
+            Tab::All => "all",
+            Tab::At(Station::Hand) => "hand",
+            Tab::At(Station::Table) => "table",
+            Tab::At(Station::Furnace) => "furnace",
+            Tab::Catalogue => "catalogue",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Hit {
+    Slot(usize),
+    Recipe(usize),
+    Tab(Tab),
+    Catalogue(Item),
+    Panel,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Rect {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+impl Rect {
+    fn contains(&self, p: Vec2) -> bool {
+        p.x >= self.x && p.y >= self.y && p.x < self.x + self.w && p.y < self.y + self.h
+    }
+}
+
+pub struct Screen {
+    pub open: bool,
+    cursor: Vec2,
+    /// A stack picked up, following the cursor.
+    carried: Option<Stack>,
+    tab: Tab,
+    scroll: f32,
+    /// Where things were drawn last frame, for clicks; later wins.
+    hits: Vec<(Rect, Hit)>,
+    /// What the cursor is over and a name to show for it.
+    tooltip: Option<String>,
+}
+
+impl Default for Screen {
+    fn default() -> Self {
+        Self {
+            open: false,
+            cursor: Vec2::ZERO,
+            carried: None,
+            tab: Tab::All,
+            scroll: 0.0,
+            hits: Vec::new(),
+            tooltip: None,
+        }
+    }
+}
+
+/// Stations within reach of the player.
+fn near(game: &Game) -> Near {
+    let eye = game.view().position;
+    let mut n = Near::default();
+    for (pos, kind) in game.world.resource::<BlockLayer>().placed() {
+        let centre = pos.0.as_dvec3() + 0.5;
+        if centre.distance(eye) > STATION_REACH_M {
+            continue;
+        }
+        match kind {
+            BlockKind::CraftingTable => n.table = true,
+            BlockKind::Furnace => n.furnace = true,
+            _ => {}
+        }
+    }
+    n
+}
+
+impl Screen {
+    /// Opens at a station's recipes (None: all of them).
+    pub fn open_at(&mut self, station: Option<Station>) {
+        self.open = true;
+        self.tab = station.map_or(Tab::All, Tab::At);
+        self.scroll = 0.0;
+    }
+
+    /// Closes; whatever the cursor carries goes back into the pack.
+    pub fn close(&mut self, game: &mut Game) {
+        self.open = false;
+        if let Some(s) = self.carried.take() {
+            let mut state = game.world.resource_mut::<Interaction>();
+            if !state.inventory.creative {
+                state.inventory.add(s.item, s.count);
+            }
+        }
+    }
+
+    pub fn mouse_move(&mut self, x: f32, y: f32) {
+        self.cursor = Vec2::new(x, y);
+    }
+
+    pub fn wheel(&mut self, lines: f32) {
+        self.scroll = (self.scroll - lines * ROW).max(0.0);
+    }
+
+    fn hit(&self) -> Option<Hit> {
+        self.hits
+            .iter()
+            .rev()
+            .find(|(r, _)| r.contains(self.cursor))
+            .map(|(_, h)| *h)
+    }
+
+    /// A click at the cursor: `secondary` for the right button.
+    pub fn click(&mut self, game: &mut Game, secondary: bool, shift: bool) {
+        let now = game.world.resource::<Time>().elapsed;
+        let near = near(game);
+        let hit = self.hit();
+        let mut state = game.world.resource_mut::<Interaction>();
+        let state = &mut *state;
+        match hit {
+            Some(Hit::Slot(i)) => {
+                let inv = &mut state.inventory;
+                if shift && !secondary {
+                    quick_move(inv, i);
+                } else {
+                    self.carried = slot_click(inv, i, self.carried.take(), secondary);
+                }
+            }
+            Some(Hit::Recipe(r)) => {
+                let recipe = &crafting::recipes()[r];
+                let times = if shift { 8 } else { 1 };
+                let mut made = 0;
+                let mut err = None;
+                for _ in 0..times {
+                    match crafting::craft(&mut state.inventory, recipe, near) {
+                        Ok(()) => made += 1,
+                        Err(e) => {
+                            err = Some(e);
+                            break;
+                        }
+                    }
+                }
+                if made > 0 {
+                    let name = recipe.output.name();
+                    state.say(now, format!("made {} {name}", made * recipe.count));
+                } else if let Some(e) = err {
+                    state.say(now, why(e));
+                }
+            }
+            Some(Hit::Tab(t)) => {
+                self.tab = t;
+                self.scroll = 0.0;
+            }
+            Some(Hit::Catalogue(item)) => {
+                self.carried = Some(Stack::new(item, item.max_stack()));
+            }
+            Some(Hit::Panel) => {}
+            None => {
+                // Outside the screen: what is carried goes back.
+                if let Some(s) = self.carried.take()
+                    && !state.inventory.creative
+                {
+                    state.inventory.add(s.item, s.count);
+                }
+            }
+        }
+    }
+
+    /// A number key while the screen is open: swap the slot under the
+    /// cursor with that hotbar slot.
+    pub fn number(&mut self, game: &mut Game, n: usize) {
+        if let Some(Hit::Slot(i)) = self.hit()
+            && n < HOTBAR_SLOTS
+        {
+            let mut state = game.world.resource_mut::<Interaction>();
+            state.inventory.slots.swap(i, n);
+        }
+    }
+
+    /// Draws the screen over everything else.
+    pub fn draw(&mut self, game: &mut Game, hud: &mut HudCanvas, screen: (u32, u32)) {
+        self.hits.clear();
+        self.tooltip = None;
+        if !self.open {
+            return;
+        }
+        let near = near(game);
+        let now = game.world.resource::<Time>().elapsed;
+        let state = game.world.resource::<Interaction>();
+        let inv = &state.inventory;
+        let (w, h) = (screen.0 as f32, screen.1 as f32);
+
+        // Dim the world, then the panel.
+        hud.rect(0.0, 0.0, w, h, rgba(0, 0, 0, 110));
+        let pw = 1180.0f32.min(w - 32.0);
+        let ph = 640.0f32.min(h - 32.0);
+        let (px, py) = ((w - pw) * 0.5, (h - ph) * 0.5);
+        panel(hud, px, py, pw, ph);
+        self.hits.push((
+            Rect {
+                x: px,
+                y: py,
+                w: pw,
+                h: ph,
+            },
+            Hit::Panel,
+        ));
+
+        // The pack: three rows over the hotbar.
+        let lx = px + 24.0;
+        hud.text(lx, py + 22.0, 2.0, gold(), "INVENTORY");
+        let grid_y = py + 64.0;
+        for i in HOTBAR_SLOTS..SLOTS {
+            let k = i - HOTBAR_SLOTS;
+            let (x, y) = (lx + (k % 9) as f32 * PITCH, grid_y + (k / 9) as f32 * PITCH);
+            self.slot(hud, inv, i, x, y, false);
+        }
+        let bar_y = grid_y + 3.0 * PITCH + 14.0;
+        for i in 0..HOTBAR_SLOTS {
+            let x = lx + i as f32 * PITCH;
+            self.slot(hud, inv, i, x, bar_y, i == state.slot);
+        }
+
+        // Stations and the furnace's fire.
+        let mut y = bar_y + PITCH + 18.0;
+        let status = |ok: bool| if ok { rgba(140, 230, 140, 255) } else { dim() };
+        let line = |hud: &mut HudCanvas, y: f32, c: u32, s: &str| hud.text(lx, y, 2.0, c, s);
+        if inv.creative {
+            line(hud, y, gold(), "creative: nothing runs out");
+            y += 20.0;
+        }
+        line(
+            hud,
+            y,
+            status(near.table),
+            if near.table {
+                "crafting table: in reach"
+            } else {
+                "crafting table: none in reach"
+            },
+        );
+        y += 20.0;
+        let fire = if near.furnace {
+            format!("furnace: in reach, heat {}", inv.heat)
+        } else {
+            "furnace: none in reach".to_owned()
+        };
+        line(hud, y, status(near.furnace), &fire);
+        y += 30.0;
+        for hint in [
+            "left: pick up / put down   right: half / one",
+            "shift: move to or from the hotbar   1-9: swap",
+            "E on TNT lights it   I or Esc closes",
+        ] {
+            hud.text(lx, y, 1.0, dim(), hint);
+            y += 14.0;
+        }
+        // News, newest at the bottom.
+        let mut ny = py + ph - 26.0;
+        for (t, msg) in state.messages.iter().rev() {
+            if now - t < MESSAGE_S {
+                hud.text(lx, ny, 2.0, gold(), msg);
+                ny -= 22.0;
+            }
+        }
+
+        // The recipe book (or the catalogue).
+        let rx = lx + 9.0 * PITCH + 28.0;
+        let rw = px + pw - 24.0 - rx;
+        let mut tx = rx;
+        let mut tabs = vec![
+            Tab::All,
+            Tab::At(Station::Hand),
+            Tab::At(Station::Table),
+            Tab::At(Station::Furnace),
+        ];
+        if inv.creative {
+            tabs.push(Tab::Catalogue);
+        }
+        for t in tabs {
+            let label = t.name();
+            let tw = HudCanvas::text_width(label, 2.0) + 20.0;
+            let r = Rect {
+                x: tx,
+                y: py + 16.0,
+                w: tw,
+                h: 30.0,
+            };
+            let on = self.tab == t;
+            let bg = if on {
+                rgba(255, 222, 140, 60)
+            } else if r.contains(self.cursor) {
+                rgba(255, 255, 255, 30)
+            } else {
+                rgba(255, 255, 255, 12)
+            };
+            hud.rect(r.x, r.y, r.w, r.h, bg);
+            if on {
+                hud.rect(r.x, r.y + r.h - 2.0, r.w, 2.0, gold());
+            }
+            hud.text(
+                tx + 10.0,
+                py + 23.0,
+                2.0,
+                if on { gold() } else { INK },
+                label,
+            );
+            self.hits.push((r, Hit::Tab(t)));
+            tx += tw + 6.0;
+        }
+        let list = Rect {
+            x: rx,
+            y: py + 58.0,
+            w: rw,
+            h: ph - 58.0 - 16.0,
+        };
+        if self.tab == Tab::Catalogue {
+            self.catalogue(hud, list);
+        } else {
+            self.recipes(hud, inv, near, list);
+        }
+
+        // What the cursor carries, and a name for what it is over.
+        if let Some(s) = self.carried {
+            draw_stack(
+                hud,
+                s,
+                self.cursor.x - 24.0,
+                self.cursor.y - 24.0,
+                48.0,
+                false,
+            );
+        } else if let Some(tip) = &self.tooltip {
+            let tw = HudCanvas::text_width(tip, 2.0) + 16.0;
+            let (x, y) = (
+                (self.cursor.x + 16.0).min(w - tw - 4.0),
+                self.cursor.y + 18.0,
+            );
+            hud.rect(x, y, tw, 26.0, rgba(8, 8, 12, 235));
+            hud.rect(x, y, tw, 1.0, rgba(255, 222, 140, 120));
+            hud.text(x + 8.0, y + 7.0, 2.0, INK, tip);
+        }
+    }
+
+    fn slot(
+        &mut self,
+        hud: &mut HudCanvas,
+        inv: &Inventory,
+        i: usize,
+        x: f32,
+        y: f32,
+        selected: bool,
+    ) {
+        let r = Rect {
+            x,
+            y,
+            w: SLOT,
+            h: SLOT,
+        };
+        let over = r.contains(self.cursor);
+        slot_frame(hud, x, y, SLOT, selected, over);
+        if let Some(s) = inv.slots[i] {
+            draw_stack(hud, s, x + 5.0, y + 5.0, SLOT - 10.0, inv.creative);
+            if over {
+                self.tooltip = Some(stack_name(&s));
+            }
+        }
+        self.hits.push((r, Hit::Slot(i)));
+    }
+
+    fn recipes(&mut self, hud: &mut HudCanvas, inv: &Inventory, near: Near, list: Rect) {
+        let all = crafting::recipes();
+        let mut shown: Vec<(usize, &Recipe, bool)> = all
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| match self.tab {
+                Tab::At(s) => r.station == s,
+                _ => true,
+            })
+            .map(|(i, r)| (i, r, crafting::check(inv, r, near).is_ok()))
+            .collect();
+        // Craftable first, then the book's order.
+        shown.sort_by_key(|(i, _, ok)| (!ok, *i));
+        let max_scroll = (shown.len() as f32 * ROW - list.h).max(0.0);
+        self.scroll = self.scroll.min(max_scroll);
+        let first = (self.scroll / ROW) as usize;
+        let visible = (list.h / ROW) as usize;
+        for (k, &(index, recipe, ok)) in shown.iter().skip(first).take(visible).enumerate() {
+            let y = list.y + k as f32 * ROW;
+            let r = Rect {
+                x: list.x,
+                y,
+                w: list.w,
+                h: ROW - 4.0,
+            };
+            let over = r.contains(self.cursor);
+            let bg = match (ok, over) {
+                (true, true) => rgba(255, 222, 140, 50),
+                (true, false) => rgba(255, 255, 255, 16),
+                (false, true) => rgba(255, 255, 255, 14),
+                (false, false) => rgba(255, 255, 255, 5),
+            };
+            hud.rect(r.x, r.y, r.w, r.h, bg);
+            let ink = if ok { INK } else { dim() };
+            let out = Stack::new(recipe.output, recipe.count);
+            draw_stack(hud, out, r.x + 4.0, y + 2.0, 44.0, false);
+            let name = recipe.output.name();
+            hud.text(r.x + 56.0, y + 8.0, 2.0, ink, &name);
+            let station_ok = inv.creative || near.has(recipe.station);
+            let where_ = match recipe.station {
+                Station::Hand => "by hand",
+                Station::Table => "at a crafting table",
+                Station::Furnace => "in a furnace, with fuel",
+            };
+            let where_colour = if station_ok {
+                rgba(140, 200, 140, 255)
+            } else {
+                rgba(230, 150, 90, 255)
+            };
+            hud.text(r.x + 56.0, y + 28.0, 1.0, where_colour, where_);
+            // Ingredients from the right: icon and have/need.
+            let mut ix = r.x + r.w - 8.0;
+            for &(ing, need) in recipe.inputs.iter().rev() {
+                let have = inv.count(|i| ing.matches(i));
+                let label = if inv.creative {
+                    format!("{need}")
+                } else {
+                    format!("{}/{need}", have.min(999))
+                };
+                let lw = HudCanvas::text_width(&label, 1.0);
+                ix -= lw.max(36.0) + 10.0;
+                let icon = Rect {
+                    x: ix,
+                    y: y + 2.0,
+                    w: 36.0,
+                    h: 36.0,
+                };
+                if let Some(idx) = icons().get(ing.example()) {
+                    hud.icon(icon.x, icon.y, 36.0, idx, INK);
+                }
+                let enough = inv.creative || have >= need;
+                let c = if enough {
+                    INK
+                } else {
+                    rgba(255, 110, 100, 255)
+                };
+                hud.text(ix + (36.0 - lw) * 0.5, y + 39.0, 1.0, c, &label);
+                if icon.contains(self.cursor) {
+                    self.tooltip = Some(ing.name());
+                }
+            }
+            if over && self.tooltip.is_none() {
+                self.tooltip = Some(if ok {
+                    format!("click: make {}   shift: make more", recipe.count)
+                } else {
+                    why(crafting::check(inv, recipe, near).unwrap_err())
+                });
+            }
+            self.hits.push((r, Hit::Recipe(index)));
+        }
+        if shown.len() > visible {
+            let bar_h = list.h * visible as f32 / shown.len() as f32;
+            let bar_y = list.y + (list.h - bar_h) * self.scroll / max_scroll.max(1.0);
+            hud.rect(
+                list.x + list.w + 6.0,
+                bar_y,
+                4.0,
+                bar_h,
+                rgba(255, 255, 255, 60),
+            );
+        }
+    }
+
+    fn catalogue(&mut self, hud: &mut HudCanvas, list: Rect) {
+        let items = all_items();
+        let cols = ((list.w / PITCH) as usize).max(1);
+        let rows = items.len().div_ceil(cols);
+        let max_scroll = (rows as f32 * PITCH - list.h).max(0.0);
+        self.scroll = self.scroll.min(max_scroll);
+        let first_row = (self.scroll / PITCH) as usize;
+        let visible_rows = (list.h / PITCH) as usize;
+        for (k, item) in items.iter().enumerate().skip(first_row * cols) {
+            let (row, col) = (k / cols - first_row, k % cols);
+            if row >= visible_rows {
+                break;
+            }
+            let (x, y) = (list.x + col as f32 * PITCH, list.y + row as f32 * PITCH);
+            let r = Rect {
+                x,
+                y,
+                w: SLOT,
+                h: SLOT,
+            };
+            let over = r.contains(self.cursor);
+            slot_frame(hud, x, y, SLOT, false, over);
+            if let Some(idx) = icons().get(*item) {
+                hud.icon(x + 5.0, y + 5.0, SLOT - 10.0, idx, INK);
+            }
+            if over {
+                self.tooltip = Some(item.name());
+            }
+            self.hits.push((r, Hit::Catalogue(*item)));
+        }
+    }
+}
+
+/// Why a recipe cannot be made, for people.
+fn why(e: CraftError) -> String {
+    match e {
+        CraftError::Station(s) => format!("needs a {} in reach", s.name()),
+        CraftError::Missing(i) => format!("not enough {}", i.name()),
+        CraftError::NoFuel => "the furnace needs fuel: coal, charcoal or wood".into(),
+        CraftError::NoRoom => "no room in the pack".into(),
+    }
+}
 
 fn stack_name(s: &Stack) -> String {
     match s.item.tool() {
         Some((_, tier)) => format!("{} ({}/{})", s.item.name(), s.life, tier.durability()),
         None => s.item.name(),
     }
+}
+
+/// Left or right click on slot `i` holding `carried`; returns what the
+/// cursor holds afterwards.
+fn slot_click(inv: &mut Inventory, i: usize, carried: Option<Stack>, one: bool) -> Option<Stack> {
+    let here = inv.slots[i];
+    match (carried, here) {
+        (None, None) => None,
+        (None, Some(s)) => {
+            // Take all, or half (rounded up).
+            let take = if one { s.count.div_ceil(2) } else { s.count };
+            let left = s.count - take;
+            inv.slots[i] = (left > 0).then_some(Stack { count: left, ..s });
+            Some(Stack { count: take, ..s })
+        }
+        (Some(c), None) => {
+            let put = if one { 1 } else { c.count };
+            inv.slots[i] = Some(Stack { count: put, ..c });
+            (c.count > put).then_some(Stack {
+                count: c.count - put,
+                ..c
+            })
+        }
+        (Some(c), Some(s)) if c.item == s.item && c.item.tool().is_none() => {
+            let room = s.item.max_stack() - s.count;
+            let put = if one { 1.min(room) } else { c.count.min(room) };
+            inv.slots[i] = Some(Stack {
+                count: s.count + put,
+                ..s
+            });
+            (c.count > put).then_some(Stack {
+                count: c.count - put,
+                ..c
+            })
+        }
+        (Some(c), Some(s)) => {
+            inv.slots[i] = Some(c);
+            Some(s)
+        }
+    }
+}
+
+/// Moves slot `i`'s stack between hotbar and pack.
+fn quick_move(inv: &mut Inventory, i: usize) {
+    let Some(s) = inv.slots[i].take() else {
+        return;
+    };
+    let targets: Vec<usize> = if i < HOTBAR_SLOTS {
+        (HOTBAR_SLOTS..SLOTS).collect()
+    } else {
+        (0..HOTBAR_SLOTS).collect()
+    };
+    let mut left = s.count;
+    // Top up matching stacks, then take an empty slot.
+    for &t in &targets {
+        if let Some(o) = &mut inv.slots[t]
+            && o.item == s.item
+            && o.item.tool().is_none()
+        {
+            let put = (o.item.max_stack() - o.count).min(left);
+            o.count += put;
+            left -= put;
+        }
+    }
+    if left > 0
+        && let Some(&t) = targets.iter().find(|&&t| inv.slots[t].is_none())
+    {
+        inv.slots[t] = Some(Stack { count: left, ..s });
+        left = 0;
+    }
+    if left > 0 {
+        inv.slots[i] = Some(Stack { count: left, ..s });
+    }
+}
+
+fn panel(hud: &mut HudCanvas, x: f32, y: f32, w: f32, h: f32) {
+    hud.rect(x + 4.0, y + 6.0, w, h, rgba(0, 0, 0, 90));
+    hud.rect(x, y, w, h, PANEL);
+    hud.rect(x, y, w, 2.0, rgba(255, 222, 140, 150));
+    hud.rect(x, y + h - 1.0, w, 1.0, rgba(255, 255, 255, 30));
 }
 
 fn slot_frame(hud: &mut HudCanvas, x: f32, y: f32, size: f32, selected: bool, over: bool) {
@@ -160,4 +792,54 @@ pub fn draw_hotbar(game: &Game, hud: &mut HudCanvas, screen: (u32, u32)) -> (f32
         ny -= 22.0;
     }
     (x0, y0 - 70.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mc2_voxel::material::ids;
+
+    fn inv_with(slots: &[(usize, Item, u32)]) -> Inventory {
+        let mut inv = Inventory::default();
+        for &(i, item, n) in slots {
+            inv.slots[i] = Some(Stack::new(item, n));
+        }
+        inv
+    }
+
+    #[test]
+    fn clicks_pick_up_put_down_split_and_swap() {
+        let dirt = Item::solid(ids::DIRT);
+        let mut inv = inv_with(&[(0, dirt, 10), (1, Item::Coal, 3)]);
+        // Right click takes half.
+        let c = slot_click(&mut inv, 0, None, true);
+        assert_eq!(c.unwrap().count, 5);
+        assert_eq!(inv.slots[0].unwrap().count, 5);
+        // Right click with it puts one down in an empty slot.
+        let c = slot_click(&mut inv, 5, c, true);
+        assert_eq!(inv.slots[5].unwrap().count, 1);
+        assert_eq!(c.unwrap().count, 4);
+        // Left click merges into the same item.
+        let c = slot_click(&mut inv, 0, c, false);
+        assert!(c.is_none());
+        assert_eq!(inv.slots[0].unwrap().count, 9);
+        // Left click on a different item swaps.
+        let picked = slot_click(&mut inv, 0, None, false);
+        let c = slot_click(&mut inv, 1, picked, false);
+        assert_eq!(inv.slots[1].unwrap().item, dirt);
+        assert_eq!(c.unwrap().item, Item::Coal);
+    }
+
+    #[test]
+    fn shift_click_moves_between_hotbar_and_pack() {
+        let sand = Item::solid(ids::SAND);
+        let mut inv = inv_with(&[(2, sand, 20), (12, sand, 60)]);
+        quick_move(&mut inv, 2);
+        // Tops up the pack's stack, the rest to the first empty pack slot.
+        assert_eq!(inv.slots[12].unwrap().count, 64);
+        assert_eq!(inv.slots[9].unwrap().count, 16);
+        assert!(inv.slots[2].is_none());
+        quick_move(&mut inv, 9);
+        assert_eq!(inv.slots[0].unwrap().count, 16);
+    }
 }

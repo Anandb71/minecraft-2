@@ -44,6 +44,8 @@ pub struct App {
     quality: mc2_render::quality::Preset,
     gi: Option<mc2_render::indirect::GiMethod>,
     photo: crate::photo::PhotoMode,
+    inventory: crate::inventory_ui::Screen,
+    modifiers: winit::keyboard::ModifiersState,
     screenshot_requested: bool,
     error: Option<String>,
     exit_after: Option<u32>,
@@ -80,6 +82,8 @@ fn map_key(code: KeyCode) -> Option<Key> {
 impl App {
     fn new(args: &Args) -> Self {
         let mut game = Game::new();
+        game.world
+            .insert_resource(mc2_game::interact::Interaction::new(args.creative));
         // Physics runs on its own thread in the window; tests and headless
         // captures step it inline.
         game.world.resource_mut::<mc2_game::physics::Physics>().host =
@@ -99,6 +103,8 @@ impl App {
             quality: args.quality,
             gi: args.gi,
             photo: crate::photo::PhotoMode::default(),
+            inventory: Default::default(),
+            modifiers: Default::default(),
             screenshot_requested: false,
             error: None,
             exit_after: args.exit_after,
@@ -200,6 +206,18 @@ impl App {
         self.game.input().captured = self.grabbed;
     }
 
+    /// Opens (at a station, if one was used) or closes the inventory
+    /// screen, freeing or recapturing the cursor.
+    fn toggle_inventory(&mut self, station: Option<mc2_game::crafting::Station>) {
+        if self.inventory.open {
+            self.inventory.close(&mut self.game);
+            self.set_grab(true);
+        } else {
+            self.set_grab(false);
+            self.inventory.open_at(station);
+        }
+    }
+
     fn frame(&mut self, event_loop: &ActiveEventLoop) {
         self.frames += 1;
         if self.exit_after.is_some_and(|n| self.frames > n) {
@@ -232,6 +250,16 @@ impl App {
             self.camera = self.photo.camera;
         } else {
             self.game.update(dt);
+            // Using a crafting table or furnace opens its recipes.
+            let opened = self
+                .game
+                .world
+                .resource_mut::<mc2_game::interact::Interaction>()
+                .opened
+                .take();
+            if opened.is_some() && !self.inventory.open {
+                self.toggle_inventory(opened);
+            }
             let view = self.game.view();
             self.camera.position = view.position;
             self.camera.yaw = view.yaw;
@@ -306,6 +334,10 @@ impl App {
                 &mut renderer.frame.gizmos,
                 screen,
             );
+        }
+        if !self.photo.active {
+            self.inventory
+                .draw(&mut self.game, &mut renderer.frame.hud, screen);
         }
         if self.show_profiler && !self.photo.active {
             let cpu_rows = mc2_core::profiler::rows();
@@ -395,6 +427,18 @@ impl App {
         if event.repeat {
             return;
         }
+        // I opens and closes the inventory; while it is open, Esc closes
+        // it and number keys swap the slot under the cursor to the hotbar.
+        if code == KeyCode::KeyI || (self.inventory.open && code == KeyCode::Escape) {
+            self.toggle_inventory(None);
+            return;
+        }
+        if self.inventory.open
+            && let Some(Key::Slot(n)) = map_key(code)
+        {
+            self.inventory.number(&mut self.game, usize::from(n));
+            return;
+        }
         if let Some(k) = map_key(code)
             && self.grabbed
         {
@@ -482,6 +526,14 @@ impl ApplicationHandler for App {
                     MouseButton::Middle => Some(Button::Middle),
                     _ => None,
                 };
+                if self.inventory.open {
+                    if state == ElementState::Pressed && button != MouseButton::Middle {
+                        let secondary = button == MouseButton::Right;
+                        let shift = self.modifiers.shift_key();
+                        self.inventory.click(&mut self.game, secondary, shift);
+                    }
+                    return;
+                }
                 match (state, mapped) {
                     (ElementState::Pressed, _) if !self.grabbed => self.set_grab(true),
                     (ElementState::Pressed, Some(b)) => self.game.input().button_down(b),
@@ -494,11 +546,18 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, y) => y,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
                 };
-                if self.photo.active {
+                if self.inventory.open {
+                    self.inventory.wheel(lines);
+                } else if self.photo.active {
                     self.photo.zoom(lines);
                 } else {
                     self.game.input().scroll += lines;
                 }
+            }
+            WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.inventory
+                    .mouse_move(position.x as f32, position.y as f32);
             }
             WindowEvent::KeyboardInput { event, .. } => self.key(event_loop, &event),
             WindowEvent::RedrawRequested => self.frame(event_loop),
