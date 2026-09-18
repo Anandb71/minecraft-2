@@ -21,7 +21,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU8;
 
 mod encode;
+mod levels;
 mod table;
+
+pub use levels::TileLevels;
 
 const Q: u64 = 19;
 const CELLS: u64 = TILE_CELLS as u64;
@@ -189,6 +192,8 @@ pub struct FluidGpu {
     frame: u64,
     started: bool,
     staging: Vec<Staging>,
+    /// The levels readback, made on first use.
+    levels: Option<levels::Levels>,
     pub stats: FluidGpuStats,
 }
 
@@ -315,6 +320,7 @@ impl FluidGpu {
             frame: 0,
             started: false,
             staging,
+            levels: None,
             stats: FluidGpuStats::default(),
         }
     }

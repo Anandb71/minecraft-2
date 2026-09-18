@@ -234,6 +234,7 @@ impl FluidGpu {
                     );
                 });
         }
+        self.map_levels();
     }
 
     /// Takes in every report that has arrived (the newest wins).
