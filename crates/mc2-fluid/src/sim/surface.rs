@@ -15,7 +15,7 @@
 //! Terrain edits reopen or close space between steps.
 
 use super::{FluidWorld, Terrain};
-use crate::lattice::{C, Q, equilibrium};
+use crate::lattice::{C, Q, W, equilibrium};
 use crate::tile::{
     FROM_GAS, Kind, TILE, TILE_CELLS, TO_GAS, TO_LIQUID, Tile, kind_of, local_of, need_of,
     neighbour, pack, transition_of,
@@ -28,6 +28,14 @@ fn around(tiles: &[Tile], t: usize, l: IVec3) -> impl Iterator<Item = (usize, us
     C[1..]
         .iter()
         .filter_map(move |d| neighbour(tiles, t, l, IVec3::from_array(*d)))
+}
+
+/// What pass 4 leaves in one tile: masses, the liquid cells whose
+/// populations take a share, and the tiles its water needs.
+struct Gathered {
+    mass: Vec<f32>,
+    liquid: Vec<(usize, f32)>,
+    need: u32,
 }
 
 /// What pass 2 leaves in one tile.
@@ -171,8 +179,9 @@ impl FluidWorld {
         }
     }
 
-    /// Pass 3: each converting cell splits its excess among its interface
-    /// neighbours; with none, the mass is lost (and counted).
+    /// Pass 3: each converting cell splits its excess among the water
+    /// around it (interface and liquid cells); with none, the mass is lost
+    /// (and counted).
     pub(super) fn share(&mut self) {
         let tiles = &self.tiles;
         let out: Vec<Option<(Vec<f32>, f64)>> = tiles
@@ -189,7 +198,9 @@ impl FluidWorld {
                         continue;
                     }
                     let targets = around(tiles, t, local_of(i))
-                        .filter(|&(nt, ni)| tiles[nt].kind[ni] == Kind::Interface)
+                        .filter(|&(nt, ni)| {
+                            matches!(tiles[nt].kind[ni], Kind::Interface | Kind::Liquid)
+                        })
                         .count();
                     if targets == 0 {
                         lost += f64::from(tile.excess[i]);
@@ -208,40 +219,55 @@ impl FluidWorld {
         }
     }
 
-    /// Pass 4: interface cells collect their neighbours' shares; every tile
+    /// Pass 4: water collects its neighbours' shares (an interface cell in
+    /// its mass; a liquid cell, whose mass is its density, in its
+    /// populations by weight, which leaves its momentum alone); every tile
     /// notes which tiles around it its water needs.
     pub(super) fn gather(&mut self) {
         let tiles = &self.tiles;
-        let out: Vec<Option<(Vec<f32>, u32)>> = tiles
+        let out: Vec<Option<Gathered>> = tiles
             .par_iter()
             .enumerate()
             .map(|(t, tile)| {
                 if !tile.awake {
                     return None;
                 }
-                let mut mass = tile.mass.clone();
-                let mut need = 0;
-                for (i, m) in mass.iter_mut().enumerate() {
+                let mut g = Gathered {
+                    mass: tile.mass.clone(),
+                    liquid: Vec::new(),
+                    need: 0,
+                };
+                for (i, m) in g.mass.iter_mut().enumerate() {
                     let l = local_of(i);
-                    match tile.kind[i] {
-                        Kind::Interface => {
-                            *m += around(tiles, t, l)
-                                .map(|(nt, ni)| tiles[nt].massex[ni])
-                                .sum::<f32>();
-                            need |= need_of(l);
-                        }
-                        Kind::Liquid => need |= need_of(l),
-                        _ => {}
+                    let k = tile.kind[i];
+                    if !matches!(k, Kind::Interface | Kind::Liquid) {
+                        continue;
+                    }
+                    g.need |= need_of(l);
+                    let share: f32 = around(tiles, t, l)
+                        .map(|(nt, ni)| tiles[nt].massex[ni])
+                        .sum();
+                    if share == 0.0 {
+                        continue;
+                    }
+                    *m += share;
+                    if k == Kind::Liquid {
+                        g.liquid.push((i, share));
                     }
                 }
-                Some((mass, need))
+                Some(g)
             })
             .collect();
-        for (tile, o) in self.tiles.iter_mut().zip(out) {
-            if let Some((mass, need)) = o {
-                tile.mass = mass;
-                tile.need = need;
+        for (tile, g) in self.tiles.iter_mut().zip(out) {
+            let Some(g) = g else { continue };
+            for (i, share) in g.liquid {
+                tile.rho[i] += share;
+                for q in 0..Q {
+                    tile.f[i * Q + q] += W[q] * share;
+                }
             }
+            tile.mass = g.mass;
+            tile.need = g.need;
         }
     }
 
