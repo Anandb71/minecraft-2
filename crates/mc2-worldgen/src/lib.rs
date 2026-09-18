@@ -11,3 +11,4 @@ pub mod settlement;
 pub mod strata;
 pub mod stream;
 pub mod terrain;
+pub mod town;

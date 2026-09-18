@@ -28,15 +28,59 @@ use std::sync::{Arc, Mutex};
 const VOXEL_M: f32 = 1.0 / 16.0;
 /// One village at most per cell of this grid.
 pub const VILLAGE_CELL_M: f32 = 480.0;
-/// Farthest anything of a village lies from its centre.
-pub const VILLAGE_RADIUS_M: f32 = 90.0;
-/// Highest anything of a village stands above its plaza.
-const VILLAGE_HEIGHT_M: f32 = 40.0;
-/// Clearing above paths and plaza: the grass and flowers it removes.
-const CLEAR_M: f32 = 0.6;
+/// Farthest anything of a village or town lies from its centre.
+pub const VILLAGE_RADIUS_M: f32 = 150.0;
+/// Share of settlement sites flat enough for one that are towns.
+const TOWN_SHARE: f32 = 0.35;
+/// Clearing above paths: the grass, flowers and bumps of ground they cut.
+const CLEAR_M: f32 = 1.5;
+/// Paths lie on the ground in straight runs this long at most.
+const PATH_RUN_M: f32 = 4.0;
+
+/// Where a street's markings go: its run starts `along0` metres down the
+/// street, junctions are `pitch` apart from `junction0`, each `width` wide.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Marks {
+    pub along0: f32,
+    pub pitch: f32,
+    pub junction0: f32,
+    pub width: f32,
+}
+
+impl Marks {
+    /// Paint at `along` metres down the street, `lateral` metres off its
+    /// centre line (half width `half`): a dashed centre line between
+    /// junctions, zebra stripes just outside them.
+    fn paint(&self, along: f32, lateral: f32, half: f32) -> bool {
+        let from_junction = (along - self.junction0).rem_euclid(self.pitch);
+        let to_next = self.pitch - from_junction;
+        let gap = from_junction.min(to_next) - self.width * 0.5;
+        if gap < 0.0 {
+            return false;
+        }
+        if (0.6..3.4).contains(&gap) {
+            return lateral.abs() < half - 0.6 && (lateral + 20.0).rem_euclid(1.0) < 0.45;
+        }
+        gap > 4.5 && lateral.abs() < 0.07 && along.rem_euclid(6.0) < 3.0
+    }
+}
+
+/// Window patterns for a wall layer (see `Shape::Facade`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FacadeStyle {
+    /// Floor-to-ceiling glass between steel mullions, a steel spandrel at
+    /// every floor.
+    Curtain,
+    /// Windows punched in the wall, a sill under each.
+    Punched,
+    /// Continuous bands of glass along each floor.
+    Ribbon,
+    /// Shop windows between pillars, the ground floor only.
+    Shopfront,
+}
 
 #[derive(Clone, Copy, Debug)]
-enum Shape {
+pub(crate) enum Shape {
     /// Axis-aligned box, `lo` inclusive, `hi` exclusive.
     Box { lo: Vec3, hi: Vec3 },
     /// Everything under a gable roof surface over the footprint `lo..hi`:
@@ -51,21 +95,47 @@ enum Shape {
     },
     /// Upright cylinder.
     Cylinder { c: Vec3, r: f32, h: f32 },
-    /// A path of `half` metres either side of `a..b`, `depth` metres into
-    /// the ground, cleared above; the ground along it lies within
-    /// `ground_lo..ground_hi`.
-    Path {
+    /// A straight run `half` metres either side of `a..b` (square ends, `a`
+    /// in and `b` out, so runs abut), over a surface rising evenly from `g0`
+    /// at `a` to `g1` at `b` and level across: everything from `from` to
+    /// `to` metres above that surface. Road markings, if any, are painted
+    /// on its top voxel.
+    Ramp {
         a: Vec2,
         b: Vec2,
         half: f32,
-        depth: f32,
-        ground_lo: f32,
-        ground_hi: f32,
+        g0: f32,
+        g1: f32,
+        from: f32,
+        to: f32,
+        marks: Option<Marks>,
+    },
+    /// A wall layer facing along `face` (0: x, 2: z), its outside toward
+    /// `out` (+1 or -1), windowed in a style; floors `storey` metres apart
+    /// from `base`. Where the pattern leaves no wall it is glass (one voxel,
+    /// set back) or air.
+    Facade {
+        lo: Vec3,
+        hi: Vec3,
+        face: u32,
+        out: f32,
+        style: FacadeStyle,
+        base: f32,
+        storey: f32,
+    },
+    /// Floor slabs `thick` deep every `storey` metres from `lo.y`, with
+    /// light panels under the slabs of the floors `lit` picks.
+    Floors {
+        lo: Vec3,
+        hi: Vec3,
+        storey: f32,
+        thick: f32,
+        lit: u32,
     },
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Op {
+pub(crate) struct Op {
     shape: Shape,
     m: MaterialId,
     lo: Vec3,
@@ -73,27 +143,32 @@ struct Op {
 }
 
 impl Op {
-    fn new(shape: Shape, m: MaterialId) -> Self {
+    pub(crate) fn new(shape: Shape, m: MaterialId) -> Self {
         let (lo, hi) = match shape {
-            Shape::Box { lo, hi } | Shape::Prism { lo, hi, .. } => (lo, hi),
+            Shape::Box { lo, hi }
+            | Shape::Prism { lo, hi, .. }
+            | Shape::Facade { lo, hi, .. }
+            | Shape::Floors { lo, hi, .. } => (lo, hi),
             Shape::Slab { lo, hi, thick, .. } => (lo - Vec3::Y * thick, hi + Vec3::Y * 0.01),
             Shape::Cylinder { c, r, h } => (c - Vec3::new(r, 0.0, r), c + Vec3::new(r, h, r)),
-            Shape::Path {
+            Shape::Ramp {
                 a,
                 b,
                 half,
-                depth,
-                ground_lo,
-                ground_hi,
+                g0,
+                g1,
+                from,
+                to,
+                ..
             } => (
                 Vec3::new(
                     a.x.min(b.x) - half,
-                    ground_lo - depth - 0.5,
+                    g0.min(g1) + from - 0.1,
                     a.y.min(b.y) - half,
                 ),
                 Vec3::new(
                     a.x.max(b.x) + half,
-                    ground_hi + CLEAR_M + 0.5,
+                    g0.max(g1) + to + 0.1,
                     a.y.max(b.y) + half,
                 ),
             ),
@@ -119,9 +194,11 @@ fn in_footprint(p: Vec3, lo: Vec3, hi: Vec3) -> bool {
 }
 
 impl Op {
-    /// Material this operation gives point `p`, whose ground is at
-    /// `ground` (only paths ask).
-    fn at(&self, p: Vec3, ground: &mut dyn FnMut() -> f32) -> Option<MaterialId> {
+    /// Material this operation gives point `p`. `coarse` is the cell size
+    /// when sampling
+    /// once per coarse cell (0 at voxel resolution): thin things thicken to
+    /// show at all, a pane of glass fills its opening.
+    fn at(&self, p: Vec3, coarse: f32) -> Option<MaterialId> {
         match self.shape {
             Shape::Box { lo, hi } => (p.cmpge(lo).all() && p.cmplt(hi).all()).then_some(self.m),
             Shape::Prism { lo, hi, ridge_x } => {
@@ -144,20 +221,124 @@ impl Op {
                 let d = Vec2::new(p.x - c.x, p.z - c.z);
                 (d.length_squared() < r * r && p.y >= c.y && p.y < c.y + h).then_some(self.m)
             }
-            Shape::Path {
-                a, b, half, depth, ..
+            Shape::Facade {
+                lo,
+                hi,
+                face,
+                out,
+                style,
+                base,
+                storey,
             } => {
-                let q = Vec2::new(p.x, p.z);
-                let ab = b - a;
-                let t = ((q - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
-                if (q - (a + ab * t)).length() > half {
+                if !(p.cmpge(lo).all() && p.cmplt(hi).all()) {
                     return None;
                 }
-                let g = ground();
-                if p.y < g - depth || p.y >= g + CLEAR_M {
+                let (along, depth) = if face == 0 {
+                    (p.z, if out > 0.0 { hi.x - p.x } else { p.x - lo.x })
+                } else {
+                    (p.x, if out > 0.0 { hi.z - p.z } else { p.z - lo.z })
+                };
+                let up = p.y - base;
+                let level = up.rem_euclid(storey);
+                let pane = |at: f32| {
+                    if coarse > 0.0 || (depth >= at && depth < at + VOXEL_M) {
+                        ids::GLASS
+                    } else {
+                        ids::AIR
+                    }
+                };
+                Some(match style {
+                    FacadeStyle::Curtain => {
+                        if along.rem_euclid(1.5) < 0.12 || level < 0.45 {
+                            ids::STEEL
+                        } else {
+                            pane(0.06)
+                        }
+                    }
+                    FacadeStyle::Punched => {
+                        let a = along.rem_euclid(3.0);
+                        if (0.9..2.1).contains(&a) && (0.9..2.5).contains(&level) {
+                            pane(0.12)
+                        } else if (0.8..2.2).contains(&a) && (0.78..0.9).contains(&level) {
+                            ids::CONCRETE
+                        } else {
+                            self.m
+                        }
+                    }
+                    FacadeStyle::Ribbon => {
+                        if (1.0..2.6).contains(&level) {
+                            if along.rem_euclid(3.0) < 0.1 {
+                                ids::STEEL
+                            } else {
+                                pane(0.1)
+                            }
+                        } else {
+                            self.m
+                        }
+                    }
+                    FacadeStyle::Shopfront => {
+                        if along.rem_euclid(6.0) < 0.45 || !(0.3..3.1).contains(&up) {
+                            self.m
+                        } else {
+                            pane(0.1)
+                        }
+                    }
+                })
+            }
+            Shape::Floors {
+                lo,
+                hi,
+                storey,
+                thick,
+                lit,
+            } => {
+                if !(p.cmpge(lo).all() && p.cmplt(hi).all()) {
                     return None;
                 }
-                Some(if p.y < g { self.m } else { ids::AIR })
+                let up = p.y - lo.y;
+                let level = up.rem_euclid(storey);
+                if level < thick {
+                    return Some(self.m);
+                }
+                // Light panels hang under the slab above, on lit floors.
+                let floor = (up / storey).floor() as i32;
+                let on = hash_unit(hash3(floor, 0, lit as i32, 0x0011_9e00)) < 0.55;
+                (on && level >= storey - 0.06
+                    && p.x.rem_euclid(3.0) < 0.6
+                    && p.z.rem_euclid(3.0) < 0.6)
+                    .then_some(ids::GLOWSTONE)
+            }
+            Shape::Ramp {
+                a,
+                b,
+                half,
+                g0,
+                g1,
+                from,
+                to,
+                marks,
+            } => {
+                let (t, lateral) = ramp_coords(Vec2::new(p.x, p.z), a, b)?;
+                if lateral.abs() > half {
+                    return None;
+                }
+                let g = g0 + (g1 - g0) * t;
+                // Coarse cells reach down a whole cell so thin runs show.
+                let from = if coarse > 0.0 && !self.m.is_air() {
+                    from.min(-coarse)
+                } else {
+                    from
+                };
+                if p.y < g + from || p.y >= g + to {
+                    return None;
+                }
+                if let Some(mk) = marks
+                    && p.y >= g + to - VOXEL_M
+                    && mk.paint(mk.along0 + t * (b - a).length(), lateral, half)
+                {
+                    return Some(ids::WHITEWASH);
+                }
+                Some(self.m)
             }
         }
     }
@@ -170,13 +351,65 @@ impl Op {
         if chi.cmple(self.lo).any() || clo.cmpge(self.hi).any() {
             return Some(false);
         }
+        let within = |lo: Vec3, hi: Vec3| clo.cmpge(lo).all() && chi.cmple(hi).all();
         match self.shape {
-            Shape::Box { lo, hi } => {
-                if clo.cmpge(lo).all() && chi.cmple(hi).all() {
-                    Some(true)
-                } else {
-                    None
+            Shape::Box { lo, hi } => within(lo, hi).then_some(true),
+            Shape::Floors {
+                lo,
+                hi,
+                storey,
+                thick,
+                ..
+            } => {
+                // Between two slabs and clear of the lights: untouched.
+                let (y0, y1) = (clo.y - lo.y, chi.y - lo.y);
+                let k = (y0 / storey).floor();
+                if (y1 / storey).floor() != k {
+                    return None;
                 }
+                let (a, b) = (y0 - k * storey, y1 - k * storey);
+                if a >= thick && b <= storey - 0.07 {
+                    return Some(false);
+                }
+                (b <= thick && within(lo, hi)).then_some(true)
+            }
+            Shape::Ramp {
+                a,
+                b,
+                half,
+                g0,
+                g1,
+                from,
+                to,
+                marks,
+            } => {
+                // The cell's corners in the run's frame.
+                let mut inside = true;
+                let (mut t_lo, mut t_hi) = (f32::MAX, f32::MIN);
+                for (x, z) in [
+                    (clo.x, clo.z),
+                    (chi.x, clo.z),
+                    (clo.x, chi.z),
+                    (chi.x, chi.z),
+                ] {
+                    match ramp_coords(Vec2::new(x, z), a, b) {
+                        Some((t, lateral)) if lateral.abs() <= half => {
+                            t_lo = t_lo.min(t);
+                            t_hi = t_hi.max(t);
+                        }
+                        _ => inside = false,
+                    }
+                }
+                if !inside {
+                    return None;
+                }
+                let (ga, gb) = (g0 + (g1 - g0) * t_lo, g0 + (g1 - g0) * t_hi);
+                let (g_lo, g_hi) = (ga.min(gb), ga.max(gb));
+                if clo.y >= g_hi + to || chi.y <= g_lo + from {
+                    return Some(false);
+                }
+                let painted = marks.is_some() && chi.y > g_lo + to - VOXEL_M;
+                (clo.y >= g_hi + from && chi.y <= g_lo + to && !painted).then_some(true)
             }
             _ => None,
         }
@@ -196,6 +429,8 @@ struct Tile {
 
 pub struct Village {
     pub centre: Vec3,
+    /// A town of streets and tall buildings rather than a village.
+    pub town: bool,
     ops: Vec<Op>,
     tiles: FxHashMap<(i32, i32), Tile>,
     pub lo: Vec3,
@@ -225,12 +460,96 @@ impl Rand {
     }
 }
 
-fn b(lo: Vec3, hi: Vec3, m: MaterialId) -> Op {
+/// A path from `a` to `b` following the ground under `surface`, `rise`
+/// metres proud of it.
+pub(crate) fn path_op(
+    surface: &Surface,
+    a: Vec2,
+    b: Vec2,
+    half: f32,
+    depth: f32,
+    rise: f32,
+    m: MaterialId,
+) -> Vec<Op> {
+    runs(surface, a, b, half, depth, rise, m, None)
+}
+
+/// A street from `a` to `b`: `path_op` with markings painted on.
+pub(crate) fn street_op(
+    surface: &Surface,
+    a: Vec2,
+    b: Vec2,
+    half: f32,
+    marks: Marks,
+    m: MaterialId,
+) -> Vec<Op> {
+    runs(surface, a, b, half, 0.3, 0.0, m, Some(marks))
+}
+
+/// Straight runs between ground samples along the centre line: an even
+/// grade rather than every step of the ground, filled at least a metre down
+/// so no edge floats, and cleared above.
+#[allow(clippy::too_many_arguments)]
+fn runs(
+    surface: &Surface,
+    a: Vec2,
+    b: Vec2,
+    half: f32,
+    depth: f32,
+    rise: f32,
+    m: MaterialId,
+    marks: Option<Marks>,
+) -> Vec<Op> {
+    let count = ((b - a).length() / PATH_RUN_M).ceil().max(1.0) as i32;
+    let depth = depth.max(1.0);
+    let ground = |q: Vec2| snap(surface.sample(q.x, q.y).height);
+    let mut ops = Vec::with_capacity(count as usize * 2);
+    let mut start = a;
+    let mut g_start = ground(a);
+    let length = (b - a).length();
+    for i in 1..=count {
+        let end = a.lerp(b, i as f32 / count as f32);
+        let g_end = ground(end);
+        let run_marks = marks.map(|mk| Marks {
+            along0: mk.along0 + length * (i - 1) as f32 / count as f32,
+            ..mk
+        });
+        let ramp = |from: f32, to: f32, marks: Option<Marks>| Shape::Ramp {
+            a: start,
+            b: end,
+            half,
+            g0: g_start,
+            g1: g_end,
+            from,
+            to,
+            marks,
+        };
+        ops.push(Op::new(ramp(-depth, rise, run_marks), m));
+        ops.push(Op::new(ramp(rise, rise + CLEAR_M, None), ids::AIR));
+        start = end;
+        g_start = g_end;
+    }
+    ops
+}
+
+/// A point's position along a run (0 at `a`, 1 at `b`; None beyond its
+/// square ends, `b` excluded) and its signed distance from the centre line.
+fn ramp_coords(q: Vec2, a: Vec2, b: Vec2) -> Option<(f32, f32)> {
+    let ab = b - a;
+    let len2 = ab.length_squared().max(1e-6);
+    let t = (q - a).dot(ab) / len2;
+    if !(0.0..1.0).contains(&t) {
+        return None;
+    }
+    Some((t, ab.perp_dot(q - a) / len2.sqrt()))
+}
+
+pub(crate) fn b(lo: Vec3, hi: Vec3, m: MaterialId) -> Op {
     Op::new(Shape::Box { lo, hi }, m)
 }
 
 /// Snaps to the voxel grid.
-fn snap(v: f32) -> f32 {
+pub(crate) fn snap(v: f32) -> f32 {
     (v / VOXEL_M).round() * VOXEL_M
 }
 
@@ -264,33 +583,8 @@ impl Builder<'_> {
 
     /// A path from `a` to `b` that follows the ground.
     fn path(&mut self, a: Vec2, b: Vec2, half: f32, depth: f32, m: MaterialId) {
-        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
-        let steps = ((b - a).length() / 2.0).ceil().max(1.0) as i32;
-        for i in 0..=steps {
-            let q = a.lerp(b, i as f32 / steps as f32);
-            for d in [
-                Vec2::ZERO,
-                Vec2::new(half, 0.0),
-                Vec2::new(-half, 0.0),
-                Vec2::new(0.0, half),
-                Vec2::new(0.0, -half),
-            ] {
-                let g = self.ground(q.x + d.x, q.y + d.y);
-                lo = lo.min(g);
-                hi = hi.max(g);
-            }
-        }
-        self.ops.push(Op::new(
-            Shape::Path {
-                a,
-                b,
-                half,
-                depth,
-                ground_lo: lo - 0.5,
-                ground_hi: hi + 0.5,
-            },
-            m,
-        ));
+        self.ops
+            .extend(path_op(self.surface, a, b, half, depth, 0.0, m));
     }
 
     fn free(&self, lo: Vec2, hi: Vec2) -> bool {
@@ -841,9 +1135,15 @@ fn plan(surface: &Surface, centre: Vec3, seed: u64) -> Village {
             d += rng.range(10.0, 13.0);
         }
     }
+    assemble(centre, bld.ops, bld.claimed, false)
+}
+
+/// A settlement from its operations: bounds, and the operations bucketed
+/// by the squares they reach.
+fn assemble(centre: Vec3, ops: Vec<Op>, claimed: Vec<(Vec2, Vec2)>, town: bool) -> Village {
     let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
     let mut tiles: FxHashMap<(i32, i32), Tile> = FxHashMap::default();
-    for (n, op) in bld.ops.iter().enumerate() {
+    for (n, op) in ops.iter().enumerate() {
         lo = lo.min(op.lo);
         hi = hi.max(op.hi);
         let t0 = (op.lo / TILE_M).floor().as_ivec3();
@@ -863,11 +1163,12 @@ fn plan(surface: &Surface, centre: Vec3, seed: u64) -> Village {
     }
     Village {
         centre,
-        ops: bld.ops,
+        town,
+        ops,
         tiles,
         lo,
         hi,
-        claimed: bld.claimed,
+        claimed,
     }
 }
 
@@ -892,40 +1193,72 @@ impl Settlements {
         if let Some(v) = self.cache.lock().expect("cache").get(&(i, k)) {
             return v.clone();
         }
-        let v = self
-            .site(surface, i, k)
-            .map(|(centre, h)| Arc::new(plan(surface, centre, h)));
+        let v = self.site(surface, i, k).map(|(centre, h, town)| {
+            Arc::new(if town {
+                let (ops, claimed) = crate::town::plan(surface, centre, h);
+                assemble(centre, ops, claimed, true)
+            } else {
+                plan(surface, centre, h)
+            })
+        });
         self.cache.lock().expect("cache").insert((i, k), v.clone());
         v
     }
 
-    /// Where a cell's village stands: flat open ground well above the sea.
-    fn site(&self, surface: &Surface, i: i32, k: i32) -> Option<(Vec3, u64)> {
-        let h = hash3(i, 3, k, self.seed);
-        if hash_unit(h) > 0.6 {
+    /// Where a cell's settlement stands (flat open ground well above the
+    /// sea), its seed, and whether it is a town (which needs its whole
+    /// street grid flat).
+    fn site(&self, surface: &Surface, i: i32, k: i32) -> Option<(Vec3, u64, bool)> {
+        let cell = hash3(i, 3, k, self.seed);
+        if hash_unit(cell) > 0.75 {
             return None;
         }
-        let x = (i as f32 + 0.2 + 0.6 * hash_unit(h.rotate_left(13))) * VILLAGE_CELL_M;
-        let z = (k as f32 + 0.2 + 0.6 * hash_unit(h.rotate_left(29))) * VILLAGE_CELL_M;
-        let s = surface.sample(x, z);
+        let wants_town = hash_unit(cell.rotate_left(41)) < TOWN_SHARE;
         let sea = surface.terrain.params.sea_level;
-        let open = matches!(
-            s.biome(sea),
-            Biome::Plains | Biome::Forest | Biome::BirchForest | Biome::Taiga
-        );
-        if !open || s.slope > 0.18 || s.height < sea + 3.0 || s.river > 0.2 {
-            return None;
+        // A few candidate spots in the cell; the first that suits wins.
+        for attempt in 0..6 {
+            let h = hash3(i, 4 + attempt, k, self.seed);
+            let x = (i as f32 + 0.2 + 0.6 * hash_unit(h.rotate_left(13))) * VILLAGE_CELL_M;
+            let z = (k as f32 + 0.2 + 0.6 * hash_unit(h.rotate_left(29))) * VILLAGE_CELL_M;
+            let s = surface.sample(x, z);
+            let open = matches!(
+                s.biome(sea),
+                Biome::Plains | Biome::Forest | Biome::BirchForest | Biome::Taiga
+            );
+            if !open || s.slope > 0.2 || s.height < sea + 3.0 || s.river > 0.2 {
+                continue;
+            }
+            // Flat enough across the plaza.
+            let around = [(-12.0, 0.0), (12.0, 0.0), (0.0, -12.0), (0.0, 12.0)];
+            let spread = around
+                .iter()
+                .map(|(dx, dz)| (surface.sample(x + dx, z + dz).height - s.height).abs())
+                .fold(0.0, f32::max);
+            if spread > 2.5 {
+                continue;
+            }
+            let centre = Vec3::new(x, snap(s.height), z);
+            if !wants_town {
+                return Some((centre, h, false));
+            }
+            // A town needs its whole street grid near one level and dry.
+            let (_, extent) = crate::town::size(h);
+            let half = extent * 0.5 + 6.0;
+            let mut flat = true;
+            for gz in -2..=2 {
+                for gx in -2..=2 {
+                    let (px, pz) = (x + gx as f32 * half * 0.5, z + gz as f32 * half * 0.5);
+                    let q = surface.sample(px, pz);
+                    if (q.height - s.height).abs() > 7.0 || q.height < sea + 2.0 || q.river > 0.3 {
+                        flat = false;
+                    }
+                }
+            }
+            if flat {
+                return Some((centre, h, true));
+            }
         }
-        // Flat enough across the plaza.
-        let around = [(-12.0, 0.0), (12.0, 0.0), (0.0, -12.0), (0.0, 12.0)];
-        let spread = around
-            .iter()
-            .map(|(dx, dz)| (surface.sample(x + dx, z + dz).height - s.height).abs())
-            .fold(0.0, f32::max);
-        if spread > 2.5 {
-            return None;
-        }
-        Some((Vec3::new(x, snap(s.height), z), h))
+        None
     }
 
     /// Villages whose bounds may reach the box `lo..hi` (metres).
@@ -940,7 +1273,6 @@ impl Settlements {
                 if let Some(v) = self.village(surface, i, k)
                     && v.hi.cmpge(lo).all()
                     && v.lo.cmple(hi).all()
-                    && v.centre.y < hi.y + VILLAGE_HEIGHT_M
                 {
                     out.push(v);
                 }
@@ -960,10 +1292,10 @@ impl Village {
     }
 
     /// Material at `p` from every operation that contains it, last wins.
-    fn at(&self, ops: &[&Op], p: Vec3, ground: &mut dyn FnMut() -> f32) -> Option<MaterialId> {
+    fn at(&self, ops: &[&Op], p: Vec3, coarse: f32) -> Option<MaterialId> {
         let mut found = None;
         for op in ops {
-            if let Some(m) = op.at(p, ground) {
+            if let Some(m) = op.at(p, coarse) {
                 found = Some(m);
             }
         }
@@ -1006,10 +1338,8 @@ impl Village {
     }
 
     /// Stamps the village into a chunk generated voxel by voxel.
-    pub fn stamp_full(&self, tree: &mut ChunkTree, origin: IVec3, surface: &Surface) {
+    pub fn stamp_full(&self, tree: &mut ChunkTree, origin: IVec3) {
         let origin_m = origin.as_vec3() * VOXEL_M;
-        // Ground heights by voxel column, sampled on demand.
-        let mut heights: FxHashMap<(i32, i32), f32> = FxHashMap::default();
         for (lo, hi, tile) in self.tiles_in(origin_m, 0.5, 64) {
             for cz in lo.z..=hi.z {
                 for cx in lo.x..=hi.x {
@@ -1049,12 +1379,8 @@ impl Village {
                                 let l = IVec3::new(i & 7, (i >> 6) & 7, (i >> 3) & 7);
                                 let v = base + l;
                                 let p = (v.as_vec3() + 0.5) * VOXEL_M;
-                                let mut ground = || {
-                                    *heights
-                                        .entry((v.x, v.z))
-                                        .or_insert_with(|| surface.sample(p.x, p.z).height)
-                                };
-                                if let Some(m) = self.at(ops, p, &mut ground) {
+
+                                if let Some(m) = self.at(ops, p, 0.0) {
                                     brick.set(l, m);
                                 }
                             }
@@ -1067,7 +1393,7 @@ impl Village {
 
     /// Stamps the village into a chunk kept at one material per cell of
     /// `cells` brick cells.
-    pub fn stamp_coarse(&self, tree: &mut ChunkTree, origin: IVec3, surface: &Surface, cells: i32) {
+    pub fn stamp_coarse(&self, tree: &mut ChunkTree, origin: IVec3, cells: i32) {
         let origin_m = origin.as_vec3() * VOXEL_M;
         let size = cells as f32 * 0.5;
         for (lo, hi, tile) in self.tiles_in(origin_m, size, 64 / cells) {
@@ -1075,8 +1401,7 @@ impl Village {
                 for x in lo.x..=hi.x {
                     let cx = origin_m.x + (x as f32 + 0.5) * size;
                     let cz = origin_m.z + (z as f32 + 0.5) * size;
-                    let mut g = None;
-                    let mut ground = || *g.get_or_insert_with(|| surface.sample(cx, cz).height);
+
                     for y in lo.y..=hi.y {
                         let c = IVec3::new(x, y, z);
                         let centre = Vec3::new(cx, origin_m.y + (y as f32 + 0.5) * size, cz);
@@ -1086,7 +1411,7 @@ impl Village {
                             .map(|&n| &self.ops[n as usize])
                             .filter(|op| op.relate(centre, size * 0.5) != Some(false))
                             .collect();
-                        let Some(m) = self.at(&ops, centre, &mut ground) else {
+                        let Some(m) = self.at(&ops, centre, size) else {
                             continue;
                         };
                         if cells == 1 {
