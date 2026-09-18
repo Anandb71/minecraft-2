@@ -24,8 +24,12 @@ pub enum BlockKind {
     Lantern,
     /// Glass pane in a plank frame, 2 voxels thick.
     Window,
-    /// A lower half slab.
+        /// A lower half slab.
     Slab(MaterialId),
+    /// Plank workbench with a grid inlaid in its top and tools laid on it.
+    CraftingTable,
+    /// Cobblestone oven on a stone-brick plinth, embers glowing in its mouth.
+    Furnace,
 }
 
 impl BlockKind {
@@ -35,8 +39,29 @@ impl BlockKind {
             BlockKind::Torch => "torch".into(),
             BlockKind::Lantern => "lantern".into(),
             BlockKind::Window => "window".into(),
-            BlockKind::Slab(m) => format!("{} slab", m.get().name),
+                        BlockKind::Slab(m) => format!("{} slab", m.get().name),
+            BlockKind::CraftingTable => "crafting table".into(),
+            BlockKind::Furnace => "furnace".into(),
         }
+    }
+
+        /// Material at block-local voxel `l` of the block turned `turns` quarter
+    /// turns about the vertical, its front (model -z) then facing -x, +z and
+    /// +x in turn.
+    pub fn voxel_turned(&self, l: IVec3, turns: u8) -> MaterialId {
+        let mut m = l;
+        for _ in 0..turns % 4 {
+            m = IVec3::new(15 - m.z, m.y, m.x);
+        }
+        self.voxel(m)
+    }
+
+    /// Whether the block has a front worth turning toward whoever places it.
+    pub fn faces(&self) -> bool {
+        matches!(
+            self,
+            BlockKind::Window | BlockKind::CraftingTable | BlockKind::Furnace
+        )
     }
 
     /// Material at block-local voxel `l` (each component 0..16).
@@ -84,10 +109,12 @@ impl BlockKind {
                     MaterialId(0)
                 } else if l.x <= 1 || l.x >= 14 || l.y <= 1 || l.y >= 14 {
                     ids::PLANKS
-                } else {
+                                } else {
                     ids::GLASS
                 }
             }
+            BlockKind::CraftingTable => crafting_table(l),
+            BlockKind::Furnace => furnace(l),
         }
     }
 
@@ -106,6 +133,85 @@ impl BlockKind {
         }
         out
     }
+}
+
+/// Workbench: a three-voxel top on corner legs, a shelf low between them, a
+/// dark grid inlaid in the top and a saw and hammer resting on it.
+fn crafting_table(l: IVec3) -> MaterialId {
+    let (x, y, z) = (l.x, l.y, l.z);
+    let leg = |v: i32| (1..=3).contains(&v) || (12..=14).contains(&v);
+    let inner = |v: i32| (1..=14).contains(&v);
+    match y {
+        15 => {
+            // Saw: steel blade, plank grip. Hammer: iron head, log handle.
+            if z == 11 && (2..=8).contains(&x) {
+                ids::STEEL
+            } else if z == 11 && (9..=10).contains(&x) {
+                ids::PLANKS
+            } else if (11..=13).contains(&x) && (2..=3).contains(&z) {
+                ids::IRON
+            } else if x == 12 && (4..=8).contains(&z) {
+                ids::OAK_LOG
+            } else {
+                MaterialId(0)
+            }
+        }
+        12..=14 => {
+            let grid = y == 14
+                && (3..=12).contains(&x)
+                && (3..=12).contains(&z)
+                && (x == 3 || x == 6 || x == 9 || x == 12 || z == 3 || z == 6 || z == 9 || z == 12);
+            if grid { ids::DARK_PLANKS } else { ids::PLANKS }
+        }
+        10..=11 => {
+            // Apron under the top, set in from its edge.
+            let edge = inner(x) && inner(z) && (x == 1 || x == 14 || z == 1 || z == 14);
+            if edge || (leg(x) && leg(z)) {
+                ids::DARK_PLANKS
+            } else {
+                MaterialId(0)
+            }
+        }
+        _ => {
+            if leg(x) && leg(z) {
+                ids::DARK_PLANKS
+            } else if (2..=3).contains(&y) && inner(x) && inner(z) {
+                ids::PLANKS
+            } else {
+                MaterialId(0)
+            }
+        }
+    }
+}
+
+/// Oven: stone-brick plinth and cap, cobblestone walls, an iron-framed
+/// mouth in its front (model -z) with embers and a low flame inside.
+fn furnace(l: IVec3) -> MaterialId {
+    let (x, y, z) = (l.x, l.y, l.z);
+    if y <= 1 || y >= 14 {
+        // Cap is inset a voxel over a plinth that is not.
+        let inset = y >= 14 && (x == 0 || x == 15 || z == 0 || z == 15);
+        return if inset { MaterialId(0) } else { ids::STONE_BRICK };
+    }
+    let mouth_x = (4..=11).contains(&x);
+    let mouth_y = (3..=8).contains(&y);
+    if mouth_x && mouth_y && z <= 4 {
+        return match (y, z) {
+            (3, 3..=4) => ids::EMBER,
+            (4, 4) if (x + z) % 3 != 0 => ids::TORCH_FLAME,
+            (5, 4) if (5..=10).contains(&x) && x % 2 == 0 => ids::TORCH_FLAME,
+            _ => MaterialId(0),
+        };
+    }
+    let frame = z == 0 && (3..=12).contains(&x) && (2..=9).contains(&y);
+    if frame {
+        return ids::IRON;
+    }
+    // Vent above the mouth.
+    if z == 0 && (6..=9).contains(&x) && (11..=12).contains(&y) {
+        return ids::BASALT;
+    }
+    ids::COBBLESTONE
 }
 
 /// Explicitly placed blocks. Everything else is implied by voxels.
@@ -176,9 +282,36 @@ mod tests {
         );
         let torch = BlockKind::Torch.bill_of_materials();
         assert!(torch.iter().any(|(m, _)| *m == ids::TORCH_FLAME));
+                for kind in [BlockKind::CraftingTable, BlockKind::Furnace] {
+            let bill = kind.bill_of_materials();
+            let total: u32 = bill.iter().map(|(_, n)| n).sum();
+            assert!(total > 1500 && total < 4096, "{kind:?} {total}");
+            assert!(bill.iter().any(|(m, _)| m.is_emissive()) == (kind == BlockKind::Furnace));
+        }
         let window = BlockKind::Window.bill_of_materials();
         let glass = window.iter().find(|(m, _)| *m == ids::GLASS).unwrap().1;
         assert_eq!(glass, 12 * 12 * 2);
+    }
+
+        #[test]
+    fn turning_keeps_the_model_and_moves_its_front() {
+        let f = BlockKind::Furnace;
+        // The mouth's iron frame, on the front.
+        assert_eq!(f.voxel(IVec3::new(3, 6, 0)), ids::IRON);
+        assert!(f.voxel(IVec3::new(7, 6, 0)).is_air());
+        // A quarter turn puts the front on the -x face, and so on round.
+        assert_eq!(f.voxel_turned(IVec3::new(0, 6, 12), 1), ids::IRON);
+        assert_eq!(f.voxel_turned(IVec3::new(12, 6, 15), 2), ids::IRON);
+        assert_eq!(f.voxel_turned(IVec3::new(15, 6, 3), 3), ids::IRON);
+        for t in 0..4 {
+            let mut n = 0;
+            for i in 0..4096 {
+                let l = IVec3::new(i & 15, (i >> 8) & 15, (i >> 4) & 15);
+                n += u32::from(!f.voxel_turned(l, t).is_air());
+            }
+            let total: u32 = f.bill_of_materials().iter().map(|(_, n)| n).sum();
+            assert_eq!(n, total);
+        }
     }
 
     #[test]
