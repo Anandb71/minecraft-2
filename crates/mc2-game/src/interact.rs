@@ -1,7 +1,10 @@
 //! Looking at, breaking, placing, carving and depositing.
 //!
-//! Block mode works on the 1 m macro grid: break returns the block's voxels
-//! to the inventory, place writes a block model against the targeted face.
+//! Block mode works on the 1 m macro grid: holding break wears a block down
+//! at a pace set by its hardness and the tool in hand, then drops what it
+//! yields into the inventory; place writes the held block's model against
+//! the targeted face, turned to face the player, and uses up one of it.
+//! Using a crafting table or furnace opens it instead.
 //! Carve mode works on 6.25 cm voxels: a sphere of adjustable radius is cut
 //! out of whatever is under the crosshair, or material is deposited onto it.
 //!
@@ -12,7 +15,10 @@
 
 use crate::blocks::{BlockKind, BlockLayer};
 use crate::collide::{Aabb, blocks_movement};
+use crate::crafting::Station;
 use crate::input::{Button, Input, Key, Time};
+use crate::inventory::{HOTBAR_SLOTS, Inventory};
+use crate::items::{Item, Tier, ToolKind, break_time, drop_for};
 use crate::player::{Body, Player, WIDTH};
 use crate::{Streaming, Voxels};
 use bevy_ecs::prelude::*;
@@ -36,7 +42,8 @@ pub enum Mode {
     Carve,
 }
 
-pub const HOTBAR: [BlockKind; 9] = [
+/// What a creative hotbar starts with.
+pub const CREATIVE_HOTBAR: [BlockKind; 9] = [
     BlockKind::Solid(ids::STONE_BRICK),
     BlockKind::Solid(ids::PLANKS),
     BlockKind::Window,
@@ -70,39 +77,43 @@ pub enum Preview {
     },
 }
 
-/// Material volumes in voxels (4096 to a block).
-#[derive(Default, Debug)]
-pub struct Inventory {
-    pub volumes: FxHashMap<MaterialId, u64>,
-    /// Creative mode never runs out.
-    pub creative: bool,
+/// Seconds to break a block holding `tool` (`None`: bare hands).
+pub fn block_break_time(kind: BlockKind, tool: Option<(ToolKind, Tier)>) -> f32 {
+    match kind {
+        BlockKind::Solid(m) => break_time(m, tool),
+        BlockKind::Slab(m) => break_time(m, tool) * 0.6,
+        BlockKind::Torch => 0.05,
+        BlockKind::Lantern | BlockKind::Window => break_time(ids::GLASS, tool),
+        BlockKind::CraftingTable => break_time(ids::PLANKS, tool),
+        BlockKind::Furnace => break_time(ids::COBBLESTONE, tool),
+    }
 }
 
-impl Inventory {
-    pub fn add(&mut self, m: MaterialId, n: u64) {
-        if !m.is_air() {
-            *self.volumes.entry(m).or_default() += n;
-        }
-    }
-
-    pub fn can_afford(&self, bill: &[(MaterialId, u32)]) -> bool {
-        self.creative
-            || bill
-                .iter()
-                .all(|(m, n)| self.volumes.get(m).copied().unwrap_or(0) >= u64::from(*n))
-    }
-
-    pub fn spend(&mut self, bill: &[(MaterialId, u32)]) {
-        if self.creative {
-            return;
-        }
-        for (m, n) in bill {
-            if let Some(v) = self.volumes.get_mut(m) {
-                *v = v.saturating_sub(u64::from(*n));
+/// What breaking a block gives. Placed things come back whole; a furnace
+/// needs a pickaxe like the stone it is made of.
+pub fn block_drop(
+    kind: BlockKind,
+    tool: Option<(ToolKind, Tier)>,
+    roll: f32,
+) -> Option<(Item, u32)> {
+    match kind {
+        BlockKind::Solid(m) => drop_for(m, tool, roll),
+        BlockKind::Slab(m) => drop_for(m, tool, roll).map(|(item, n)| {
+            if item == Item::solid(m) {
+                (Item::Block(kind), n)
+            } else {
+                (item, n)
             }
-        }
+        }),
+        BlockKind::Furnace => tool
+            .is_some_and(|(k, _)| k == ToolKind::Pickaxe)
+            .then_some((Item::Block(kind), 1)),
+        _ => Some((Item::Block(kind), 1)),
     }
 }
+
+/// How long a line of news stays on screen, seconds.
+pub const MESSAGE_S: f64 = 4.0;
 
 #[derive(Resource)]
 pub struct Interaction {
@@ -112,6 +123,13 @@ pub struct Interaction {
     pub target: Option<Target>,
     pub preview: Option<Preview>,
     pub inventory: Inventory,
+    /// The block being broken and how far along (0..1).
+    pub breaking: Option<(BlockPos, f32)>,
+    /// A station the player just used; the interface takes it to open.
+    pub opened: Option<Station>,
+    /// Recent news for the HUD: when, and what.
+    pub messages: Vec<(f64, String)>,
+    rng: u64,
     next_carve: f64,
     /// Brick cells already restored to generated detail (or edited since).
     pub(crate) touched: FxHashSet<(ChunkPos, IVec3)>,
@@ -125,16 +143,34 @@ pub struct Interaction {
 
 impl Default for Interaction {
     fn default() -> Self {
+        Self::new(true)
+    }
+}
+
+impl Interaction {
+    /// Creative play starts with a hotbar of building blocks and never runs
+    /// out; survival starts with nothing.
+    pub fn new(creative: bool) -> Self {
+        let mut inventory = Inventory {
+            creative,
+            ..Default::default()
+        };
+        if creative {
+            for (i, kind) in CREATIVE_HOTBAR.iter().enumerate() {
+                inventory.slots[i] = Some(crate::inventory::Stack::new(Item::Block(*kind), 1));
+            }
+        }
         Self {
             mode: Mode::Block,
             slot: 0,
             radius_voxels: 5.0,
             target: None,
             preview: None,
-            inventory: Inventory {
-                creative: true,
-                ..Default::default()
-            },
+            inventory,
+            breaking: None,
+            opened: None,
+            messages: Vec::new(),
+            rng: 0x9e37_79b9_7f4a_7c15,
             next_carve: 0.0,
             touched: FxHashSet::default(),
             edits: 0,
@@ -142,6 +178,32 @@ impl Default for Interaction {
             built: Vec::new(),
         }
     }
+
+    /// The item in the selected hotbar slot.
+    pub fn held(&self) -> Option<Item> {
+        self.inventory.slots[self.slot].map(|s| s.item)
+    }
+
+    pub fn say(&mut self, now: f64, text: impl Into<String>) {
+        self.messages.retain(|(t, _)| now - t < MESSAGE_S);
+        self.messages.push((now, text.into()));
+        if self.messages.len() > 5 {
+            self.messages.remove(0);
+        }
+    }
+
+    fn roll(&mut self) -> f32 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        (self.rng >> 40) as f32 / (1u64 << 24) as f32
+    }
+}
+
+/// Quarter turns that face a model's front toward a player looking along
+/// `yaw`.
+pub fn facing_turns(yaw: f32) -> u8 {
+    (yaw / std::f32::consts::FRAC_PI_2).round().rem_euclid(4.0) as u8
 }
 
 /// What an interaction may hit: anything but air and liquids.
@@ -291,7 +353,7 @@ pub fn interact(
                         (state.radius_voxels + f64::from(input.scroll)).clamp(1.0, 16.0);
                 }
                 Mode::Block => {
-                    let n = HOTBAR.len() as i32;
+                    let n = HOTBAR_SLOTS as i32;
                     state.slot =
                         (state.slot as i32 - input.scroll.signum() as i32).rem_euclid(n) as usize;
                 }
@@ -355,23 +417,58 @@ pub fn interact(
     };
     let world = &mut voxels.0;
     let streamer = streaming.0.as_mut();
+    let creative = state.inventory.creative;
+    if !input.button_held(Button::Primary) || state.mode != Mode::Block {
+        state.breaking = None;
+    }
     match state.mode {
         Mode::Block => {
-            if input.button_pressed(Button::Primary) {
+            let tool = state.inventory.tool_in(state.slot);
+            let kind = layer.block_at(world, t.block);
+            // Creative breaks on the click; survival wears the block down
+            // while the button is held.
+            let broken = match kind {
+                Some(_) if creative => input.button_pressed(Button::Primary),
+                Some(k) if input.button_held(Button::Primary) => {
+                    let secs = block_break_time(k, tool);
+                    let so_far = match state.breaking {
+                        Some((b, p)) if b == t.block => p,
+                        _ => 0.0,
+                    };
+                    let progress = so_far + time.dt / secs;
+                    state.breaking = Some((t.block, progress));
+                    progress >= 1.0
+                }
+                _ => false,
+            };
+            if broken && let Some(k) = kind {
+                state.breaking = None;
                 let o = t.block.origin();
-                let (removed, _) =
-                    edit_box(world, streamer, &mut state.touched, o, o + 15, |_, _| {
-                        MaterialId(0)
-                    });
-                for (m, n) in removed {
-                    state.inventory.add(m, n);
+                edit_box(world, streamer, &mut state.touched, o, o + 15, |_, _| {
+                    MaterialId(0)
+                });
+                if !creative {
+                    collect(state, k, tool, time.elapsed);
                 }
                 layer.set(t.block, None);
                 state.edits += 1;
                 state.edited.push((o, o + 15));
-            } else if input.button_pressed(Button::Secondary) {
-                let kind = HOTBAR[state.slot];
-                let bill = kind.bill_of_materials();
+            } else if input.button_pressed(Button::Secondary)
+                && let Some(station) = match kind {
+                    Some(BlockKind::CraftingTable) => Some(Station::Table),
+                    Some(BlockKind::Furnace) => Some(Station::Furnace),
+                    _ => None,
+                }
+            {
+                state.opened = Some(station);
+            } else if input.button_pressed(Button::Secondary)
+                && let Some(Item::Block(kind)) = state.held()
+            {
+                let turns = if kind.faces() {
+                    facing_turns(player.yaw)
+                } else {
+                    0
+                };
                 let o = t.place.origin();
                 let cell = Aabb {
                     min: o.as_dvec3() / 16.0,
@@ -382,12 +479,12 @@ pub fn interact(
                         world.voxel(o + IVec3::new(i & 15, (i >> 8) & 15, (i >> 4) & 15)),
                     )
                 });
-                if !cell.intersects(&feet_box) && !occupied && state.inventory.can_afford(&bill) {
+                if !cell.intersects(&feet_box) && !occupied {
                     edit_box(world, streamer, &mut state.touched, o, o + 15, |v, old| {
-                        let m = kind.voxel(chunk_local(v) & 15);
+                        let m = kind.voxel_turned(chunk_local(v) & 15, turns);
                         if m.is_air() { old } else { m }
                     });
-                    state.inventory.spend(&bill);
+                    state.inventory.take_from(state.slot);
                     let explicit = !matches!(kind, BlockKind::Solid(_));
                     layer.set(t.place, explicit.then_some(kind));
                     state.edits += 1;
@@ -410,9 +507,20 @@ pub fn interact(
             let r = radius * f64::from(VOXELS_PER_BLOCK);
             let lo = (c - r).floor().as_ivec3();
             let hi = (c + r).ceil().as_ivec3();
-            let paint = match HOTBAR[state.slot] {
-                BlockKind::Solid(m) | BlockKind::Slab(m) => m,
-                _ => ids::COBBLESTONE,
+            let paint = match state.held() {
+                Some(Item::Block(BlockKind::Solid(m) | BlockKind::Slab(m))) => Some(m),
+                _ if creative => Some(ids::COBBLESTONE),
+                _ => None,
+            };
+            if depositing && !carving && paint.is_none() {
+                return;
+            }
+            let paint = paint.unwrap_or(ids::COBBLESTONE);
+            // Depositing spends what is carried, and stops when it runs out.
+            let mut budget = if creative {
+                u64::MAX
+            } else {
+                state.inventory.volume(paint)
             };
             let player_box = feet_box;
             let (removed, added) =
@@ -422,14 +530,20 @@ pub fn interact(
                         return old;
                     }
                     if carving {
-                        MaterialId(0)
+                        // Bedrock stays.
+                        if old.get().hardness.is_finite() {
+                            MaterialId(0)
+                        } else {
+                            old
+                        }
                     } else {
                         let vm = v.as_dvec3() / 16.0;
                         let voxel_box = Aabb {
                             min: vm,
                             max: vm + 1.0 / 16.0,
                         };
-                        if old.is_air() && !voxel_box.intersects(&player_box) {
+                        if old.is_air() && !voxel_box.intersects(&player_box) && budget > 0 {
+                            budget -= 1;
                             paint
                         } else {
                             old
@@ -437,17 +551,45 @@ pub fn interact(
                     }
                 });
             for (m, n) in removed {
-                state.inventory.add(m, n);
+                state.inventory.add_loose(m, n);
             }
-            let spent: Vec<(MaterialId, u32)> =
-                added.into_iter().map(|(m, n)| (m, n as u32)).collect();
-            state.inventory.spend(&spent);
+            for (m, n) in added {
+                state.inventory.take_loose(m, n);
+            }
             state.edits += 1;
             state.edited.push((lo, hi));
             if depositing && !carving {
                 state.built.push((lo, hi));
             }
         }
+    }
+}
+
+/// A block of `kind` broke with `tool` in the selected slot: take what it
+/// drops, say so, and wear the tool.
+fn collect(state: &mut Interaction, kind: BlockKind, tool: Option<(ToolKind, Tier)>, now: f64) {
+    let roll = state.roll();
+    match block_drop(kind, tool, roll) {
+        Some((item, n)) => {
+            if state.inventory.add(item, n) > 0 {
+                state.say(now, "inventory full");
+            } else {
+                state.say(now, format!("+{n} {}", item.name()));
+            }
+        }
+        None => {
+            if let BlockKind::Solid(m) = kind
+                && let Some((need, Some(least))) = crate::items::suited_tool(m)
+            {
+                let tool = Item::Tool(need, least).name();
+                state.say(now, format!("{} needs a {tool}", m.get().name));
+            }
+        }
+    }
+    if let Some((k, tier)) = tool
+        && state.inventory.wear(state.slot)
+    {
+        state.say(now, format!("your {} broke", Item::Tool(k, tier).name()));
     }
 }
 
@@ -484,13 +626,31 @@ mod tests {
     }
 
     #[test]
-    fn inventory_spends_only_when_affordable() {
-        let mut inv = Inventory::default();
-        let bill = BlockKind::Solid(ids::PLANKS).bill_of_materials();
-        assert!(!inv.can_afford(&bill));
-        inv.add(ids::PLANKS, 5000);
-        assert!(inv.can_afford(&bill));
-        inv.spend(&bill);
-        assert_eq!(inv.volumes[&ids::PLANKS], 904);
+    fn placed_things_come_back_whole() {
+        let pick = Some((ToolKind::Pickaxe, Tier::Wood));
+        assert_eq!(
+            block_drop(BlockKind::Torch, None, 0.5),
+            Some((Item::Block(BlockKind::Torch), 1))
+        );
+        assert_eq!(block_drop(BlockKind::Furnace, None, 0.5), None);
+        assert_eq!(
+            block_drop(BlockKind::Furnace, pick, 0.5),
+            Some((Item::Block(BlockKind::Furnace), 1))
+        );
+        assert_eq!(
+            block_drop(BlockKind::Slab(ids::STONE_BRICK), pick, 0.5),
+            Some((Item::Block(BlockKind::Slab(ids::STONE_BRICK)), 1))
+        );
+        assert!(block_break_time(BlockKind::Torch, None) < 0.1);
+    }
+
+    #[test]
+    fn models_turn_to_face_the_player() {
+        use std::f32::consts::{FRAC_PI_2, PI};
+        assert_eq!(facing_turns(0.0), 0);
+        assert_eq!(facing_turns(FRAC_PI_2), 1);
+        assert_eq!(facing_turns(PI), 2);
+        assert_eq!(facing_turns(-FRAC_PI_2), 3);
+        assert_eq!(facing_turns(2.0 * PI + 0.1), 0);
     }
 }

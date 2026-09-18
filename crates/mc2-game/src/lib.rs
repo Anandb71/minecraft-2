@@ -147,7 +147,15 @@ mod tests {
 
     #[test]
     fn breaking_a_block_in_front_fills_the_inventory() {
+        use items::{Item, Tier, ToolKind};
         let mut game = Game::new();
+        {
+            let mut state = game.world.resource_mut::<interact::Interaction>();
+            *state = interact::Interaction::new(false);
+            state
+                .inventory
+                .add(Item::Tool(ToolKind::Pickaxe, Tier::Stone), 1);
+        }
         {
             let mut v = game.world.resource_mut::<Voxels>();
             v.0.fill_box(IVec3::ZERO, IVec3::new(255, 159, 255), ids::GRANITE);
@@ -167,9 +175,17 @@ mod tests {
             input.captured = true;
             input.button_down(input::Button::Primary);
         }
+        // A stone pickaxe takes about a third of a second to sandstone.
         game.update(1.0 / 60.0);
+        let v = game.world.resource::<Voxels>();
+        assert!(!v.0.voxel(IVec3::new(136, 168, 168)).is_air());
+        for _ in 0..30 {
+            game.update(1.0 / 60.0);
+        }
         let state = game.world.resource::<interact::Interaction>();
-        assert_eq!(state.inventory.volumes.get(&ids::SANDSTONE), Some(&4096));
+        let sandstone = Item::solid(ids::SANDSTONE);
+        assert_eq!(state.inventory.count(|i| i == sandstone), 1);
+        assert_eq!(state.inventory.slots[0].unwrap().life, 131);
         let v = game.world.resource::<Voxels>();
         assert!(v.0.voxel(IVec3::new(136, 168, 168)).is_air());
     }

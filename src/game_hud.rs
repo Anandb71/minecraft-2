@@ -2,7 +2,8 @@
 
 use mc2_game::Game;
 use mc2_game::blocks::BlockLayer;
-use mc2_game::interact::{HOTBAR, Interaction, Mode, Preview};
+use mc2_game::interact::{Interaction, Mode, Preview};
+use mc2_game::inventory::HOTBAR_SLOTS;
 use mc2_game::player::{MoveMode, Player};
 use mc2_game::{Voxels, view::ViewCamera};
 use mc2_render::gizmo::{AMBER, Gizmos, RED, WHITE};
@@ -32,12 +33,12 @@ pub fn draw(game: &mut Game, hud: &mut HudCanvas, gizmos: &mut Gizmos, screen: (
     }
 
     // Hotbar.
-    let slot_w = (w / HOTBAR.len() as f32).min(150.0);
-    let total = slot_w * HOTBAR.len() as f32;
+    let slot_w = (w / HOTBAR_SLOTS as f32).min(150.0);
+    let total = slot_w * HOTBAR_SLOTS as f32;
     let x0 = (w - total) * 0.5;
     let y0 = h - 44.0;
     hud.rect(x0 - 6.0, y0 - 6.0, total + 12.0, 40.0, rgba(0, 0, 0, 140));
-    for (i, kind) in HOTBAR.iter().enumerate() {
+    for (i, stack) in state.inventory.slots[..HOTBAR_SLOTS].iter().enumerate() {
         let x = x0 + i as f32 * slot_w;
         let selected = i == state.slot;
         if selected {
@@ -53,7 +54,13 @@ pub fn draw(game: &mut Game, hud: &mut HudCanvas, gizmos: &mut Gizmos, screen: (
             y0,
             1.0,
             color,
-            &format!("{} {}", i + 1, kind.name()),
+            &match stack {
+                Some(s) if s.count > 1 && !state.inventory.creative => {
+                    format!("{} {} x{}", i + 1, s.item.name(), s.count)
+                }
+                Some(s) => format!("{} {}", i + 1, s.item.name()),
+                None => format!("{}", i + 1),
+            },
         );
     }
     let mode = match state.mode {
@@ -67,7 +74,13 @@ pub fn draw(game: &mut Game, hud: &mut HudCanvas, gizmos: &mut Gizmos, screen: (
 
     let target = state.target;
     let edits = state.edits;
-    let carried: u64 = state.inventory.volumes.values().sum();
+    let carried: u32 = state
+        .inventory
+        .slots
+        .iter()
+        .flatten()
+        .map(|s| s.count)
+        .sum();
     let player_line = game
         .world
         .query::<&Player>()
@@ -94,11 +107,10 @@ pub fn draw(game: &mut Game, hud: &mut HudCanvas, gizmos: &mut Gizmos, screen: (
             .map(|b| b.name())
             .unwrap_or_else(|| "air".into());
         let line = format!(
-            "{block}  voxel {}  {:.1} m  {}  edits {edits}  carried {:.2} blocks",
+            "{block}  voxel {}  {:.1} m  {}  edits {edits}  carried {carried}",
             t.hit.material.get().name,
             t.hit.t,
             player_line,
-            carried as f64 / 4096.0
         );
         let tw = HudCanvas::text_width(&line, 1.0);
         hud.text(
