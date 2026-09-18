@@ -27,6 +27,7 @@ use glam::{IVec3, Vec3};
 use mc2_core::FxHashMap;
 use rayon::prelude::*;
 
+mod activity;
 mod surface;
 
 /// Cell edge, metres: one brick cell.
@@ -361,8 +362,10 @@ impl FluidWorld {
         }
 
         // 4. Conversions.
-        self.convert(terrain);
+        let converted = self.convert(terrain);
+        self.update_activity(&converted);
         self.stats.step_ms = start.elapsed().as_secs_f32() * 1000.0;
+        self.refresh_stats();
     }
 }
 
