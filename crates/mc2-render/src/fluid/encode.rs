@@ -43,7 +43,7 @@ impl FluidGpu {
             still_speed: STILL_SPEED,
             edit_count: self.edits.len() as u32,
             touched_count: self.touched.len() as u32,
-            _pad: 0,
+            max_speed: super::MAX_SPEED,
         }
     }
 

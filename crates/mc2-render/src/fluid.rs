@@ -14,6 +14,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::IVec3;
 use mc2_core::{FxHashMap, FxHashSet};
+pub use mc2_fluid::MAX_SPEED;
 use mc2_fluid::{Params, TILE_CELLS};
 use mc2_gpu::{HotCompute, ShaderLibrary, bind, bind_group, layout};
 use std::sync::Arc;
@@ -59,7 +60,7 @@ struct GpuParams {
     still_speed: f32,
     edit_count: u32,
     touched_count: u32,
-    _pad: u32,
+    max_speed: f32,
 }
 
 /// One slot as the GPU keeps it (`TileState` in fluid_common.wgsl).

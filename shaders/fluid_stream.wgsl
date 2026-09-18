@@ -87,6 +87,12 @@ struct Streaming {
     dm: f32,
     gas_near: bool,
     fluid_near: bool,
+    // Any water around at all, and any ground: interface cells with
+    // neither liquid nor ground beside them and under half full are spray
+    // the lattice cannot move (water crosses into gas only by filling a
+    // cell).
+    wet_near: bool,
+    ground_near: bool,
     blocked: bool,
 }
 
@@ -106,12 +112,15 @@ fn pull(q: u32, st: ptr<function, Streaming>) -> f32 {
         nk = kind[src];
     }
     if nk == LIQUID && k == LIQUID {
+        (*st).fluid_near = true;
+        (*st).wet_near = true;
         return pops_src[pop_index(src, q)];
     }
     // What this cell sent the other way, which comes back from a wall or
     // the gas, and counts in an interface cell's mass exchange.
     let out_q = pops_src[pop_index(c, opp(q))];
     if nk == SOLID {
+        (*st).ground_near = true;
         let m = specular((*st).local, q);
         if m.x == NONE {
             return out_q;
@@ -132,6 +141,7 @@ fn pull(q: u32, st: ptr<function, Streaming>) -> f32 {
         return equilibrium(q, (*st).rho_gas, u) + equilibrium(opp(q), (*st).rho_gas, u) - out_q;
     }
     (*st).fluid_near = (*st).fluid_near || nk == LIQUID;
+    (*st).wet_near = true;
     let f = pops_src[pop_index(src, q)];
     if k == INTERFACE {
         var exchange = f - out_q;
@@ -193,7 +203,7 @@ fn stream_collide(
         // The gas pressure plus the weight of the part of the cell's water
         // standing above its centre.
         let rho_gas = params.rho_gas + 3.0 * length(params.gravity) * (fill_here - 0.5);
-        var st = Streaming(s, c, local_of(i), k, fill_here, rho_gas, rho_u[c].xyz, 0.0, false, false, false);
+        var st = Streaming(s, c, local_of(i), k, fill_here, rho_gas, rho_u[c].xyz, 0.0, false, false, false, false, false);
         let f0 = pops_src[pop_index(c, 0u)];
         let f1 = pull(1u, &st);
         let f2 = pull(2u, &st);
@@ -237,6 +247,11 @@ fn stream_collide(
         m.force = params.gravity * r;
         if r > 1e-6 {
             m.u = (m.j + 0.5 * m.force) / r;
+            // Held below the lattice's stable range (see MAX_SPEED).
+            let speed = length(m.u);
+            if speed > params.max_speed {
+                m.u *= params.max_speed / speed;
+            }
         }
         let v = m.u;
         let tau = subgrid_tau(r, v, m.diag, m.off);
@@ -271,7 +286,8 @@ fn stream_collide(
             var want = 0u;
             if mc > (1.0 + params.fill_slack) * r || !st.gas_near {
                 want = TO_LIQUID;
-            } else if mc < -params.fill_slack * r || (!st.fluid_near && mc < 0.1 * r) {
+            } else if mc < -params.fill_slack * r || (!st.fluid_near && mc < 0.1 * r) || !st.wet_near
+                || (!st.fluid_near && !st.ground_near && mc < 0.5 * r) {
                 want = TO_GAS;
             }
             if want != 0u && st.blocked {

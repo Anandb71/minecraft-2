@@ -4,9 +4,9 @@
 //
 // 1. flag: each cell's transition, from what streaming asked for.
 // 2. apply: conversions take effect; converting cells set aside excess.
-// 3. share: excess split among each converting cell's interface neighbours.
-// 4. gather: interface cells collect those shares; tiles note which tiles
-//    around them their water needs.
+// 3. share: excess split among the water around each converting cell.
+// 4. gather: cells collect those shares; tiles note which tiles around
+//    them their water needs.
 //
 // Cells that convert mark their neighbours (bits in `conv`), so a cell
 // learns what happened around it from its own word instead of asking all
@@ -128,7 +128,7 @@ fn share(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) 
         var targets = 0u;
         for (var q = 1u; q < Q; q++) {
             let o = neighbour(c.slot, c.local, velocity(q));
-            if o != NONE && kind[o] == INTERFACE {
+            if o != NONE && (kind[o] == INTERFACE || kind[o] == LIQUID) {
                 targets += 1u;
             }
         }
@@ -146,18 +146,29 @@ fn gather(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index)
     let handed_near = (step_bits_around(c.slot, li) & HANDING_ON) != 0u;
     let k = kind[c.global];
     var f = 0.0;
-    if k == INTERFACE {
-        var m = mass[c.global];
-        if handed_near {
-            for (var q = 1u; q < Q; q++) {
-                let o = neighbour(c.slot, c.local, velocity(q));
-                if o != NONE {
-                    m += massex[o];
+    if (k == INTERFACE || k == LIQUID) && handed_near {
+        var share = 0.0;
+        for (var q = 1u; q < Q; q++) {
+            let o = neighbour(c.slot, c.local, velocity(q));
+            if o != NONE {
+                share += massex[o];
+            }
+        }
+        if share != 0.0 {
+            mass[c.global] += share;
+            if k == LIQUID {
+                // A liquid cell's mass is its density: the share goes into
+                // its populations by weight, which leaves its momentum be.
+                rho_u[c.global].w += share;
+                for (var q = 0u; q < Q; q++) {
+                    let at = pop_index(c.global, q);
+                    pops_dst[at] += weight(q) * share;
                 }
             }
-            mass[c.global] = m;
         }
-        f = clamp(m / max(rho_u[c.global].w, 1e-6), 0.0, 1.0);
+    }
+    if k == INTERFACE {
+        f = clamp(mass[c.global] / max(rho_u[c.global].w, 1e-6), 0.0, 1.0);
     } else if k == LIQUID {
         f = 1.0;
     }

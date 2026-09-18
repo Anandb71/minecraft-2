@@ -22,7 +22,8 @@ struct FluidParams {
     still_speed: f32,
     edit_count: u32,
     touched_count: u32,
-    _pad: u32,
+    // Fastest the water may move, lattice units (MAX_SPEED).
+    max_speed: f32,
 }
 
 struct TileState {
