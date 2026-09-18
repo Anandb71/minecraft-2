@@ -27,6 +27,8 @@ use glam::{IVec3, Vec3};
 use mc2_core::FxHashMap;
 use rayon::prelude::*;
 
+mod surface;
+
 /// Cell edge, metres: one brick cell.
 pub const CELL_M: f64 = 0.5;
 /// Simulated seconds per step.
@@ -255,7 +257,7 @@ impl FluidWorld {
     }
 
     /// Advances one lattice step (`STEP_S` seconds).
-    pub fn step(&mut self, _terrain: &dyn Terrain) {
+    pub fn step(&mut self, terrain: &dyn Terrain) {
         let start = std::time::Instant::now();
         let p = self.params;
         let tiles = &self.tiles;
@@ -358,6 +360,8 @@ impl FluidWorld {
             }
         }
 
+        // 4. Conversions.
+        self.convert(terrain);
         self.stats.step_ms = start.elapsed().as_secs_f32() * 1000.0;
     }
 }
