@@ -194,10 +194,16 @@ impl ChunkGenerator {
         // Bicubic overshoot plus amplified detail; above that the tallest
         // tree, and never below the sea's surface.
         let sea = t.params.sea_level;
-        (
-            lo - DETAIL_MARGIN_M - 8.0,
-            (hi + DETAIL_MARGIN_M + 8.0 + FLORA_HEIGHT_M).max(sea + 1.0),
-        )
+        let mut top = (hi + DETAIL_MARGIN_M + 8.0 + FLORA_HEIGHT_M).max(sea + 1.0);
+        // Towers stand far above any tree.
+        if self.flora {
+            let lo_m = glam::Vec3::new(x0, -1e4, z0);
+            let hi_m = glam::Vec3::new(x0 + size, 1e4, z0 + size);
+            for v in self.settlements.near(&self.surface, lo_m, hi_m) {
+                top = top.max(v.hi.y + 1.0);
+            }
+        }
+        (lo - DETAIL_MARGIN_M - 8.0, top)
     }
 
     /// True when the whole chunk lies below the lowest possible surface of
@@ -267,7 +273,7 @@ impl ChunkGenerator {
             let mut tree = ChunkTree::from_dense(&b.cells, b.bricks);
             flora::stamp_coarse(&mut tree, pos.origin(), &self.plants_near(pos), 1);
             for v in self.villages_near(pos) {
-                v.stamp_coarse(&mut tree, pos.origin(), &self.surface, 1);
+                v.stamp_coarse(&mut tree, pos.origin(), 1);
             }
             return tree;
         }
@@ -286,7 +292,7 @@ impl ChunkGenerator {
             &self.flora_noise,
         );
         for v in self.villages_near(pos) {
-            v.stamp_full(&mut tree, pos.origin(), &self.surface);
+            v.stamp_full(&mut tree, pos.origin());
         }
         tree
     }
@@ -407,7 +413,7 @@ impl ChunkGenerator {
         if lod == Lod::Node2 {
             flora::stamp_coarse(&mut tree, pos.origin(), &self.plants_near(pos), 4);
             for v in self.villages_near(pos) {
-                v.stamp_coarse(&mut tree, pos.origin(), &self.surface, 4);
+                v.stamp_coarse(&mut tree, pos.origin(), 4);
             }
         }
         tree
