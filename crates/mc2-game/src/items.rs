@@ -73,6 +73,9 @@ pub enum Item {
     CopperIngot,
     GoldIngot,
     SteelIngot,
+    Bucket,
+    /// A bucket of water, to pour a cubic metre where it is aimed.
+    WaterBucket,
     Tool(ToolKind, Tier),
 }
 
@@ -96,6 +99,8 @@ impl Item {
             Item::CopperIngot => "copper ingot".into(),
             Item::GoldIngot => "gold ingot".into(),
             Item::SteelIngot => "steel ingot".into(),
+            Item::Bucket => "bucket".into(),
+            Item::WaterBucket => "water bucket".into(),
             Item::Tool(kind, tier) => format!(
                 "{} {}",
                 tier.name(),
@@ -111,7 +116,8 @@ impl Item {
     /// Most of the item one slot holds.
     pub fn max_stack(&self) -> u32 {
         match self {
-            Item::Tool(..) => 1,
+            Item::Tool(..) | Item::WaterBucket => 1,
+            Item::Bucket => 16,
             _ => 64,
         }
     }

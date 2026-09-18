@@ -253,6 +253,7 @@ fn build() -> Vec<Recipe> {
             Table,
             &[(it(Item::IronIngot), 9)],
         ),
+        recipe(Item::Bucket, 1, Table, &[(it(Item::IronIngot), 3)]),
         recipe(
             Item::solid(ids::STEEL),
             1,

@@ -326,6 +326,7 @@ pub fn interact(
     mut streaming: ResMut<Streaming>,
     mut layer: ResMut<BlockLayer>,
     mut state: ResMut<Interaction>,
+    mut water: ResMut<crate::water::Water>,
     input: Res<Input>,
     time: Res<Time>,
     players: Query<(&Player, &Body)>,
@@ -410,6 +411,21 @@ pub fn interact(
     });
 
     if !input.captured {
+        return;
+    }
+    if state.mode == Mode::Block
+        && input.button_pressed(Button::Secondary)
+        && let Some(held @ (Item::Bucket | Item::WaterBucket)) = state.held()
+    {
+        use_bucket(
+            state,
+            &voxels.0,
+            &mut water,
+            origin,
+            dir,
+            held,
+            time.elapsed,
+        );
         return;
     }
     let Some(t) = state.target else {
@@ -562,6 +578,57 @@ pub fn interact(
                 state.built.push((lo, hi));
             }
         }
+    }
+}
+
+/// Right click with a bucket: an empty one fills from water in reach (water
+/// is endless, as a spring would be); a full one pours a cubic metre into
+/// the block it is aimed at.
+fn use_bucket(
+    state: &mut Interaction,
+    world: &VoxelWorld,
+    water: &mut crate::water::Water,
+    origin: DVec3,
+    dir: DVec3,
+    held: Item,
+    now: f64,
+) {
+    let creative = state.inventory.creative;
+    let (from, to) = match held {
+        Item::Bucket => {
+            let wet = raycast_filtered(world, origin, dir, REACH_M, |m| !m.is_air())
+                .is_some_and(|hit| hit.material == ids::WATER);
+            if !wet {
+                return;
+            }
+            state.say(now, "filled a bucket");
+            (Item::Bucket, Item::WaterBucket)
+        }
+        _ => {
+            let Some(t) = state.target else {
+                return;
+            };
+            let o = t.place.origin();
+            water.pour(o, o + (VOXELS_PER_BLOCK - 1));
+            state.say(now, "poured the water out");
+            (Item::WaterBucket, Item::Bucket)
+        }
+    };
+    if creative {
+        return;
+    }
+    let inv = &mut state.inventory;
+    match inv.slots[state.slot] {
+        Some(s) if s.item == from && s.count == 1 => {
+            inv.slots[state.slot] = Some(crate::inventory::Stack::new(to, 1));
+        }
+        Some(s) if s.item == from => {
+            inv.take_from(state.slot);
+            if inv.add(to, 1) > 0 {
+                state.say(now, "inventory full");
+            }
+        }
+        _ => {}
     }
 }
 

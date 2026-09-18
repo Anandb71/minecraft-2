@@ -143,6 +143,8 @@ pub fn all_items() -> Vec<Item> {
         Item::CopperIngot,
         Item::GoldIngot,
         Item::SteelIngot,
+        Item::Bucket,
+        Item::WaterBucket,
     ]);
     for tier in Tier::ALL {
         for kind in [ToolKind::Pickaxe, ToolKind::Axe, ToolKind::Shovel] {
@@ -705,6 +707,44 @@ fn flint_model() -> Model {
     })
 }
 
+/// An iron pail, tapering to its base, its handle arched over the rim;
+/// full of water or empty.
+fn bucket_model(full: bool) -> Model {
+    let iron = Vec3::new(0.58, 0.59, 0.61);
+    let water = Vec3::new(0.10, 0.30, 0.52);
+    Model::new(32, View::Iso, false, move |v| {
+        let p = v.as_vec3() + 0.5;
+        let r = Vec2::new(p.x - 16.0, p.z - 16.0).length();
+        let (bottom, rim) = (5.0, 21.0);
+        // The handle: a thin arc across the top, in the x-y plane.
+        let arc = Vec2::new(p.x - 16.0, p.y - rim).length();
+        if p.y > rim && (arc - 9.2).abs() < 0.8 && (p.z - 16.0).abs() < 0.8 {
+            return Some(Cell::Tint(iron * 0.8, Look::Metal));
+        }
+        if p.y < bottom || p.y > rim {
+            return None;
+        }
+        let radius = 7.0 + 2.2 * (p.y - bottom) / (rim - bottom);
+        if r > radius {
+            return None;
+        }
+        let wall = r > radius - 1.4 || p.y < bottom + 1.0;
+        // A rolled rim and two hoops round the pail.
+        let hoop = (p.y - 9.0).abs() < 0.7 || (p.y - 16.0).abs() < 0.7 || p.y > rim - 1.0;
+        if wall {
+            let c = if hoop { iron * 0.75 } else { iron };
+            return Some(Cell::Tint(
+                c * (1.0 + (hash(v, 40) - 0.5) * 0.06),
+                Look::Metal,
+            ));
+        }
+        (full && p.y < rim - 1.5).then(|| {
+            let glint = hash(v, 41) > 0.93;
+            Cell::Tint(if glint { water * 2.2 } else { water }, Look::Matte)
+        })
+    })
+}
+
 fn item_model(item: Item) -> Model {
     let rough = |base: Vec3, spot: Vec3, look: Look| {
         move |v: IVec3| {
@@ -757,6 +797,8 @@ fn item_model(item: Item) -> Model {
         Item::GoldIngot => ingot_model(Vec3::new(0.95, 0.72, 0.2)),
         Item::SteelIngot => ingot_model(Vec3::new(0.50, 0.57, 0.68)),
         Item::Flint => flint_model(),
+        Item::Bucket => bucket_model(false),
+        Item::WaterBucket => bucket_model(true),
         Item::Gunpowder => powder_model(),
     }
 }
