@@ -2,3 +2,6 @@
 //! half-metre cells, run only where water moves.
 
 pub mod lattice;
+mod tile;
+
+pub use tile::Kind;
