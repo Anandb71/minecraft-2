@@ -3,6 +3,7 @@
 pub mod blocks;
 pub mod clock;
 pub mod collide;
+pub mod crafting;
 pub mod input;
 pub mod interact;
 pub mod inventory;
