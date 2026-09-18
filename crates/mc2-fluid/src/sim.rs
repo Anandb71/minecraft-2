@@ -41,6 +41,11 @@ mod tests;
 pub const CELL_M: f64 = 0.5;
 /// Simulated seconds per step.
 pub const STEP_S: f64 = 1.0 / 240.0;
+/// Fastest the water may move, lattice units (about 22 m/s): beyond it the
+/// lattice leaves its low Mach range and goes unstable. Nothing falling or
+/// flowing at this scale gets near it; a cell that does is a fault
+/// (usually spray) and is held to it.
+pub const MAX_SPEED: f32 = 0.18;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Params {
@@ -405,6 +410,7 @@ impl FluidWorld {
                     }
                     let force = p.gravity;
                     let (r, v) = moments(&fi, force * rho_guess(&fi));
+                    let v = v.clamp_length_max(MAX_SPEED);
                     let force = force * r;
                     let tau = les_tau(&fi, r, v, p.tau, p.smagorinsky);
                     for q in 0..Q {
