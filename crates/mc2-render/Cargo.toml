@@ -8,6 +8,7 @@ license.workspace = true
 mc2-core.workspace = true
 mc2-gpu.workspace = true
 mc2-physics.workspace = true
+mc2-fluid.workspace = true
 mc2-voxel.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true

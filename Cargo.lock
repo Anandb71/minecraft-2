@@ -1243,6 +1243,7 @@ dependencies = [
  "glam 0.33.7",
  "log",
  "mc2-core",
+ "mc2-fluid",
  "mc2-gpu",
  "mc2-physics",
  "mc2-voxel",

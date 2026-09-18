@@ -31,6 +31,7 @@ mc2-core = { path = "crates/mc2-core" }
 mc2-game = { path = "crates/mc2-game" }
 mc2-gpu = { path = "crates/mc2-gpu" }
 mc2-physics = { path = "crates/mc2-physics" }
+mc2-fluid = { path = "crates/mc2-fluid" }
 mc2-render = { path = "crates/mc2-render" }
 mc2-structure = { path = "crates/mc2-structure" }
 mc2-voxel = { path = "crates/mc2-voxel" }
