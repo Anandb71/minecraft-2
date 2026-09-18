@@ -30,7 +30,7 @@ fn activity(@builtin(global_invocation_id) id: vec3<u32>) {
     var stirred = false;
     for (var d = 0u; d < 27u; d++) {
         let n = near[s * 27u + d];
-        if n != NONE && atomicLoad(&tile_state[n].moving[p]) != 0u {
+        if n != NONE && (atomicLoad(&tile_state[n].moving[p]) & MOVED) != 0u {
             stirred = true;
         }
     }
@@ -128,7 +128,7 @@ fn close_surface(
     }
     let l = local_of(i);
     for (var q = 1u; q < Q; q++) {
-        let n = neighbour(s, l, C[q]);
+        let n = neighbour(s, l, velocity(q));
         if n == NONE || (next[n] & 3u) == GAS {
             kind[c] = INTERFACE;
             mass[c] = rho_u[c].w;

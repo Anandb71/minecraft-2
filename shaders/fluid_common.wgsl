@@ -32,6 +32,7 @@ struct TileState {
     still: u32,
     // 1 while the tile holds water, as of the last step it ran.
     water: u32,
+    // Step words by parity: MOVED and the pass bits below.
     moving: array<atomic<u32>, 2>,
     need: array<atomic<u32>, 2>,
 }
@@ -84,19 +85,26 @@ const FROM_GAS: u32 = 3u;
 
 const MARGIN: i32 = 3;
 
-// Rest, the 6 faces, then the 12 edges, each followed by its opposite.
-const C = array<vec3<i32>, 19>(
-    vec3<i32>(0, 0, 0),
-    vec3<i32>(1, 0, 0), vec3<i32>(-1, 0, 0),
-    vec3<i32>(0, 1, 0), vec3<i32>(0, -1, 0),
-    vec3<i32>(0, 0, 1), vec3<i32>(0, 0, -1),
-    vec3<i32>(1, 1, 0), vec3<i32>(-1, -1, 0),
-    vec3<i32>(1, 0, 1), vec3<i32>(-1, 0, -1),
-    vec3<i32>(0, 1, 1), vec3<i32>(0, -1, -1),
-    vec3<i32>(1, -1, 0), vec3<i32>(-1, 1, 0),
-    vec3<i32>(1, 0, -1), vec3<i32>(-1, 0, 1),
-    vec3<i32>(0, 1, -1), vec3<i32>(0, -1, 1),
-);
+// The 19 lattice velocities (rest, the 6 faces, then the 12 edges, each
+// followed by its opposite; `C` in crates/mc2-fluid lattice.rs) as bits by
+// index: which components are non-zero, and which of those negative. Pure
+// arithmetic: indexing a constant array at run time costs a copy of it.
+const NONZERO = vec3<u32>(0x1e786u, 0x67998u, 0x79e60u);
+const NEGATIVE = vec3<u32>(0x14504u, 0x43110u, 0x29440u);
+
+fn velocity(q: u32) -> vec3<i32> {
+    let bit = vec3<u32>(1u << q);
+    let nonzero = vec3<i32>((NONZERO & bit) != vec3<u32>(0u));
+    let negative = vec3<i32>((NEGATIVE & bit) != vec3<u32>(0u));
+    return nonzero * (1 - 2 * negative);
+}
+
+// Bits a tile's step word collects: something moved (keeps it awake), and
+// which surface passes have work near it.
+const MOVED: u32 = 1u;
+const CONVERTING: u32 = 2u;
+const EMPTYING: u32 = 4u;
+const HANDING_ON: u32 = 8u;
 
 fn weight(q: u32) -> f32 {
     if q == 0u {
@@ -112,25 +120,13 @@ fn opp(q: u32) -> u32 {
     return select(q - 1u, q + 1u, (q & 1u) == 1u);
 }
 
-// Velocity `q` with its `axis` component negated.
-fn mirror(q: u32, axis: u32) -> u32 {
-    var m = C[q];
-    m[axis] = -m[axis];
-    for (var j = 0u; j < Q; j++) {
-        if all(C[j] == m) {
-            return j;
-        }
-    }
-    return q;
-}
-
 fn equilibrium(q: u32, rho: f32, u: vec3<f32>) -> f32 {
-    let cu = dot(vec3<f32>(C[q]), u);
+    let cu = dot(vec3<f32>(velocity(q)), u);
     return weight(q) * rho * (1.0 + 3.0 * cu + 4.5 * cu * cu - 1.5 * dot(u, u));
 }
 
 fn guo(q: u32, tau: f32, u: vec3<f32>, force: vec3<f32>) -> f32 {
-    let c = vec3<f32>(C[q]);
+    let c = vec3<f32>(velocity(q));
     return (1.0 - 0.5 / tau) * weight(q) * dot(3.0 * (c - u) + 9.0 * dot(c, u) * c, force);
 }
 
@@ -194,4 +190,19 @@ fn need_of(l: vec3<i32>) -> u32 {
         }
     }
     return bits;
+}
+
+var<workgroup> around_bits: atomic<u32>;
+
+// The step bits of tile `s` and the tiles around it, gathered by the whole
+// workgroup (call from uniform control flow).
+fn step_bits_around(s: u32, li: u32) -> u32 {
+    if li < 27u {
+        let n = near[s * 27u + li];
+        if n != NONE {
+            atomicOr(&around_bits, atomicLoad(&tile_state[n].moving[params.parity]));
+        }
+    }
+    workgroupBarrier();
+    return atomicLoad(&around_bits);
 }
