@@ -9,6 +9,8 @@
 //! represented without generating voxels nobody can resolve.
 
 use crate::amplify::{Surface, SurfaceSample, material_at};
+use crate::flora::{self, FLORA_HEIGHT_M, GROUND_COVER_M};
+use crate::noise::Perlin;
 use crate::noise::{hash_unit, hash3};
 use crate::strata::{Column, Strata};
 use crate::terrain::CoarseTerrain;
@@ -43,6 +45,10 @@ pub struct ChunkGenerator {
     pub surface: Surface,
     pub strata: Strata,
     seed: u64,
+    /// Edges of leaf clusters and stones.
+    flora_noise: Perlin,
+    /// Grow plants (off for terrain-only tests and measurements).
+    pub flora: bool,
 }
 
 /// Dense generation target turned into a tree in one pass.
@@ -78,6 +84,8 @@ impl Builder {
 
 /// Per-chunk samples on the brick grid.
 struct ChunkSamples<'a> {
+    /// The chunk's minimum voxel.
+    origin: IVec3,
     /// Surface samples at brick corners, 65 x 65.
     corners: Vec<SurfaceSample>,
     /// Strata columns at brick column centres, 64 x 64.
@@ -139,6 +147,8 @@ impl ChunkGenerator {
             surface: Surface::new(terrain),
             strata: Strata::new(seed),
             seed,
+            flora_noise: Perlin::new(seed ^ 0x1eaf_b10b),
+            flora: true,
         }
     }
 
@@ -172,8 +182,13 @@ impl ChunkGenerator {
                 hi = hi.max(h);
             }
         }
-        // Bicubic overshoot plus amplified detail.
-        (lo - DETAIL_MARGIN_M - 8.0, hi + DETAIL_MARGIN_M + 8.0)
+        // Bicubic overshoot plus amplified detail; above that the tallest
+        // tree, and never below the sea's surface.
+        let sea = t.params.sea_level;
+        (
+            lo - DETAIL_MARGIN_M - 8.0,
+            (hi + DETAIL_MARGIN_M + 8.0 + FLORA_HEIGHT_M).max(sea + 1.0),
+        )
     }
 
     /// True when the whole chunk lies below the lowest possible surface of
@@ -219,6 +234,7 @@ impl ChunkGenerator {
             }
         }
         ChunkSamples {
+            origin,
             corners,
             columns,
             hmin,
@@ -239,7 +255,9 @@ impl ChunkGenerator {
         let mut b = Builder::new();
         if lod == Lod::Cell {
             self.generate_coarse(&mut b, pos, lod);
-            return ChunkTree::from_dense(&b.cells, b.bricks);
+            let mut tree = ChunkTree::from_dense(&b.cells, b.bricks);
+            flora::stamp_coarse(&mut tree, pos.origin(), &self.plants_near(pos), 1);
+            return tree;
         }
         let s = self.samples(pos);
         let base_y = pos.origin().y;
@@ -249,7 +267,25 @@ impl ChunkGenerator {
         }
         let mut tree = ChunkTree::from_dense(&b.cells, b.bricks);
         self.stamp_ores(&mut tree, pos);
+        flora::stamp_full(
+            &mut tree,
+            pos.origin(),
+            &self.plants_near(pos),
+            &self.flora_noise,
+        );
         tree
+    }
+
+    /// Plants that may reach into a chunk; none for chunks far from the
+    /// surface.
+    fn plants_near(&self, pos: ChunkPos) -> Vec<flora::Plant> {
+        let lo = pos.origin().as_vec3() * VOXEL_M;
+        let hi = lo + glam::Vec3::splat(CHUNK_VOXELS as f32 * VOXEL_M);
+        let (ground_lo, _) = self.column_range(pos.0.x, pos.0.z);
+        if !self.flora || hi.y < ground_lo {
+            return Vec::new();
+        }
+        flora::plants_near(&self.surface, lo, hi, self.seed)
     }
 
     /// Coarse levels sample one surface column per node or cell and give
@@ -281,13 +317,18 @@ impl ChunkGenerator {
                 let z = origin.z as f32 * VOXEL_M + (cz as f32 + 0.5) * size_m;
                 let sample = self.surface.sample(x, z);
                 let bottom = origin.y as f32 * VOXEL_M;
-                if sample.height < bottom {
+                let sea = self.surface.terrain.params.sea_level;
+                if sample.height < bottom && sea < bottom {
                     continue;
                 }
                 let column = self.strata.column(x, z);
                 for cy in 0..per_axis {
                     let centre = bottom + (cy as f32 + 0.5) * size_m;
                     if centre > sample.height {
+                        if centre < sea {
+                            emit(level, IVec3::new(cx, cy, cz) * cells, ids::WATER);
+                            continue;
+                        }
                         break;
                     }
                     // The topmost cell shows the surface material, not
@@ -315,6 +356,9 @@ impl ChunkGenerator {
         self.coarse_columns(pos, lod, &mut |level, min_cell, m| {
             tree.set_node(level, min_cell / cells, m);
         });
+        if lod == Lod::Node2 {
+            flora::stamp_coarse(&mut tree, pos.origin(), &self.plants_near(pos), 4);
+        }
         tree
     }
 
@@ -333,8 +377,17 @@ impl ChunkGenerator {
         let y0 = (base_y + min_cell.y * 8) as f32 * VOXEL_M;
         let y1 = y0 + cells as f32 * 0.5;
         let (_, hmax, rock) = s.region(x0, z0, n);
-        if y0 >= hmax {
-            return;
+        let sea = self.surface.terrain.params.sea_level;
+        // Above the ground and its cover: open water below the sea's
+        // surface, air above it.
+        if y0 >= hmax + GROUND_COVER_M {
+            if y1 <= sea {
+                b.fill(level, min_cell, ids::WATER);
+                return;
+            }
+            if y0 >= sea {
+                return;
+            }
         }
         // Wholly rock and one stratum: a single node or cell.
         if y1 <= rock
@@ -412,7 +465,7 @@ impl ChunkGenerator {
                     .strata
                     .column(ox + x as f32 * 0.5 + 0.25, oz + z as f32 * 0.5 + 0.25);
                 idx.iter()
-                    .map(|&i| (i, self.brick_at(&corners, &column, cells[i], origin.y)))
+                    .map(|&i| (i, self.brick_at(&corners, &column, cells[i], origin)))
                     .collect::<Vec<_>>()
             })
             .collect();
@@ -421,6 +474,7 @@ impl ChunkGenerator {
     }
 
     fn brick(&self, s: &ChunkSamples<'_>, cell: IVec3, base_y: i32) -> Brick {
+        let origin = IVec3::new(s.origin.x, base_y, s.origin.z);
         let (bx, bz) = (cell.x as usize, cell.z as usize);
         let corners = [
             *s.corner(bx, bz),
@@ -428,7 +482,7 @@ impl ChunkGenerator {
             *s.corner(bx, bz + 1),
             *s.corner(bx + 1, bz + 1),
         ];
-        self.brick_at(&corners, &s.columns[bz * 64 + bx], cell, base_y)
+        self.brick_at(&corners, &s.columns[bz * 64 + bx], cell, origin)
     }
 
     /// A brick from its column's four corner samples (x-z order: 00, 10,
@@ -438,10 +492,13 @@ impl ChunkGenerator {
         corners: &[SurfaceSample; 4],
         column: &Column<'_>,
         cell: IVec3,
-        base_y: i32,
+        origin: IVec3,
     ) -> Brick {
         let [c00, c10, c01, c11] = corners;
-        let y_base = base_y + cell.y * 8;
+        let y_base = origin.y + cell.y * 8;
+        // World voxel column of the brick's first voxel; brick cells of a
+        // chunk share its origin's x and z.
+        let (base_x, base_z) = (origin.x + cell.x * 8, origin.z + cell.z * 8);
         let mut brick = Brick::empty();
         for lz in 0..8 {
             for lx in 0..8 {
@@ -461,10 +518,22 @@ impl ChunkGenerator {
                         c01.soil_depth,
                         c11.soil_depth,
                     ),
+                    temp: lerp(c00.temp, c10.temp, c01.temp, c11.temp),
+                    wet: lerp(c00.wet, c10.wet, c01.wet, c11.wet),
                 };
+                let sea = self.surface.terrain.params.sea_level;
+                // Grass and flowers grow on grassy ground above the sea.
+                let grassy = sample.height > sea + 0.3
+                    && sample.soil_depth > 0.1
+                    && self.surface.loose_material(&sample, 0.05, sample.height) == ids::GRASS;
+                let (vx, vz) = (base_x + lx, base_z + lz);
                 for ly in 0..8 {
                     let y = (y_base + ly) as f32 * VOXEL_M + VOXEL_M * 0.5;
-                    let m = material_at(&self.surface, &sample, column, y);
+                    let mut m = material_at(&self.surface, &sample, column, y);
+                    let above = y - sample.height;
+                    if m.is_air() && grassy && self.flora && above < GROUND_COVER_M {
+                        m = flora::ground_cover(&sample, sea, vx, vz, above, self.seed);
+                    }
                     if !m.is_air() {
                         brick.set(IVec3::new(lx, ly, lz), m);
                     }
@@ -608,10 +677,13 @@ mod tests {
         }
     }
 
+    /// Top of the ground in a column, not counting plants or water.
     fn top_solid(tree: &ChunkTree, x: i32, z: i32) -> Option<i32> {
-        (0..512)
-            .rev()
-            .find(|&y| !tree.voxel(IVec3::new(x, y, z)).is_air())
+        let plant = [ids::OAK_LOG, ids::PINE_LOG, ids::BIRCH_LOG, ids::CACTUS];
+        (0..512).rev().find(|&y| {
+            let m = tree.voxel(IVec3::new(x, y, z));
+            m.is_solid() && !plant.contains(&m)
+        })
     }
 
     #[test]
@@ -632,7 +704,8 @@ mod tests {
 
     #[test]
     fn adjacent_chunks_agree_at_the_seam() {
-        let g = generator();
+        let mut g = generator();
+        g.flora = false;
         let pos = land_chunk(&g);
         let east = ChunkPos(pos.0 + IVec3::X);
         let (a, b) = (g.generate(pos, Lod::Full), g.generate(east, Lod::Full));
