@@ -96,7 +96,8 @@ usage: minecraft-2 [options]
   --world <dir>          world directory (default worlds/default)
   --camera x,y,z,lx,ly,lz  headless camera position and look-at target (m)
   --demo <name>          scripted play before a capture: build, lights,
-                         mirror, blast, collapse, glass, craft, workshop
+                         mirror, blast, collapse, glass, craft, workshop,
+                         flood
   --time <hours>         time of day, e.g. 6.5 or 22 (headless: frozen)
   --gi restir|cascades   indirect light method (default: preset)
   --dof <focus_m>,<f>    depth of field for captures (35 mm lens)

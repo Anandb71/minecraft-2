@@ -35,6 +35,9 @@ pub enum Demo {
     /// The craft demo's workshop from outside: table and furnace set down,
     /// a torch beside them, and a block of ground half broken.
     Workshop,
+    /// A stone tank ahead, open on the near side, poured three metres deep:
+    /// the water collapses across the ground toward the camera.
+    Flood,
 }
 
 impl Demo {
@@ -48,6 +51,7 @@ impl Demo {
             "glass" => Some(Self::Glass),
             "craft" => Some(Self::Craft),
             "workshop" => Some(Self::Workshop),
+            "flood" => Some(Self::Flood),
             _ => None,
         }
     }
@@ -460,6 +464,50 @@ pub fn run(game: &mut Game, demo: Demo) {
                 p.host.body_count(),
                 p.last_blast
             );
+        }
+        Demo::Flood => {
+            use glam::IVec3;
+            use mc2_voxel::material::ids;
+            look(game, 0.0, 60.0);
+            let feet = {
+                let mut q = game.world.query::<&mc2_game::player::Body>();
+                q.iter(&game.world).next().map(|b| b.feet)
+            };
+            if let Some(feet) = feet {
+                let yaw = game.view().yaw;
+                let ahead = glam::DVec3::new(f64::from(yaw).sin(), 0.0, f64::from(yaw).cos());
+                let ground = (feet * 16.0).floor().as_ivec3().y;
+                let centre: IVec3 = (feet + ahead * 14.0).floor().as_ivec3();
+                let mut voxels = game.world.resource_mut::<mc2_game::Voxels>();
+                let w = &mut voxels.0;
+                // Walls 4 m high round a 7 m square, the side nearest the
+                // camera left out; the ground inside cleared of plants.
+                for bz in -4..=4 {
+                    for bx in -4..=4 {
+                        let b = centre + IVec3::new(bx, 0, bz);
+                        let lo = IVec3::new(b.x * 16, ground, b.z * 16);
+                        let ring = bx.abs() == 4 || bz.abs() == 4;
+                        let near =
+                            glam::DVec3::new(f64::from(bx), 0.0, f64::from(bz)).dot(ahead) < -2.5;
+                        let m = if ring && !near {
+                            ids::STONE_BRICK
+                        } else {
+                            ids::AIR
+                        };
+                        w.fill_box(lo, lo + IVec3::new(15, 16 * 4 - 1, 15), m);
+                    }
+                }
+                drop(voxels);
+                let lo = IVec3::new((centre.x - 3) * 16, ground, (centre.z - 3) * 16);
+                let hi = IVec3::new(
+                    (centre.x + 4) * 16 - 1,
+                    ground + 16 * 3 - 1,
+                    (centre.z + 4) * 16 - 1,
+                );
+                game.world
+                    .resource_mut::<mc2_game::water::Water>()
+                    .pour(lo, hi);
+            }
         }
         Demo::Craft => {
             workshop(game);
