@@ -482,26 +482,28 @@ pub fn run(game: &mut Game, demo: Demo) {
                 let ahead = glam::DVec3::new(f64::from(yaw).sin(), 0.0, f64::from(yaw).cos());
                 let ground = (feet * 16.0).floor().as_ivec3().y;
                 let centre: IVec3 = (feet + ahead * 14.0).floor().as_ivec3();
-                let mut voxels = game.world.resource_mut::<mc2_game::Voxels>();
-                let w = &mut voxels.0;
-                // Walls 4 m high round a 7 m square, the side nearest the
-                // camera left out; the ground inside cleared of plants.
-                for bz in -4..=4 {
-                    for bx in -4..=4 {
-                        let b = centre + IVec3::new(bx, 0, bz);
-                        let lo = IVec3::new(b.x * 16, ground, b.z * 16);
-                        let ring = bx.abs() == 4 || bz.abs() == 4;
-                        let near =
-                            glam::DVec3::new(f64::from(bx), 0.0, f64::from(bz)).dot(ahead) < -2.5;
-                        let m = if ring && !near {
-                            ids::STONE_BRICK
-                        } else {
-                            ids::AIR
-                        };
-                        w.fill_box(lo, lo + IVec3::new(15, 16 * 4 - 1, 15), m);
+                {
+                    let mut voxels = game.world.resource_mut::<mc2_game::Voxels>();
+                    let w = &mut voxels.0;
+                    // Walls 4 m high round a 7 m square, the side nearest the
+                    // camera left out; the ground inside cleared of plants.
+                    for bz in -4..=4 {
+                        for bx in -4..=4 {
+                            let b = centre + IVec3::new(bx, 0, bz);
+                            let lo = IVec3::new(b.x * 16, ground, b.z * 16);
+                            let ring = bx.abs() == 4 || bz.abs() == 4;
+                            let near = glam::DVec3::new(f64::from(bx), 0.0, f64::from(bz))
+                                .dot(ahead)
+                                < -2.5;
+                            let m = if ring && !near {
+                                ids::STONE_BRICK
+                            } else {
+                                ids::AIR
+                            };
+                            w.fill_box(lo, lo + IVec3::new(15, 16 * 4 - 1, 15), m);
+                        }
                     }
                 }
-                drop(voxels);
                 let lo = IVec3::new((centre.x - 3) * 16, ground, (centre.z - 3) * 16);
                 let hi = IVec3::new(
                     (centre.x + 4) * 16 - 1,
