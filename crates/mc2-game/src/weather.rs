@@ -87,6 +87,9 @@ pub struct Weather {
     /// Cloud cover and rain, 0..1, eased toward what the sky calls for.
     pub cover: f32,
     pub rain: f32,
+    /// How wet open ground is, 0..1: it soaks while it rains and dries
+    /// slowly after.
+    pub wetness: f32,
     /// Wind at the ground, metres a second (x, z).
     pub wind: Vec2,
     wind_goal: Vec2,
@@ -107,6 +110,7 @@ impl Default for Weather {
             left: 240.0,
             cover: 0.3,
             rain: 0.0,
+            wetness: 0.0,
             wind: Vec2::new(2.0, 1.0),
             wind_goal: Vec2::new(2.0, 1.0),
             flash: 0.0,
@@ -118,6 +122,9 @@ impl Default for Weather {
     }
 }
 
+/// Seconds of full rain to soak open ground, and to dry it after.
+const SOAK_S: f32 = 45.0;
+const DRY_S: f32 = 240.0;
 /// Cover, rain and wind ease toward their goals over about this long.
 const EASE_S: f32 = 20.0;
 const WIND_EASE_S: f32 = 8.0;
@@ -144,6 +151,7 @@ impl Weather {
         let (cover, rain, lo, hi) = sky.calls_for();
         self.cover = cover;
         self.rain = rain;
+        self.wetness = if rain > 0.0 { 1.0 } else { 0.0 };
         let dir = Vec2::from_angle(self.roll() * std::f32::consts::TAU);
         self.wind_goal = dir * (lo + hi) * 0.5;
         self.wind = self.wind_goal;
@@ -153,6 +161,11 @@ impl Weather {
     /// Advances the weather `dt` seconds.
     pub fn advance(&mut self, dt: f32) {
         self.flash = (self.flash - dt * 4.0).max(0.0);
+        self.wetness = if self.rain > 0.05 {
+            (self.wetness + dt * self.rain / SOAK_S).min(1.0)
+        } else {
+            (self.wetness - dt / DRY_S).max(0.0)
+        };
         if self.frozen {
             return;
         }
