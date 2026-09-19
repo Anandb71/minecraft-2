@@ -10,6 +10,7 @@ mod inventory_ui;
 mod logger;
 mod measure;
 mod photo;
+mod water_sim;
 mod world;
 
 fn main() {

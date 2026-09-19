@@ -127,12 +127,14 @@ pub fn run(args: &Args) -> Result<(), String> {
     }
     let tex = target(&gpu, args.size);
     renderer.frame.hud.set_icons(crate::icons::icons().atlas());
+    let mut water = crate::water_sim::WaterSim::new(&gpu, &renderer.frame.shaders);
     let mut frame_ms = RollingStats::default();
     let start = Instant::now();
     let mut last = Instant::now();
     for i in 0..args.frames {
         renderer.frame.time = i as f32 / 60.0;
         stream(&mut game, camera.position);
+        water.frame(&gpu, &renderer.frame.shaders, &mut game, 1.0 / 60.0);
         if !args.hide_bodies {
             crate::world::pose_bodies(&game, &mut renderer);
         }

@@ -14,8 +14,8 @@
 use bytemuck::{Pod, Zeroable};
 use glam::IVec3;
 use mc2_core::{FxHashMap, FxHashSet};
-pub use mc2_fluid::MAX_SPEED;
-use mc2_fluid::{Params, TILE_CELLS};
+use mc2_fluid::TILE_CELLS;
+pub use mc2_fluid::{MAX_SPEED, Params, STEP_S};
 use mc2_gpu::{HotCompute, ShaderLibrary, bind, bind_group, layout};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU8;

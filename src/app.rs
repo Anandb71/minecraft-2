@@ -45,6 +45,7 @@ pub struct App {
     gi: Option<mc2_render::indirect::GiMethod>,
     photo: crate::photo::PhotoMode,
     inventory: crate::inventory_ui::Screen,
+    water: Option<crate::water_sim::WaterSim>,
     modifiers: winit::keyboard::ModifiersState,
     screenshot_requested: bool,
     error: Option<String>,
@@ -104,6 +105,7 @@ impl App {
             gi: args.gi,
             photo: crate::photo::PhotoMode::default(),
             inventory: Default::default(),
+            water: None,
             modifiers: Default::default(),
             screenshot_requested: false,
             error: None,
@@ -163,6 +165,10 @@ impl App {
         );
         let mut renderer = renderer;
         renderer.frame.hud.set_icons(crate::icons::icons().atlas());
+        self.water = Some(crate::water_sim::WaterSim::new(
+            &gpu,
+            &renderer.frame.shaders,
+        ));
         self.running = Some(Running {
             window,
             surface,
@@ -267,6 +273,11 @@ impl App {
             self.camera.fov_y = Camera::default().fov_y;
         }
         stream(&mut self.game, self.camera.position);
+        if let (Some(w), Some(r)) = (&mut self.water, &self.running)
+            && !self.photo.active
+        {
+            w.frame(&r.gpu, &r.renderer.frame.shaders, &mut self.game, dt);
+        }
 
         let Some(r) = &mut self.running else {
             return;
@@ -363,6 +374,9 @@ impl App {
                 ),
                 crate::world::physics_line(&self.game, renderer),
                 crate::world::structure_line(&self.game),
+                self.water
+                    .as_ref()
+                    .map_or_else(String::new, |w| w.line(&self.game)),
                 {
                     let clock = self.game.world.resource::<mc2_game::clock::WorldClock>();
                     let hour = clock.hour();
