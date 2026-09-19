@@ -43,6 +43,8 @@ pub struct Args {
     pub dof: Option<(f32, f32)>,
     /// Creative play: nothing runs out, anything can be made anywhere.
     pub creative: bool,
+    /// Weather to start in (headless: held there).
+    pub weather: Option<mc2_game::weather::Sky>,
 }
 
 /// Quality settings from the preset plus command line overrides.
@@ -76,6 +78,7 @@ impl Default for Args {
             gi: None,
             dof: None,
             creative: false,
+            weather: None,
         }
     }
 }
@@ -92,6 +95,7 @@ usage: minecraft-2 [options]
   --hide-bodies          do not draw rigid bodies (A/B measurement)
   --physics-thread       headless: physics on its own thread, paced in real time
   --creative             creative play: nothing runs out (default survival)
+  --weather <sky>        clear, cloudy, rain or storm (headless: held)
   --seed <n>             world seed (default 42)
   --world <dir>          world directory (default worlds/default)
   --camera x,y,z,lx,ly,lz  headless camera position and look-at target (m)
@@ -133,6 +137,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--hide-bodies" => out.hide_bodies = true,
             "--physics-thread" => out.physics_thread = true,
             "--creative" => out.creative = true,
+            "--weather" => {
+                let v = value("--weather")?;
+                out.weather = Some(
+                    mc2_game::weather::Sky::parse(&v).ok_or(format!("unknown weather `{v}`"))?,
+                );
+            }
             "--seed" => {
                 out.seed = value("--seed")?
                     .parse()
@@ -208,6 +218,13 @@ mod tests {
     fn creative_is_a_flag() {
         assert!(!p("").unwrap().creative);
         assert!(p("--creative").unwrap().creative);
+    }
+
+    #[test]
+    fn weather_names_a_sky() {
+        use mc2_game::weather::Sky;
+        assert_eq!(p("--weather storm").unwrap().weather, Some(Sky::Storm));
+        assert!(p("--weather hail").is_err());
     }
 
     #[test]

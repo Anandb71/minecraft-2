@@ -279,3 +279,37 @@ pub fn physics_line(game: &Game, renderer: &mc2_render::Renderer) -> String {
         physics.blasts_total
     )
 }
+
+/// The weather as the renderer draws it: cloud cover and wind, fog, rain
+/// or snow by the climate where the camera is (nothing falls under a
+/// roof), wet ground, and lightning, for a camera at `at`.
+pub fn weather(game: &Game, renderer: &mut mc2_render::Renderer, at: DVec3) {
+    use mc2_game::weather::Weather;
+    let w = game.world.resource::<Weather>();
+    let p = at;
+    let cold = game
+        .world
+        .resource::<Streaming>()
+        .0
+        .as_ref()
+        .is_some_and(|s| {
+            let q = s.generator().surface.sample(p.x as f32, p.z as f32);
+            q.temp < 0.32 || p.y as f32 > mc2_worldgen::amplify::SNOWLINE_M
+        });
+    let voxels = &game.world.resource::<Voxels>().0;
+    let eye = (p * 16.0).floor().as_ivec3();
+    let covered = (1..48).any(|k| voxels.voxel(eye + glam::IVec3::Y * (k * 8)).is_solid());
+    let falling = if covered { 0.0 } else { w.rain };
+    renderer.weather = mc2_render::camera::WeatherLook {
+        rain: if cold { 0.0 } else { falling },
+        snow: if cold { falling } else { 0.0 },
+        flash: w.flash,
+        wetness: if cold { 0.0 } else { w.wetness },
+        wind: w.wind.to_array(),
+        cover: w.cover,
+    };
+    renderer.clouds.coverage = w.cover;
+    renderer.clouds.precipitation = w.rain;
+    renderer.clouds.wind = (w.wind * 4.0 + glam::Vec2::new(4.0, 2.0)).to_array();
+    renderer.fog.density = mc2_render::fog::FogSettings::default().density * (1.0 + 5.0 * w.rain);
+}

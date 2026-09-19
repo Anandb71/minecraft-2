@@ -69,6 +69,11 @@ pub fn run(args: &Args) -> Result<(), String> {
             clock.set_hour(hour);
         }
     }
+    if let Some(sky) = args.weather {
+        let mut w = game.world.resource_mut::<mc2_game::weather::Weather>();
+        w.set(sky);
+        w.frozen = true;
+    }
     renderer.celestial = crate::world::celestial(&game);
     let mut camera = spawn_camera(&terrain);
     if let Some((pos, look)) = args.camera {
@@ -135,6 +140,7 @@ pub fn run(args: &Args) -> Result<(), String> {
         renderer.frame.time = i as f32 / 60.0;
         stream(&mut game, camera.position);
         water.frame(&gpu, &renderer.frame.shaders, &mut game, 1.0 / 60.0);
+        crate::world::weather(&game, &mut renderer, camera.position);
         if !args.hide_bodies {
             crate::world::pose_bodies(&game, &mut renderer);
         }

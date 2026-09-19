@@ -85,6 +85,11 @@ impl App {
         let mut game = Game::new();
         game.world
             .insert_resource(mc2_game::interact::Interaction::new(args.creative));
+        if let Some(sky) = args.weather {
+            game.world
+                .resource_mut::<mc2_game::weather::Weather>()
+                .set(sky);
+        }
         // Physics runs on its own thread in the window; tests and headless
         // captures step it inline.
         game.world.resource_mut::<mc2_game::physics::Physics>().host =
@@ -296,6 +301,7 @@ impl App {
         renderer.frame.time = self.start.elapsed().as_secs_f32();
         renderer.debug_mode = self.debug_mode;
         renderer.celestial = crate::world::celestial(&self.game);
+        crate::world::weather(&self.game, renderer, self.camera.position);
         if self.photo.active {
             self.photo.apply(renderer);
         } else {
