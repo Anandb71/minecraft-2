@@ -11,11 +11,15 @@ use mc2_render::fluid::{FluidGpu, Params, STEP_S};
 const MAX_TILES: u32 = 4096;
 /// Lattice steps a frame at most, so a stall does not spiral.
 const MAX_STEPS: u32 = 8;
+/// Frames between writing levels into the world: water flows on screen at
+/// 20 Hz, while each write re-uploads and rescans the chunks it touches.
+const APPLY_EVERY: u32 = 3;
 
 pub struct WaterSim {
     fluid: FluidGpu,
     /// Simulated seconds owed to the lattice.
     owed: f64,
+    frames: u32,
 }
 
 impl WaterSim {
@@ -23,6 +27,7 @@ impl WaterSim {
         Self {
             fluid: FluidGpu::new(&gpu.device, shaders, MAX_TILES, Params::default()),
             owed: 0.0,
+            frames: 0,
         }
     }
 
@@ -72,6 +77,10 @@ impl WaterSim {
         self.fluid.after_submit();
         let _ = gpu.device.poll(wgpu::PollType::Poll);
         self.fluid.harvest();
+        self.frames = self.frames.wrapping_add(1);
+        if !self.frames.is_multiple_of(APPLY_EVERY) {
+            return;
+        }
         if let Some(levels) = self.fluid.take_levels() {
             mc2_core::scope!("water.apply");
             game.world
