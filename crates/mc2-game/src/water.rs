@@ -178,7 +178,7 @@ impl Water {
             *n > 0
         });
         self.frame = self.frame.wrapping_add(1);
-        if self.frame % REFILL_EVERY == 0 {
+        if self.frame.is_multiple_of(REFILL_EVERY) {
             self.refill();
         }
     }
