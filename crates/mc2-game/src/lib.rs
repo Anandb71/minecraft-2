@@ -4,6 +4,7 @@ pub mod blocks;
 pub mod clock;
 pub mod collide;
 pub mod crafting;
+pub mod fire;
 pub mod input;
 pub mod interact;
 pub mod inventory;
@@ -56,6 +57,7 @@ impl Game {
         world.insert_resource(physics::Physics::default());
         world.insert_resource(structure::Structure::default());
         world.insert_resource(water::Water::default());
+        world.insert_resource(fire::Fire::default());
 
         let mut frame = Schedule::default();
         frame.add_systems((clock::advance_clock, player::look, player::toggles).chain());
@@ -68,6 +70,7 @@ impl Game {
                 interact::interact,
                 physics::light_fuses,
                 structure::update_structure,
+                fire::update_fire,
                 water::take_edits,
             )
                 .chain(),

@@ -99,6 +99,8 @@ pub struct Physics {
     pub edited_out: Vec<(IVec3, IVec3)>,
     /// The same edits, for the water.
     pub water_out: Vec<(IVec3, IVec3)>,
+    /// Blasts set off (centre and radius, metres), for the fire.
+    pub blasts_out: Vec<(glam::DVec3, f32)>,
     /// Boxes where settled debris became terrain again.
     pub baked_out: Vec<(IVec3, IVec3)>,
     pub blasts_total: u64,
@@ -115,6 +117,7 @@ impl Default for Physics {
             last_blast: None,
             edited_out: Vec::new(),
             water_out: Vec::new(),
+            blasts_out: Vec::new(),
             baked_out: Vec::new(),
             blasts_total: 0,
             next_bake: 0.0,
@@ -248,6 +251,7 @@ pub fn detonate(
         physics.host.spawn_debris(d);
     }
     physics.world_edited(lo, hi);
+    physics.blasts_out.push((blast.centre, blast.radius));
     interaction.edits += 1;
     physics.blasts_total += 1;
     physics.last_blast = Some(report);
