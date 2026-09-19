@@ -138,8 +138,10 @@ pub struct GpuWorld {
     pending: FxHashSet<ChunkPos>,
     /// Camera brick cell at the last proximity scan.
     proximity_at: Option<IVec3>,
-    /// Chunks whose content reached the GPU (or left it) since `take_changed`.
-    changed: Vec<ChunkPos>,
+    /// Chunks whose content reached the GPU (or left it) since
+    /// `take_changed`, each with whether it may have gained or changed
+    /// light: new, removed, or with an emissive voxel in a changed brick.
+    changed: Vec<(ChunkPos, bool)>,
     pub stats: GpuWorldStats,
 }
 
@@ -624,18 +626,22 @@ impl GpuWorld {
                 break;
             }
             self.pending.remove(&pos);
-            self.changed.push(pos);
             let Some(dirty) = world.take_chunk_dirty(pos) else {
+                self.changed.push((pos, true));
                 self.free_chunk(pos);
                 continue;
             };
             let (structure, bricks) = dirty;
             let prepared = world.chunk_untracked(pos).and_then(ChunkTree::take_flat);
             let tree = world.chunk(pos).expect("chunk has dirty state");
-            if structure
-                || !self.chunks.contains_key(&pos)
-                || self.chunks[&pos].tree_id != tree.id()
-            {
+            let new = !self.chunks.contains_key(&pos) || self.chunks[&pos].tree_id != tree.id();
+            let lit = new
+                || bricks.iter().any(|&slot| {
+                    (slot as usize) < tree.brick_count()
+                        && tree.brick(slot).materials().any(|(m, _)| m.is_emissive())
+                });
+            self.changed.push((pos, lit));
+            if structure || new {
                 self.upload_structure(queue, pos, tree, prepared);
             }
             for slot in bricks {
@@ -739,8 +745,9 @@ impl GpuWorld {
         self.stats.voxel_mb = self.voxel_alloc.used_words() as f32 * 4.0 / 1.0e6;
     }
 
-    /// Chunks uploaded or removed since the last call.
-    pub fn take_changed(&mut self) -> Vec<ChunkPos> {
+    /// Chunks uploaded or removed since the last call, each with whether
+    /// its lights may have changed.
+    pub fn take_changed(&mut self) -> Vec<(ChunkPos, bool)> {
         std::mem::take(&mut self.changed)
     }
 

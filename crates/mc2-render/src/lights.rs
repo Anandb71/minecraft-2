@@ -225,6 +225,12 @@ impl LightRegistry {
         self.sampled
     }
 
+    /// Whether a changed chunk needs its emitters found again: it had some,
+    /// or its change may have brought some.
+    pub fn needs_scan(&self, pos: ChunkPos, maybe_lit: bool) -> bool {
+        maybe_lit || self.by_chunk.contains_key(&pos)
+    }
+
     /// Replaces a chunk's emitters; `None` removes the chunk.
     pub fn update_chunk(&mut self, pos: ChunkPos, tree: Option<&ChunkTree>) {
         if let Some(old) = self.by_chunk.remove(&pos) {

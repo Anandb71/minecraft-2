@@ -9,8 +9,15 @@ use crate::present::PresentPass;
 use crate::quality::Quality;
 use crate::vis::{BeamPass, PrimaryVisPass, VisTargets};
 use crate::voxel_gpu::{GpuWorld, GpuWorldConfig};
+use mc2_core::FxHashMap;
 use mc2_gpu::{FrameGraph, Gpu, GpuProfiler, TexHandle, TextureDesc};
+use mc2_voxel::coords::ChunkPos;
 use mc2_voxel::world::VoxelWorld;
+
+/// Frames between rescans of one chunk's lights and sky heights, so a
+/// chunk edited every frame (water flowing, fire burning) costs a scan a
+/// fifth of a second rather than every frame.
+const RESCAN_FRAMES: u32 = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderMode {
@@ -59,6 +66,11 @@ pub struct Renderer {
     pub beam: bool,
     /// Sub-pixel camera jitter for temporal upsampling; on in world mode.
     pub jitter: bool,
+    /// Changed chunks waiting to have lights and sky heights rescanned,
+    /// with whether they may have gained light.
+    rescans: FxHashMap<ChunkPos, bool>,
+    /// When recently rescanned chunks were last scanned.
+    scanned_at: FxHashMap<ChunkPos, u32>,
 }
 
 /// Indirect light and its denoiser run at half the render resolution.
@@ -388,6 +400,8 @@ impl Renderer {
             debug_mode: 0,
             beam: true,
             jitter: opts.mode == RenderMode::World,
+            rescans: FxHashMap::default(),
+            scanned_at: FxHashMap::default(),
         }
     }
 
@@ -438,8 +452,28 @@ impl Renderer {
             .update(&gpu.queue, &self.bodies, camera.position);
         {
             mc2_core::scope!("lights.update");
-            for pos in self.world.take_changed() {
-                self.lights.update_chunk(pos, world.chunk(pos));
+            // A chunk edited every frame (water flowing, fire burning) is
+            // scanned again at most every RESCAN_FRAMES; the rest wait.
+            for (pos, lit) in self.world.take_changed() {
+                *self.rescans.entry(pos).or_default() |= lit;
+            }
+            let frame = self.frame.frame_index;
+            self.scanned_at
+                .retain(|_, at| frame.wrapping_sub(*at) < RESCAN_FRAMES);
+            let due: Vec<(ChunkPos, bool)> = self
+                .rescans
+                .iter()
+                .filter(|(pos, _)| !self.scanned_at.contains_key(pos))
+                .map(|(&pos, &lit)| (pos, lit))
+                .collect();
+            for (pos, lit) in due {
+                self.rescans.remove(&pos);
+                self.scanned_at.insert(pos, frame);
+                if self.lights.needs_scan(pos, lit) {
+                    mc2_core::scope!("lights.emitters");
+                    self.lights.update_chunk(pos, world.chunk(pos));
+                }
+                mc2_core::scope!("lights.skymap");
                 self.skymap.update_chunk(pos, world.chunk(pos));
             }
             self.lights.upload(&gpu.device, &gpu.queue, camera.position);
