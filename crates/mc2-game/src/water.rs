@@ -23,9 +23,14 @@ use mc2_worldgen::stream::ChunkStreamer;
 /// Voxels along a cell's edge.
 pub const CELL_VOXELS: i32 = 8;
 /// How far (cells) from an edit still water is taken into the simulation.
-const PROMOTE_RADIUS: i32 = 24;
+const PROMOTE_RADIUS: i32 = 16;
 /// Most cells one edit takes in.
-const PROMOTE_MAX: usize = 16_000;
+const PROMOTE_MAX: usize = 8_000;
+/// A reservoir cell is refilled once it has drained below this (eighths):
+/// not at every ripple, which would keep the sea from ever sleeping.
+const REFILL_BELOW: u8 = 6;
+/// Frames between reservoir refills.
+const REFILL_EVERY: u32 = 8;
 /// Frames after still water joins the simulation during which levels read
 /// back cannot lower it: they may predate the simulation taking it.
 const SETTLE_FRAMES: u8 = 8;
@@ -40,6 +45,7 @@ pub struct Water {
     reservoir: Vec<IVec3>,
     /// Tiles that just took in still water, and frames left to settle.
     settling: FxHashMap<IVec3, u8>,
+    frame: u32,
     /// Cells to fill with water, for the simulation to take.
     pub add: Vec<IVec3>,
     /// Inclusive cell boxes whose solidity may have changed.
@@ -145,12 +151,15 @@ impl Water {
             self.settling
                 .insert(c.div_euclid(IVec3::splat(TILE)), SETTLE_FRAMES);
         }
-        // Along the edge of what was taken, the sea stays full.
+        // Along the edge of what was taken, below its surface, the sea
+        // stays full.
         for &c in &taken {
+            let above = c + IVec3::Y;
+            let submerged = self.promoted.contains(&above) || self.still_water(world, above);
             let edge = [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z, IVec3::NEG_Y]
                 .iter()
                 .any(|&d| self.still_water(world, c + d));
-            if edge {
+            if edge && submerged {
                 self.reservoir.push(c);
             }
         }
@@ -161,21 +170,24 @@ impl Water {
         !self.simulated(c) && is_water(world.voxel(c * CELL_VOXELS + CELL_VOXELS / 2))
     }
 
-    /// Once a frame: settling tiles count down, and the reservoir cells
-    /// that have drained ask to be filled again.
+    /// Once a frame: settling tiles count down, and every few frames the
+    /// reservoir cells that have drained ask to be filled again.
     pub fn tick(&mut self) {
         self.settling.retain(|_, n| {
             *n -= 1;
             *n > 0
         });
-        self.refill();
+        self.frame = self.frame.wrapping_add(1);
+        if self.frame % REFILL_EVERY == 0 {
+            self.refill();
+        }
     }
 
     /// Asks for the reservoir cells that have drained to be filled again.
     pub fn refill(&mut self) {
         for i in 0..self.reservoir.len() {
             let c = self.reservoir[i];
-            if self.level(c) < 8 {
+            if self.level(c) < REFILL_BELOW {
                 self.add.push(c);
             }
         }
