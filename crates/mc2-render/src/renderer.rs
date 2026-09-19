@@ -66,6 +66,8 @@ pub struct Renderer {
     pub beam: bool,
     /// Sub-pixel camera jitter for temporal upsampling; on in world mode.
     pub jitter: bool,
+    /// What the weather looks like; the game sets it each frame.
+    pub weather: crate::camera::WeatherLook,
     /// Changed chunks waiting to have lights and sky heights rescanned,
     /// with whether they may have gained light.
     rescans: FxHashMap<ChunkPos, bool>,
@@ -400,6 +402,7 @@ impl Renderer {
             debug_mode: 0,
             beam: true,
             jitter: opts.mode == RenderMode::World,
+            weather: Default::default(),
             rescans: FxHashMap::default(),
             scanned_at: FxHashMap::default(),
         }
@@ -504,6 +507,7 @@ impl Renderer {
             beam: self.beam,
             trace_stride: self.quality.trace_stride,
             light_count: self.lights.sampled_len(),
+            weather: self.weather,
         });
         self.prev_camera = Some(*camera);
     }

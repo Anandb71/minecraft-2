@@ -93,6 +93,27 @@ pub struct FrameUniforms {
     pub star_rotation: f32,
     pub latitude: f32,
     pub sky_flags: u32,
+    /// Rain falling in view, snow falling in view, lightning flash, and how
+    /// wet surfaces open to the sky are; each 0..1.
+    pub weather: [f32; 4],
+    /// Wind at the ground (x, z metres a second), cloud cover, unused.
+    pub wind: [f32; 4],
+}
+
+/// What the weather looks like this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WeatherLook {
+    /// Rain in the air where the camera is, 0..1 (none under a roof).
+    pub rain: f32,
+    /// Snow in the air, 0..1.
+    pub snow: f32,
+    /// Lightning flash, 0..1.
+    pub flash: f32,
+    /// How wet surfaces open to the sky are, 0..1.
+    pub wetness: f32,
+    /// Wind at the ground, metres a second (x, z).
+    pub wind: [f32; 2],
+    pub cover: f32,
 }
 
 /// `sky_flags` bit: the moon-lit sky LUTs are rendered this frame.
@@ -169,6 +190,7 @@ pub struct FrameInputs {
     pub beam: bool,
     pub trace_stride: u32,
     pub light_count: u32,
+    pub weather: WeatherLook,
 }
 
 impl FrameUniforms {
@@ -220,6 +242,13 @@ impl FrameUniforms {
             star_rotation: i.celestial.star_rotation,
             latitude: i.celestial.latitude,
             sky_flags: if i.celestial.moon_sky() { SKY_MOON } else { 0 },
+            weather: [
+                i.weather.rain,
+                i.weather.snow,
+                i.weather.flash,
+                i.weather.wetness,
+            ],
+            wind: [i.weather.wind[0], i.weather.wind[1], i.weather.cover, 0.0],
         }
     }
 
@@ -235,7 +264,7 @@ mod tests {
     #[test]
     fn uniform_block_matches_wgsl_size() {
         // 3 mat4 (192) + 3 x 16 + 4 x vec2 (32) + 6 x 16, as laid out in frame.wgsl
-        assert_eq!(std::mem::size_of::<FrameUniforms>(), 368);
+        assert_eq!(std::mem::size_of::<FrameUniforms>(), 400);
     }
 
     #[test]
@@ -277,6 +306,7 @@ mod tests {
             beam: false,
             trace_stride: 1,
             light_count: 0,
+            weather: Default::default(),
         });
         let inv = Mat4::from_cols_array_2d(&u.inv_view_proj);
         let far = inv * glam::Vec4::new(0.0, 0.0, 0.5, 1.0);
