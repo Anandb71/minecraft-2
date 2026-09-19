@@ -245,7 +245,8 @@ fn burn_block(
             continue;
         }
         let beside = FACES.iter().any(|&d| flammable(world.voxel(v + d)));
-        if !beside {
+        let on_top = v.y == o.y + n && world.voxel(v - IVec3::Y).is_solid();
+        if !beside && !on_top {
             continue;
         }
         let height = 1 + fire.roll_int((2.0 + 8.0 * intensity) as i32);

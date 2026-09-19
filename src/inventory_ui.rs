@@ -563,8 +563,8 @@ fn why(e: CraftError) -> String {
 }
 
 fn stack_name(s: &Stack) -> String {
-    match s.item.tool() {
-        Some((_, tier)) => format!("{} ({}/{})", s.item.name(), s.life, tier.durability()),
+    match s.item.uses() {
+        Some(uses) => format!("{} ({}/{uses})", s.item.name(), s.life),
         None => s.item.name(),
     }
 }
@@ -692,10 +692,10 @@ fn draw_stack(hud: &mut HudCanvas, s: Stack, x: f32, y: f32, size: f32, creative
         hud.text(tx + 2.0, ty + 2.0, 2.0, rgba(0, 0, 0, 200), &label);
         hud.text(tx, ty, 2.0, INK, &label);
     }
-    if let Some((_, tier)) = s.item.tool()
-        && s.life < tier.durability()
+    if let Some(uses) = s.item.uses()
+        && s.life < uses
     {
-        let f = s.life as f32 / tier.durability() as f32;
+        let f = s.life as f32 / uses as f32;
         let (bx, by, bw) = (x + 4.0, y + size - 3.0, size - 8.0);
         hud.rect(bx, by, bw, 3.0, rgba(0, 0, 0, 200));
         let c = rgba((255.0 * (1.0 - f)) as u8, (220.0 * f + 35.0) as u8, 40, 255);

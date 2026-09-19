@@ -165,6 +165,12 @@ fn build() -> Vec<Recipe> {
         ),
         recipe(Item::Stick, 4, Hand, &[(AnyPlanks, 2)]),
         recipe(
+            Item::FlintAndSteel,
+            1,
+            Hand,
+            &[(it(Item::Flint), 1), (it(Item::IronIngot), 1)],
+        ),
+        recipe(
             Item::Block(BlockKind::CraftingTable),
             1,
             Hand,

@@ -14,7 +14,7 @@ pub const BLOCK_VOXELS: u64 = 4096;
 pub struct Stack {
     pub item: Item,
     pub count: u32,
-    /// Uses a tool has left (0 for everything else).
+    /// Uses left of something that wears (0 for everything else).
     pub life: u32,
 }
 
@@ -23,7 +23,7 @@ impl Stack {
         Self {
             item,
             count,
-            life: item.tool().map_or(0, |(_, t)| t.durability()),
+            life: item.uses().unwrap_or(0),
         }
     }
 }
@@ -156,7 +156,7 @@ impl Inventory {
         let Some(s) = &mut self.slots[slot] else {
             return false;
         };
-        if s.item.tool().is_none() {
+        if s.item.uses().is_none() {
             return false;
         }
         s.life = s.life.saturating_sub(1);

@@ -145,6 +145,7 @@ pub fn all_items() -> Vec<Item> {
         Item::SteelIngot,
         Item::Bucket,
         Item::WaterBucket,
+        Item::FlintAndSteel,
     ]);
     for tier in Tier::ALL {
         for kind in [ToolKind::Pickaxe, ToolKind::Axe, ToolKind::Shovel] {
@@ -745,6 +746,38 @@ fn bucket_model(full: bool) -> Model {
     })
 }
 
+/// A C-shaped steel striker with a shard of flint beside it, face-on.
+fn flint_and_steel_model() -> Model {
+    let steel = Vec3::new(0.52, 0.56, 0.62);
+    Model::new(32, View::Flat, false, move |v| {
+        let p = Vec2::new(v.x as f32 + 0.5, v.y as f32 + 0.5);
+        let z = (v.z as f32 + 0.5 - 16.0).abs();
+        // The striker: a thick ring open on its lower left.
+        let d = p - Vec2::new(19.0, 18.0);
+        let ring = (d.length() - 7.5).abs() < 2.0 && !(d.x < -1.0 && d.y < -1.0);
+        if ring && z < 1.8 {
+            let c = if (d.length() - 7.5) > 1.0 {
+                steel * 1.3
+            } else {
+                steel
+            };
+            return Some(Cell::Tint(c, Look::Metal));
+        }
+        // The flint: a small dark shard, lower left.
+        let q = p - Vec2::new(9.0, 9.0);
+        let shard = q.x.abs() * 0.8 + q.y.abs() < 5.5 + (hash(v / 2, 42) - 0.5) * 1.5;
+        (shard && z < 1.4).then(|| {
+            let edge = q.x.abs() * 0.8 + q.y.abs() > 4.2;
+            let c = if edge {
+                Vec3::new(0.3, 0.29, 0.28)
+            } else {
+                Vec3::splat(0.07)
+            };
+            Cell::Tint(c, Look::Matte)
+        })
+    })
+}
+
 fn item_model(item: Item) -> Model {
     let rough = |base: Vec3, spot: Vec3, look: Look| {
         move |v: IVec3| {
@@ -799,6 +832,7 @@ fn item_model(item: Item) -> Model {
         Item::Flint => flint_model(),
         Item::Bucket => bucket_model(false),
         Item::WaterBucket => bucket_model(true),
+        Item::FlintAndSteel => flint_and_steel_model(),
         Item::Gunpowder => powder_model(),
     }
 }

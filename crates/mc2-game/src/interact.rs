@@ -344,6 +344,7 @@ pub fn interact(
     mut layer: ResMut<BlockLayer>,
     mut state: ResMut<Interaction>,
     mut water: ResMut<crate::water::Water>,
+    mut fire: ResMut<crate::fire::Fire>,
     input: Res<Input>,
     time: Res<Time>,
     players: Query<(&Player, &Body)>,
@@ -443,6 +444,18 @@ pub fn interact(
             held,
             time.elapsed,
         );
+        return;
+    }
+    if state.mode == Mode::Block
+        && input.button_pressed(Button::Secondary)
+        && state.held() == Some(Item::FlintAndSteel)
+    {
+        if let Some(t) = state.target {
+            fire.ignite.push((t.block, true));
+            if state.inventory.wear(state.slot) {
+                state.say(time.elapsed, "your flint and steel wore out");
+            }
+        }
         return;
     }
     let Some(t) = state.target else {

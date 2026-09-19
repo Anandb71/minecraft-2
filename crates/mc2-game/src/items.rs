@@ -76,6 +76,8 @@ pub enum Item {
     Bucket,
     /// A bucket of water, to pour a cubic metre where it is aimed.
     WaterBucket,
+    /// Strikes sparks: sets what it is used on alight.
+    FlintAndSteel,
     Tool(ToolKind, Tier),
 }
 
@@ -101,6 +103,7 @@ impl Item {
             Item::SteelIngot => "steel ingot".into(),
             Item::Bucket => "bucket".into(),
             Item::WaterBucket => "water bucket".into(),
+            Item::FlintAndSteel => "flint and steel".into(),
             Item::Tool(kind, tier) => format!(
                 "{} {}",
                 tier.name(),
@@ -116,9 +119,18 @@ impl Item {
     /// Most of the item one slot holds.
     pub fn max_stack(&self) -> u32 {
         match self {
-            Item::Tool(..) | Item::WaterBucket => 1,
+            Item::Tool(..) | Item::WaterBucket | Item::FlintAndSteel => 1,
             Item::Bucket => 16,
             _ => 64,
+        }
+    }
+
+    /// Uses before it wears out, for things that wear.
+    pub fn uses(&self) -> Option<u32> {
+        match *self {
+            Item::Tool(_, tier) => Some(tier.durability()),
+            Item::FlintAndSteel => Some(64),
+            _ => None,
         }
     }
 
