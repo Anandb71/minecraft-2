@@ -173,6 +173,7 @@ pub fn run(args: &Args) -> Result<(), String> {
                 ),
                 crate::world::physics_line(&game, &renderer),
                 crate::world::structure_line(&game),
+                water.line(&game),
             ];
             let input = mc2_render::overlay::OverlayInput {
                 gpu: &renderer.profiler,

@@ -38,6 +38,9 @@ pub enum Demo {
     /// A stone tank ahead, open on the near side, poured three metres deep:
     /// the water collapses across the ground toward the camera.
     Flood,
+    /// Standing on a beach facing the sea: dig a trench 2 m wide from the
+    /// player's feet to the water, below sea level, and let the sea in.
+    Shore,
 }
 
 impl Demo {
@@ -52,6 +55,7 @@ impl Demo {
             "craft" => Some(Self::Craft),
             "workshop" => Some(Self::Workshop),
             "flood" => Some(Self::Flood),
+            "shore" => Some(Self::Shore),
             _ => None,
         }
     }
@@ -507,6 +511,68 @@ pub fn run(game: &mut Game, demo: Demo) {
                 game.world
                     .resource_mut::<mc2_game::water::Water>()
                     .pour(lo, hi);
+            }
+        }
+        Demo::Shore => {
+            use glam::{DVec3, IVec3};
+            use mc2_voxel::material::ids;
+            let feet = {
+                let mut q = game.world.query::<&mc2_game::player::Body>();
+                q.iter(&game.world).next().map(|b| b.feet)
+            };
+            if let Some(feet) = feet {
+                let yaw = game.view().yaw;
+                let ahead = DVec3::new(f64::from(yaw).sin(), 0.0, f64::from(yaw).cos());
+                let side = DVec3::new(ahead.z, 0.0, -ahead.x);
+                let sea = 96.0 * 16.0;
+                let floor = (sea - 20.0) as i32;
+                let top = (feet.y * 16.0) as i32 + 32;
+                game.world.resource_scope(
+                    |world, mut state: bevy_ecs::prelude::Mut<Interaction>| {
+                        world.resource_scope(
+                            |world, mut streaming: bevy_ecs::prelude::Mut<mc2_game::Streaming>| {
+                                let mut voxels = world.resource_mut::<mc2_game::Voxels>();
+                                // Half a metre at a time toward the sea, until two
+                                // metres past the first water.
+                                let mut past_water = None;
+                                for step in 2..120 {
+                                    let at = feet + ahead * (f64::from(step) * 0.5);
+                                    let a = ((at - side) * 16.0).floor().as_ivec3();
+                                    let b = ((at + side) * 16.0).floor().as_ivec3();
+                                    let lo = IVec3::new(a.x.min(b.x), floor, a.z.min(b.z));
+                                    let hi = IVec3::new(a.x.max(b.x), top, a.z.max(b.z)) + 7;
+                                    let probe = IVec3::new(
+                                        (lo.x + hi.x) / 2,
+                                        sea as i32 - 8,
+                                        (lo.z + hi.z) / 2,
+                                    );
+                                    if past_water.is_none() && voxels.0.voxel(probe) == ids::WATER {
+                                        past_water = Some(step + 4);
+                                    }
+                                    if past_water.is_some_and(|last| step > last) {
+                                        break;
+                                    }
+                                    state.edit(
+                                        &mut voxels.0,
+                                        streaming.0.as_mut(),
+                                        lo,
+                                        hi,
+                                        |_, old| {
+                                            if old == ids::WATER { old } else { ids::AIR }
+                                        },
+                                    );
+                                }
+                            },
+                        );
+                    },
+                );
+                // Fly up and back to look down the trench.
+                for (k, frames) in [(Key::ToggleFly, 1), (Key::Jump, 40), (Key::Back, 30)] {
+                    game.input().key_down(k);
+                    tick(game, frames);
+                    game.input().key_up(k);
+                }
+                look(game, 0.0, 110.0);
             }
         }
         Demo::Craft => {
