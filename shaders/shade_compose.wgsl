@@ -8,6 +8,7 @@
 #import "surface_detail.wgsl"
 #import "atmosphere.wgsl"
 #import "brdf.wgsl"
+#import "weather.wgsl"
 
 @group(2) @binding(0) var vis_id: texture_2d<u32>;
 @group(2) @binding(1) var vis_depth: texture_2d<f32>;
@@ -215,8 +216,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // The material's pattern within its voxels, and the shading normal it
     // tilts.
     let detail = surface_detail(id.w & 0xffffu, mat, vec3<i32>(id.xyz), face_normal, world_m, frame.time);
-    let normal = detail.normal;
-    let albedo = detail.albedo;
+    // Rain: surfaces the sky reaches darken and turn glossy, and water
+    // stands in the hollows of level ground, flat as a mirror.
+    let clear = mat.kind == KIND_TRANSPARENT || mat.kind == KIND_LIQUID;
+    let wet = select(wetness(face_normal, lv.b), 0.0, clear);
+    let pud = puddle(world_m, face_normal, wet);
+    let normal = normalize(mix(detail.normal, face_normal, pud));
+    let albedo = wet_albedo(detail.albedo, mat.metallic, wet, pud);
+    let roughness = wet_roughness(detail.roughness, wet, pud);
     let diffuse = albedo * (1.0 - mat.metallic) * INV_PI;
     let f0 = mix(vec3<f32>(0.04), albedo, mat.metallic);
 
@@ -227,7 +234,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if nl_sun > 0.0 && lv.r > 0.0 {
         let e = frame.sun_illuminance * light_transmittance(altitude_km, sun) * lv.r * cloud_shadow(world_m, sun);
         irradiance += e * nl_sun;
-        specular += e * ggx_specular(normal, v, sun, detail.roughness, f0);
+        specular += e * ggx_specular(normal, v, sun, roughness, f0);
     }
     let moon = normalize(frame.moon_dir);
     let nl_moon = max(dot(normal, moon), 0.0);
@@ -254,7 +261,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     textureStore(out_surface, pixel, vec4<f32>(surface, 1.0));
     var light = surface + specular;
-    if mat.roughness <= REFLECT_MAX_ROUGHNESS {
+    if wet_roughness(mat.roughness, wet, pud) <= REFLECT_MAX_ROUGHNESS {
         light += half_res_upsample(reflections, pixel, rel_m, face_normal, depth_m);
     }
 

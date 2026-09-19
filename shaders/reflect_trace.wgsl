@@ -23,6 +23,7 @@
 @group(2) @binding(12) var<uniform> params: SvgfParams;
 #import "svgf_common.wgsl"
 #import "gi_common.wgsl"
+#import "weather.wgsl"
 
 const REFLECT_MAX_ROUGHNESS: f32 = 0.5;
 const REFLECT_RANGE_M: f32 = 256.0;
@@ -67,7 +68,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let mat = materials[c.id.w & 0xffffu];
-    if mat.roughness > REFLECT_MAX_ROUGHNESS {
+    // Wet ground reflects as the compose pass shades it (see weather.wgsl).
+    let world_v = vec3<f32>(frame.camera_voxel) + frame.camera_frac + c.position * VOXELS_PER_METRE;
+    let clear = mat.kind == KIND_TRANSPARENT || mat.kind == KIND_LIQUID;
+    let wet = select(wetness(c.normal, sky_map_sky_visibility(world_v, c.normal)), 0.0, clear);
+    let pud = puddle(world_v / VOXELS_PER_METRE, c.normal, wet);
+    let roughness = wet_roughness(mat.roughness, wet, pud);
+    if roughness > REFLECT_MAX_ROUGHNESS {
         textureStore(out_reflection, p, vec4<f32>(0.0));
         return;
     }
@@ -82,7 +89,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         textureStore(out_reflection, p, vec4<f32>(0.0));
         return;
     }
-    let alpha = max(mat.roughness * mat.roughness, 0.002);
+    let alpha = max(roughness * roughness, 0.002);
     var rng = rng_seed(vec2<u32>(p), frame.frame_index ^ 0x3ef1u);
     let he = sample_vndf(ve, alpha, vec2<f32>(rng_next(&rng), rng_next(&rng)));
     let h = tx * he.x + ty * he.y + n * he.z;

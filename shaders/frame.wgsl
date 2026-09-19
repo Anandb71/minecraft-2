@@ -43,6 +43,10 @@ struct Frame {
     star_rotation: f32,
     latitude: f32,
     sky_flags: u32,
+    // Rain and snow in the air, lightning flash, wetness of open surfaces.
+    weather: vec4<f32>,
+    // Wind at the ground (x, z m/s), cloud cover, unused.
+    wind: vec4<f32>,
 }
 
 // sky_flags bit: moon-lit sky LUTs were rendered this frame.
