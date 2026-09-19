@@ -192,6 +192,22 @@ impl Interaction {
         }
     }
 
+    /// Edits voxel box `lo..=hi` as the player's edits do: generated
+    /// detail restored first, chunks pinned, and physics, structure and
+    /// water told of the change.
+    pub fn edit(
+        &mut self,
+        world: &mut VoxelWorld,
+        streamer: Option<&mut ChunkStreamer>,
+        lo: IVec3,
+        hi: IVec3,
+        f: impl FnMut(IVec3, MaterialId) -> MaterialId,
+    ) {
+        edit_box(world, streamer, &mut self.touched, lo, hi, f);
+        self.edits += 1;
+        self.edited.push((lo, hi));
+    }
+
     fn roll(&mut self) -> f32 {
         self.rng ^= self.rng << 13;
         self.rng ^= self.rng >> 7;
