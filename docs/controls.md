@@ -11,6 +11,7 @@ then quits.
 | Right click | Place the held block / deposit; use a crafting table or furnace |
 | Middle click (held) | Preview the targeted block |
 | I | Inventory and recipes |
+| Right click with a bucket | Fill it from water; pour a full one where you aim |
 | W A S D | Move |
 | Space | Jump (fly: up) |
 | Ctrl or C | Crouch (fly: down) |

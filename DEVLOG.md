@@ -872,3 +872,86 @@ every item.
 settlements: on the software adapter a village multiplies the time several
 fold, and a bless already takes 50 minutes. The test world's centre is snowy
 taiga, so its terrain is white.
+
+## Step 11: Water (`v0.11-fluids`)
+
+**What.** Free-surface lattice Boltzmann water (D3Q19, BGK with
+Smagorinsky subgrid viscosity, Guo forcing for gravity) in 0.5 m cells,
+eight voxels a side, stepped at 240 Hz. Cells are liquid, interface, gas or
+solid; interface cells carry a mass and fill and empty as it flows, and gas
+populations streaming into the surface are rebuilt from the atmosphere's
+equilibrium ("only missing" reconstruction). The lattice lives in sparse
+8^3 tiles allocated where water goes and freed when they have been dry for
+a while; still tiles sleep and motion wakes their neighbours.
+
+The CPU version in `mc2-fluid` is the reference. The GPU version in
+`mc2-render` runs the same passes (stream and collide, flag, apply, share,
+gather, activity) over a pool of tiles, dispatched indirectly over the
+awake list the GPU builds for itself; the CPU owns only the tile table and
+sends edits. A test steps both side by side and holds the mean difference
+in water column height under a thousandth of a cell, and mass to 1e-4.
+
+**In the world.** A levels pass packs each cell's fill in eighths, four
+cells to a word, and copies them out a frame or two later; the game writes
+them into the voxel world, filling a cell's open voxels to that height or
+draining them. The water drawn is the water that flows, and it is lit,
+refracted and reflected like the rest of the world. The simulation sees a
+cell as solid where the voxel at its centre is, where the world has not
+loaded, and where still water stands that it does not own. Sea and lake
+water stays still until something disturbs it: an edit beside it takes the
+water around (8 m, 8000 cells at most) into the simulation, and cells
+along the edge of what was taken, below the surface, are refilled once
+they drain, as the rest of the sea would refill them. Buckets carry water:
+three iron ingots make one, it fills from any water and pours a cubic
+metre where it is aimed. `--demo flood` opens a 7 m tank three metres deep
+toward the camera; `--demo shore` digs a trench from a beach and lets the
+sea in.
+
+**Measurements.** The dam break benchmark (`fluid_bench`: water 16 by 32 m
+and 12 m deep released into a 64 by 32 m basin, four steps a frame):
+
+| | Mean GPU time a frame |
+|---|---|
+| Intel RaptorLake iGPU, populations in a private array | 20.8 ms |
+| iGPU, populations as separate values | 7.1 ms |
+| iGPU, converting cells mark their neighbours | 5.8 ms |
+| NVIDIA RTX 3050 Laptop, over 12 s (650 tiles awake) | about 2 ms, p99 under 4.5 ms once running |
+
+Mass drifts 0.05% over 12 s of the dam break. After digging a trench to the
+sea, 260 tiles simulate; the flood demo settles into 142.
+
+**Bugs found.**
+
+- A 12 m dam break blew up after 9 s: splash cells passed 0.3 lattice units
+  (Mach 0.5). Speeds are held to 0.18, about 22 m/s, far above anything
+  falling or flowing at this scale.
+- A droplet smaller than a cell never became gas and hung in the air while
+  gravity sped it up. Interface cells with no water around, or under half
+  full with neither liquid nor ground beside them, now empty (the mass is
+  counted as lost).
+- Excess mass with only liquid around it was dropped and overdrained cells
+  went negative: the dam break gained 1.3% in 12 s. Liquid neighbours now
+  take shares into their populations; the same run holds to 0.05%.
+- Water stuck to walls and still water was slow to settle: walls are now
+  specular with a little friction (0.995 kept), and new water starts at
+  hydrostatic density.
+- On the iGPU the 19 populations of a cell, held in a private array
+  indexed by loop counter, lived in scratch memory: half the frame went to
+  that array.
+- FXC (DX12) rejects writes to a vector component through a dynamic index,
+  which would fail the fluid pipelines there.
+- Refilling the sea's edge every frame, whenever a cell was short of full,
+  reset the surface at every ripple and kept the whole promoted sea awake.
+- A levels readback recorded before new water reached the GPU would have
+  drained the sea it was about to hold; tiles that have just taken still
+  water cannot be lowered for eight frames.
+
+**Known.** Shallow sheets of water spreading over flat ground stay awake
+long after they look still (the flood's 142 tiles, the benchmark's 650 of
+684 after 12 s): at a millisecond or two on the RTX 3050 it is affordable,
+but tuning sleep for thin films is still to do. Cells are half a metre, so
+a flowing surface steps in 0.5 m columns with 6.25 cm levels.
+
+**Rejected.** Heightfield water, SPH and FLIP (D37), no-slip walls (D38),
+hanging droplets (D39), drawing the lattice in the marcher (D40), and
+simulating the whole sea (D41).

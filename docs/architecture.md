@@ -18,7 +18,7 @@ flowchart TB
   window --> game
   window --> render
   window --> worldgen
-  game["mc2-game<br/>player, blocks, inventory"] --> voxel
+  game["mc2-game<br/>player, blocks, inventory, water"] --> voxel
   game --> physics
   game --> structure
   worldgen["mc2-worldgen<br/>erosion, strata, flora, towns"] --> voxel
@@ -26,6 +26,8 @@ flowchart TB
   structure["mc2-structure<br/>load and collapse"] --> voxel
   render["mc2-render<br/>passes"] --> voxel
   render --> gpu
+  render --> fluid["mc2-fluid<br/>lattice Boltzmann water"]
+  game --> fluid
   voxel["mc2-voxel<br/>bricks, 64-trees, CPU marcher"] --> core
   gpu["mc2-gpu<br/>device, frame graph, WGSL"] --> core["mc2-core"]
 ```
@@ -39,7 +41,7 @@ flowchart TB
 | `mc2-worldgen` | Noise, strata, erosion, flora, settlements, chunk streaming |
 | `mc2-physics` | Rigid bodies (XPBD), contacts, explosions, baking |
 | `mc2-structure` | Load graph, stress, collapse |
-| `mc2-fluid` | Lattice Boltzmann water (in progress) |
+| `mc2-fluid` | Free-surface lattice Boltzmann water: the CPU reference the GPU version is tested against |
 | `mc2-render` | Passes, voxel residency, bodies, the renderer |
 | `shaders/` | WGSL with `#import` |
 | `golden/` | Reference images for the WARP tests |

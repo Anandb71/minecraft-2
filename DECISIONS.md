@@ -243,3 +243,29 @@ Both were built behind one output with the same hit shading and denoiser, and me
 - **Hand-drawn pixel art.** Around a hundred images to draw and keep in step with the models.
 - **Rendering icons with the world renderer.** It draws worlds, not models on their own: each icon would need a scene, and the look would change with the time of day.
 - **Ray casting each item's voxel model on the CPU at start-up (chosen).** Blocks use the models the world places, so an icon always matches its block; tools and lumps have small models of their own. All of them are painted in a fraction of a second across the cores and uploaded once with a mip chain.
+
+## D37. What water is
+
+- **Levels per block, spread by rules.** How voxel games usually do it: cheap and predictable, but water has no momentum, so a dam break trickles instead of crashing.
+- **Particles (SPH or FLIP).** Splashes look right, but a lake is millions of particles, the surface must be rebuilt into voxels every frame, and incompressibility costs iterations.
+- **Free-surface lattice Boltzmann on sparse tiles (chosen).** A grid like the world's, local work that maps onto compute shaders, momentum and pressure for free, and a surface that is already a fill fraction per cell. Tiles exist only where water is, and sleep when it stops.
+
+## D38. Walls
+
+- **Bounce-back.** The textbook no-slip wall: water sticks to every surface, and at half-metre cells a pipe or channel throttles its own flow.
+- **Specular reflection with a little friction (chosen).** Populations mirror off the wall and keep 99.5% of their slide, so water runs along channels and settles quickly.
+
+## D39. Water the lattice cannot move
+
+- **Keep it.** Mass is conserved exactly, but a droplet smaller than a cell hangs in the air, accelerating, until it destabilises the lattice.
+- **Empty it into gas (chosen).** Interface cells with no water around, or under half full with nothing beside them, turn to gas and their mass is counted as lost: spray disappears, as it would at this resolution.
+
+## D40. How the world sees the water
+
+- **Draw the lattice in the marcher.** The truest surface, but the marcher, the lighting passes and the reflection and refraction rays would all need a second structure to query.
+- **Read levels back and write voxels (chosen).** A levels pass packs each cell's fill in eighths; a frame or two later the game fills or drains those voxels. Everything that draws voxels draws the water, at the cost of a little latency and of writing only the cells that changed.
+
+## D41. The sea
+
+- **Simulate all of it.** A 16 km world's oceans would be millions of tiles.
+- **Still until disturbed, with a refilling edge (chosen).** Generated water is plain voxels. An edit beside it takes the water around into the simulation, and cells on the edge of what was taken refill once they drain, standing in for the sea beyond.

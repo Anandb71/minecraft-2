@@ -118,6 +118,11 @@ Radiance cascades or ReSTIR GI. SVGF. Volumetric clouds that shadow the
 ground. Froxel fog with light shafts. Glossy reflections. AgX. Photo mode
 with focal length, focus, aperture and exposure.
 
+**Water.** Free-surface lattice Boltzmann on the GPU in half-metre cells,
+written back into the voxel world as it flows, so it is lit, refracted and
+reflected like everything else. The sea stays still until you dig beside
+it, then pours in. Buckets carry it.
+
 **Destruction.** XPBD rigid bodies. TNT with fuses and chain reactions.
 Structural integrity over the 1 m block layer: an unsupported stone arm
 snaps at about 3 m, a plank one at 23 m, soil cannot overhang at all.
@@ -146,6 +151,8 @@ flowchart TB
   physics["mc2-physics"] --> voxel
   structure["mc2-structure"] --> voxel
   render["mc2-render"] --> voxel
+  render --> fluid["mc2-fluid"]
+  game --> fluid
   render --> gpu["mc2-gpu"]
   voxel["mc2-voxel"] --> core["mc2-core"]
   gpu --> core
@@ -173,8 +180,8 @@ What it cost: [DEVLOG.md](DEVLOG.md).
 | done | Reflections, volumetrics, clouds, photo mode | `v0.8-atmosphere` |
 | done | Rigid bodies, destruction | `v0.9-destruction` |
 | done | Structural integrity | `v0.10-structure` |
-| now | Fluids | |
-| next | Fire, heat, wind, weather | |
+| done | Water: lattice Boltzmann on the GPU | `v0.11-fluids` |
+| now | Fire, heat, wind, weather | |
 | next | Worldgen v2: tectonics, caves, ecology | |
 | next | Animation, IK, ragdolls | |
 | next | NPCs, economy, vehicles | |
