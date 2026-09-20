@@ -1,0 +1,369 @@
+:root {
+  --bg: oklch(0.18 0.02 230);
+  --ink: oklch(0.96 0.015 85);
+  --mute: oklch(0.84 0.02 85);
+  --clay: oklch(0.7 0.13 48);
+  --on-clay: oklch(0.2 0.04 50);
+  --line: oklch(0.96 0.02 85 / 0.18);
+  --panel: oklch(0.16 0.02 250 / 0.88);
+  --display: Kalnia, "Palatino Linotype", Palatino, serif;
+  --body: "Atkinson Hyperlegible", "Segoe UI", sans-serif;
+  --mono: "Red Hat Mono", ui-monospace, monospace;
+  --pad: clamp(0.85rem, 2.4vw, 1.6rem);
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 1.05rem;
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+a,
+button,
+input {
+  cursor: pointer;
+}
+
+a {
+  color: var(--ink);
+}
+
+a:hover {
+  color: var(--clay);
+}
+
+:focus-visible {
+  outline: 3px solid var(--clay);
+  outline-offset: 3px;
+}
+
+.skip {
+  position: absolute;
+  left: var(--pad);
+  top: -4rem;
+  z-index: 40;
+  background: var(--clay);
+  color: var(--on-clay);
+  padding: 0.5rem 0.8rem;
+  min-height: 44px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.skip:focus {
+  top: var(--pad);
+}
+
+#world,
+.fallback {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 0;
+  touch-action: none;
+}
+
+.fallback {
+  object-fit: contain;
+  background: var(--bg);
+}
+
+.hud,
+.meter {
+  position: fixed;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.hud a,
+.hud button,
+.meter input,
+.meter label,
+.meter button {
+  pointer-events: auto;
+}
+
+.hud {
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: max(0.8rem, env(safe-area-inset-top)) var(--pad) 3rem;
+  background: linear-gradient(to bottom, oklch(0.12 0.02 230 / 0.72), transparent);
+}
+
+.who {
+  margin: 0 0 0.2rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mute);
+  text-shadow: 0 1px 12px oklch(0.1 0.02 230 / 0.9);
+}
+
+h1,
+h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 0.95;
+  text-shadow: 0 2px 18px oklch(0.1 0.02 230 / 0.85);
+}
+
+h1 {
+  font-size: clamp(2.1rem, 5vw, 3.4rem);
+}
+
+h2 {
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+}
+
+.lede {
+  margin: 0.45rem 0 0;
+  max-width: 28rem;
+  color: var(--mute);
+  font-size: 0.98rem;
+  text-shadow: 0 1px 12px oklch(0.1 0.02 230 / 0.9);
+}
+
+.tools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.go,
+.quiet {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 0.95rem;
+  border: 0;
+  font-family: var(--body);
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.go {
+  background: var(--clay);
+  color: var(--on-clay);
+}
+
+.go:hover {
+  color: var(--on-clay);
+  filter: brightness(1.06);
+}
+
+.go:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.quiet {
+  background: oklch(0.14 0.02 230 / 0.72);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.quiet:hover,
+.quiet[aria-pressed="true"] {
+  border-color: var(--clay);
+  color: var(--clay);
+}
+
+.meter {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem 1.2rem;
+  padding: 2.4rem var(--pad) max(0.9rem, env(safe-area-inset-bottom));
+  background: linear-gradient(to top, oklch(0.12 0.02 230 / 0.78), transparent);
+}
+
+.meter-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.zoom {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.tod {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 44px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.tod input {
+  width: min(16rem, 46vw);
+  accent-color: var(--clay);
+}
+
+.hint {
+  margin: 0;
+  color: var(--mute);
+  font-size: 0.88rem;
+}
+
+#scale {
+  display: block;
+  margin-top: 0.15rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--clay);
+}
+
+dialog {
+  width: min(72rem, calc(100vw - 1.5rem));
+  max-height: min(90vh, 52rem);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  padding: 1.2rem var(--pad) 1.4rem;
+  overflow: auto;
+}
+
+dialog::backdrop {
+  background: oklch(0.08 0.02 230 / 0.72);
+}
+
+.sheet-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-bottom: 0.7rem;
+}
+
+.k {
+  margin: 0 0 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--clay);
+}
+
+.sheet-lede {
+  margin: 0 0 1rem;
+  max-width: 40rem;
+  color: var(--mute);
+}
+
+.sheet {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.55rem;
+}
+
+.sheet figure {
+  margin: 0;
+}
+
+.sheet img {
+  width: 100%;
+  height: 7.5rem;
+  object-fit: cover;
+}
+
+.sheet figcaption {
+  margin-top: 0.3rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+pre {
+  margin: 0 0 1rem;
+  padding: 0.95rem 1.05rem;
+  overflow-x: auto;
+  background: oklch(0.12 0.02 250);
+  border: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 0.88rem;
+  line-height: 1.7;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.foot {
+  margin-top: 1.2rem;
+}
+
+@media (max-width: 720px) {
+  .hud {
+    flex-direction: column;
+    padding-bottom: 1.2rem;
+  }
+
+  .lede {
+    max-width: none;
+    font-size: 0.9rem;
+  }
+
+  .tools {
+    justify-content: flex-start;
+  }
+
+  h1 {
+    font-size: 1.85rem;
+  }
+
+  .sheet img {
+    height: 6.2rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

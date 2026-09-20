@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Minecraft 2</title>
+    <meta
+      name="description"
+      content="A 16 km continent of 6.25 cm voxels. The GPU marches them. Rust, wgpu. By Anand B."
+    />
+    <link rel="canonical" href="https://mc2.anandb71.in/" />
+    <meta name="theme-color" content="#1c242c" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="author" content="Anand B" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://mc2.anandb71.in/" />
+    <meta property="og:title" content="Minecraft 2" />
+    <meta property="og:description" content="Look through the glass. The GPU walks empty cells." />
+    <meta property="og:image" content="https://mc2.anandb71.in/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Minecraft 2" />
+    <meta name="twitter:description" content="Look through the glass. The GPU walks empty cells." />
+    <meta name="twitter:image" content="https://mc2.anandb71.in/og.png" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Kalnia:wght@400;500;600&family=Red+Hat+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/css/site.css" />
+  </head>
+  <body>
+    <a class="skip" href="#clone-open">Skip to clone</a>
+
+    <canvas id="world" role="img" aria-label="Live voxel field. Drag to look, click to carve, scroll to zoom.">
+    </canvas>
+    <img
+      id="fallback"
+      class="fallback"
+      hidden
+      src="/media/glass.png"
+      alt="A glass cube on terraced grass, a wooden pickaxe behind it"
+      width="1920"
+      height="991"
+    />
+
+    <header class="hud">
+      <div class="brand">
+        <p class="who">Anand B · Tamil Nadu</p>
+        <h1>Minecraft 2</h1>
+        <p class="lede" id="lede">
+          Look through the cube. The pick is behind the glass. This page marches voxels in your GPU,
+          the same idea as the game, just a tiny field.
+        </p>
+      </div>
+      <div class="tools">
+        <button type="button" class="quiet" id="photos-open">Photo mode</button>
+        <button type="button" class="quiet" id="debug-btn" aria-pressed="false">Ray heat</button>
+        <button type="button" class="go" id="clone-open">Clone</button>
+      </div>
+    </header>
+
+    <div class="meter">
+      <div class="meter-row">
+        <label class="tod">
+          <span>Sun</span>
+          <input id="tod" type="range" min="0" max="100" value="72" />
+        </label>
+        <div class="zoom">
+          <button type="button" class="quiet" id="zoom-out" aria-label="Zoom out">−</button>
+          <button type="button" class="quiet" id="zoom-in" aria-label="Zoom in">+</button>
+        </div>
+      </div>
+      <p class="hint">
+        Drag to look · click a hole · pinch or scroll zooms · WASD walks
+        <span id="scale"></span>
+      </p>
+    </div>
+
+    <dialog id="photos" aria-labelledby="photos-title">
+      <div class="sheet-head">
+        <div>
+          <p class="k">From the real engine</p>
+          <h2 id="photos-title">Photo mode</h2>
+        </div>
+        <button type="button" class="quiet" data-close>Close</button>
+      </div>
+      <p class="sheet-lede">These are stills from the game, not this toy field.</p>
+      <div class="sheet">
+        <figure>
+          <img src="/media/glass.png" alt="Glass cube and pickaxe" width="1920" height="991" />
+          <figcaption>Cube</figcaption>
+        </figure>
+        <figure>
+          <img src="/media/street.png" alt="Street between towers" width="1280" height="720" />
+          <figcaption>Street</figcaption>
+        </figure>
+        <figure>
+          <img src="/media/village.png" alt="Village well" width="1280" height="720" />
+          <figcaption>Well</figcaption>
+        </figure>
+        <figure>
+          <img src="/media/village-night.png" alt="Village at night" width="1280" height="720" />
+          <figcaption>Night</figcaption>
+        </figure>
+        <figure>
+          <img src="/media/hero-town.png" alt="Coastal towers" width="1280" height="720" />
+          <figcaption>Town</figcaption>
+        </figure>
+        <figure>
+          <img src="/media/canopy.png" alt="Forest canopy" width="1280" height="720" />
+          <figcaption>Canopy</figcaption>
+        </figure>
+        <figure>
+          <img src="/media/meadow.png" alt="Meadow" width="1280" height="720" />
+          <figcaption>Meadow</figcaption>
+        </figure>
+        <figure>
+          <img src="/media/sunset.png" alt="Sunset terraces" width="1920" height="991" />
+          <figcaption>Dusk</figcaption>
+        </figure>
+      </div>
+    </dialog>
+
+    <dialog id="clone" aria-labelledby="clone-title">
+      <div class="sheet-head">
+        <div>
+          <p class="k">Load</p>
+          <h2 id="clone-title">Run it on your machine</h2>
+        </div>
+        <button type="button" class="quiet" data-close>Close</button>
+      </div>
+      <p class="sheet-lede">
+        Rust, edition 2024, a GPU. First launch spends about 30 seconds growing the world, then
+        caches it.
+      </p>
+      <pre id="cmd">git clone https://github.com/Anandb71/minecraft-2.git
+cd minecraft-2
+cargo run --release</pre>
+      <div class="actions">
+        <button type="button" class="go" id="copy">Copy</button>
+        <a class="quiet" href="https://github.com/Anandb71/minecraft-2">Repo</a>
+        <a class="quiet" href="https://github.com/Anandb71/minecraft-2/blob/main/docs/getting-started.md">Setup</a>
+        <a class="quiet" href="https://github.com/sponsors/Anandb71">Sponsor</a>
+      </div>
+      <p class="who foot">Anand B · Tamil Nadu · MIT 2026 · If a pass is over budget the HUD goes red.</p>
+    </dialog>
+
+    <script src="js/march.js?v=live8"></script>
+    <script src="js/site.js?v=live8"></script>
+  </body>
+</html>
