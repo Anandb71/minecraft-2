@@ -54,8 +54,8 @@ fn main() {
     print_cam("cave-mouth", stand, look);
 
     if let Some(inside) = find_inside(&generator, &surface, mouth) {
-        let look = (mouth.0 as f64, inside.1, mouth.2 as f64);
-        print_cam("cave-inside", inside, look);
+        let out = (stand.0, inside.1, stand.2);
+        print_cam("cave-inside", inside, out);
     } else {
         eprintln!("no dry interior found near the mouth");
     }
@@ -173,51 +173,58 @@ fn outside_mouth(
 
 fn find_inside(
     generator: &ChunkGenerator,
-    surface: &Surface,
+    _surface: &Surface,
     mouth: (f32, f32, f32, f32),
 ) -> Option<(f64, f64, f64)> {
-    use std::collections::HashMap;
-    let (x, _, z, _) = mouth;
-    let dx = surface.sample(x + 4.0, z).height - surface.sample(x - 4.0, z).height;
-    let dz = surface.sample(x, z + 4.0).height - surface.sample(x, z - 4.0).height;
-    let len = (dx * dx + dz * dz).sqrt().max(0.2);
-    let (ux, uz) = (dx / len, dz / len);
-    let mut trees = HashMap::<ChunkPos, mc2_voxel::tree::ChunkTree>::new();
-    // Step uphill into the hill, a few metres under the roof.
-    for step in 2..14 {
-        let px = x + ux * step as f32 * 1.5;
-        let pz = z + uz * step as f32 * 1.5;
-        let ground = surface.sample(px, pz).height;
-        for down in [2.0f32, 4.0, 6.0, 9.0] {
-            let y = ground - down;
-            let vx = (px / VOXEL_M) as i32;
-            let vy = (y / VOXEL_M) as i32;
-            let vz = (pz / VOXEL_M) as i32;
-            let at = glam::IVec3::new(vx, vy, vz);
-            let pos = ChunkPos::of_voxel(at);
-            let tree = trees
-                .entry(pos)
-                .or_insert_with(|| generator.generate(pos, Lod::Full));
-            let local = at - pos.origin();
-            if !tree.voxel(local).is_air() {
-                continue;
-            }
-            let clear = [-1, 0, 1].iter().all(|&oy| {
-                let p = local + glam::IVec3::Y * oy;
-                (0..512).contains(&p.y) && tree.voxel(p).is_air()
-            });
-            let dry = tree.voxel(local - glam::IVec3::Y) != ids::WATER;
-            if clear && dry {
-                let eye_y = (vy as f32 + 0.5) * VOXEL_M;
-                return Some((
-                    (vx as f32 + 0.5) as f64 * f64::from(VOXEL_M),
-                    f64::from(eye_y),
-                    (vz as f32 + 0.5) as f64 * f64::from(VOXEL_M),
-                ));
+    let (x, height, z, _) = mouth;
+    let mut best: Option<(i32, (f64, f64, f64))> = None;
+    for down in [3.0f32, 6.0] {
+        let y = height - down;
+        let origin = glam::IVec3::new(
+            (x / VOXEL_M) as i32,
+            (y / VOXEL_M) as i32,
+            (z / VOXEL_M) as i32,
+        );
+        let pos = ChunkPos::of_voxel(origin);
+        let tree = generator.generate(pos, Lod::Full);
+        for oz in (-24..24).step_by(2) {
+            for oy in (-16..16).step_by(2) {
+                for ox in (-24..24).step_by(2) {
+                    let v = origin + glam::IVec3::new(ox, oy, oz);
+                    if ChunkPos::of_voxel(v) != pos {
+                        continue;
+                    }
+                    let local = v - pos.origin();
+                    if !tree.voxel(local).is_air() {
+                        continue;
+                    }
+                    let head = local + glam::IVec3::Y;
+                    let feet = local - glam::IVec3::Y;
+                    if !(0..512).contains(&head.y)
+                        || !(0..512).contains(&feet.y)
+                        || !tree.voxel(head).is_air()
+                        || tree.voxel(feet) == ids::WATER
+                    {
+                        continue;
+                    }
+                    let depth = height - v.y as f32 * VOXEL_M;
+                    if !(1.2..12.0).contains(&depth) {
+                        continue;
+                    }
+                    let score = 1000 - (ox.abs() + oz.abs());
+                    if best.as_ref().is_none_or(|(s, _)| score > *s) {
+                        let eye = (
+                            (v.x as f32 + 0.5) as f64 * f64::from(VOXEL_M),
+                            f64::from((v.y as f32 + 0.5) * VOXEL_M),
+                            (v.z as f32 + 0.5) as f64 * f64::from(VOXEL_M),
+                        );
+                        best = Some((score, eye));
+                    }
+                }
             }
         }
     }
-    None
+    best.map(|(_, eye)| eye)
 }
 
 fn range_view(
