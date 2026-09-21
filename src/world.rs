@@ -313,3 +313,20 @@ pub fn weather(game: &Game, renderer: &mut mc2_render::Renderer, at: DVec3) {
     renderer.clouds.wind = (w.wind * 4.0 + glam::Vec2::new(4.0, 2.0)).to_array();
     renderer.fog.density = mc2_render::fog::FogSettings::default().density * (1.0 + 5.0 * w.rain);
 }
+
+/// Fire and weather for the profiler overlay.
+pub fn weather_line(game: &Game) -> String {
+    let w = game.world.resource::<mc2_game::weather::Weather>();
+    let f = game.world.resource::<mc2_game::fire::Fire>();
+    format!(
+        "weather: {} (cover {:.2}, rain {:.2}, wet {:.2}, wind {:.1} m/s)  fire: {} burning, {} caught, {} burnt out",
+        w.sky.name(),
+        w.cover,
+        w.rain,
+        w.wetness,
+        w.wind.length(),
+        f.burning(),
+        f.caught,
+        f.burnt_out
+    )
+}

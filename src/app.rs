@@ -380,6 +380,7 @@ impl App {
                 ),
                 crate::world::physics_line(&self.game, renderer),
                 crate::world::structure_line(&self.game),
+                crate::world::weather_line(&self.game),
                 self.water
                     .as_ref()
                     .map_or_else(String::new, |w| w.line(&self.game)),
