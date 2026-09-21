@@ -41,6 +41,11 @@ pub enum Demo {
     /// Standing on a beach facing the sea: dig a trench 2 m wide from the
     /// player's feet to the water, below sea level, and let the sea in.
     Shore,
+    /// A tree ahead set alight with flint and steel, caught seven seconds
+    /// later with its canopy ablaze.
+    Wildfire,
+    /// A storm, and a bolt brought down forty metres ahead.
+    Lightning,
 }
 
 impl Demo {
@@ -56,6 +61,8 @@ impl Demo {
             "workshop" => Some(Self::Workshop),
             "flood" => Some(Self::Flood),
             "shore" => Some(Self::Shore),
+            "wildfire" => Some(Self::Wildfire),
+            "lightning" => Some(Self::Lightning),
             _ => None,
         }
     }
@@ -576,6 +583,86 @@ pub fn run(game: &mut Game, demo: Demo) {
                 }
                 look(game, 0.0, 110.0);
             }
+        }
+        Demo::Wildfire => {
+            use mc2_game::blocks::BlockLayer;
+            use mc2_voxel::coords::BlockPos;
+            let feet = {
+                let mut q = game.world.query::<&mc2_game::player::Body>();
+                q.iter(&game.world).next().map(|b| b.feet)
+            };
+            if let Some(feet) = feet {
+                // The tree nearest a point 18 m ahead, trunk with leaves
+                // above it: in view from where the player stands.
+                let yaw = f64::from(game.view().yaw);
+                let ahead = feet + glam::DVec3::new(yaw.sin(), 0.0, yaw.cos()) * 18.0;
+                let f = ahead.floor().as_ivec3();
+                let mut best: Option<(i32, BlockPos)> = None;
+                {
+                    let layer = game.world.resource::<BlockLayer>();
+                    let v = &game.world.resource::<mc2_game::Voxels>().0;
+                    for dz in -30..=30 {
+                        for dx in -30..=30 {
+                            for dy in -3..=8 {
+                                let b = BlockPos(f + glam::IVec3::new(dx, dy, dz));
+                                let d = dx * dx + dz * dz;
+                                if best.is_some_and(|(bd, _)| bd <= d) {
+                                    continue;
+                                }
+                                let leafy = |b: BlockPos| {
+                                    matches!(
+                                        layer.block_at(v, b),
+                                        Some(mc2_game::blocks::BlockKind::Solid(m))
+                                            if m.get().kind == mc2_voxel::material::Kind::Foliage
+                                    )
+                                };
+                                if let Some(mc2_game::blocks::BlockKind::Solid(m)) =
+                                    layer.block_at(v, b)
+                                    && mc2_game::items::is_log(m)
+                                    && (2..10).any(|k| leafy(BlockPos(b.0 + glam::IVec3::Y * k)))
+                                {
+                                    best = Some((d, b));
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some((_, trunk)) = best {
+                    // Look at it.
+                    let to = trunk.0.as_dvec3() + glam::DVec3::new(0.5, 3.0, 0.5)
+                        - (feet + glam::DVec3::Y * mc2_game::player::EYE);
+                    let mut players = game.world.query::<&mut mc2_game::player::Player>();
+                    if let Some(mut p) = players.iter_mut(&mut game.world).next() {
+                        p.yaw = to.x.atan2(to.z) as f32;
+                        p.pitch = (to.y / to.length()).asin() as f32;
+                    }
+                    let mut fire = game.world.resource_mut::<mc2_game::fire::Fire>();
+                    fire.ignite.push((trunk, true));
+                    fire.ignite.push((BlockPos(trunk.0 + glam::IVec3::Y), true));
+                    eprintln!("wildfire: trunk at {:?}", trunk.0);
+                }
+                tick(game, 60 * 7);
+                let fire = game.world.resource::<mc2_game::fire::Fire>();
+                eprintln!(
+                    "wildfire: {} burning, {} caught, {} burnt out",
+                    fire.burning(),
+                    fire.caught,
+                    fire.burnt_out
+                );
+            }
+        }
+        Demo::Lightning => {
+            let view = game.view();
+            let ahead = glam::DVec3::new(f64::from(view.yaw).sin(), 0.0, f64::from(view.yaw).cos());
+            {
+                let mut w = game.world.resource_mut::<mc2_game::weather::Weather>();
+                w.set(mc2_game::weather::Sky::Storm);
+                w.frozen = true;
+                w.aim = Some(view.position + ahead * 40.0);
+            }
+            look(game, 0.0, -40.0);
+            // The flash is fading, the bolt still there.
+            tick(game, 6);
         }
         Demo::Craft => {
             workshop(game);
