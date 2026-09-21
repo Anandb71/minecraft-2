@@ -35,8 +35,16 @@ pub struct Input {
     pressed_buttons: Vec<Button>,
     pub mouse_delta: Vec2,
     pub scroll: f32,
+    /// Left stick, player space: x right, y forward, already deadzoned.
+    pub move_axis: Vec2,
+    /// Right stick look, -1..1 after deadzone and a quadratic curve.
+    pub look_axis: Vec2,
     /// False while the cursor is free: look and actions are ignored.
     pub captured: bool,
+    pad_keys: Vec<Key>,
+    pad_pressed: Vec<Key>,
+    pad_buttons: Vec<Button>,
+    pad_button_pressed: Vec<Button>,
 }
 
 impl Input {
@@ -63,25 +71,63 @@ impl Input {
     }
 
     pub fn held(&self, k: Key) -> bool {
-        self.held_keys.contains(&k)
+        self.held_keys.contains(&k) || self.pad_keys.contains(&k)
     }
 
     pub fn pressed(&self, k: Key) -> bool {
-        self.pressed_keys.contains(&k)
+        self.pressed_keys.contains(&k) || self.pad_pressed.contains(&k)
     }
 
     pub fn button_held(&self, b: Button) -> bool {
-        self.held_buttons.contains(&b)
+        self.held_buttons.contains(&b) || self.pad_buttons.contains(&b)
     }
 
     pub fn button_pressed(&self, b: Button) -> bool {
-        self.pressed_buttons.contains(&b)
+        self.pressed_buttons.contains(&b) || self.pad_button_pressed.contains(&b)
+    }
+
+    /// Drops last frame's pad channels. The window rewrites them each poll.
+    pub fn clear_pad(&mut self) {
+        self.pad_keys.clear();
+        self.pad_pressed.clear();
+        self.pad_buttons.clear();
+        self.pad_button_pressed.clear();
+        self.move_axis = Vec2::ZERO;
+        self.look_axis = Vec2::ZERO;
+    }
+
+    pub fn pad_hold_key(&mut self, k: Key) {
+        if !self.pad_keys.contains(&k) {
+            self.pad_keys.push(k);
+        }
+    }
+
+    pub fn pad_press_key(&mut self, k: Key) {
+        self.pad_hold_key(k);
+        if !self.pad_pressed.contains(&k) {
+            self.pad_pressed.push(k);
+        }
+    }
+
+    pub fn pad_hold_button(&mut self, b: Button) {
+        if !self.pad_buttons.contains(&b) {
+            self.pad_buttons.push(b);
+        }
+    }
+
+    pub fn pad_press_button(&mut self, b: Button) {
+        self.pad_hold_button(b);
+        if !self.pad_button_pressed.contains(&b) {
+            self.pad_button_pressed.push(b);
+        }
     }
 
     /// Clears per-frame edges and deltas; call after the frame's systems ran.
     pub fn end_frame(&mut self) {
         self.pressed_keys.clear();
         self.pressed_buttons.clear();
+        self.pad_pressed.clear();
+        self.pad_button_pressed.clear();
         self.mouse_delta = Vec2::ZERO;
         self.scroll = 0.0;
     }
@@ -89,6 +135,7 @@ impl Input {
     pub fn release_all(&mut self) {
         self.held_keys.clear();
         self.held_buttons.clear();
+        self.clear_pad();
         self.end_frame();
     }
 }
@@ -159,5 +206,25 @@ mod tests {
         assert_eq!(t.advance(0.004), 0);
         assert!(t.alpha > 0.4 && t.alpha < 0.5);
         assert_eq!(t.advance(5.0), 8, "a long stall runs at most 8 ticks");
+    }
+
+    #[test]
+    fn pad_and_keyboard_merge_without_clobbering() {
+        let mut i = Input::default();
+        i.key_down(Key::Jump);
+        i.pad_hold_key(Key::Crouch);
+        i.pad_press_key(Key::ToggleFly);
+        i.pad_press_button(Button::Primary);
+        assert!(i.held(Key::Jump) && i.held(Key::Crouch));
+        assert!(i.pressed(Key::ToggleFly));
+        assert!(i.button_pressed(Button::Primary) && i.button_held(Button::Primary));
+        i.end_frame();
+        assert!(i.held(Key::Jump) && i.held(Key::Crouch));
+        assert!(!i.pressed(Key::ToggleFly));
+        assert!(i.button_held(Button::Primary) && !i.button_pressed(Button::Primary));
+        i.clear_pad();
+        assert!(i.held(Key::Jump));
+        assert!(!i.held(Key::Crouch));
+        assert!(!i.button_held(Button::Primary));
     }
 }

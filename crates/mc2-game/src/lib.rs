@@ -198,4 +198,23 @@ mod tests {
         let v = game.world.resource::<Voxels>();
         assert!(v.0.voxel(IVec3::new(136, 168, 168)).is_air());
     }
+
+    #[test]
+    fn right_stick_turns_the_camera() {
+        let mut game = Game::new();
+        game.world.resource_mut::<Voxels>().0.fill_box(
+            IVec3::ZERO,
+            IVec3::new(255, 159, 255),
+            ids::GRANITE,
+        );
+        game.spawn_player(DVec3::new(8.0, 12.0, 8.0), 0.0, 0.0);
+        {
+            let mut input = game.input();
+            input.captured = true;
+            input.look_axis = glam::Vec2::new(1.0, 0.0);
+        }
+        game.update(1.0 / 60.0);
+        let yaw = game.view().yaw;
+        assert!(yaw < -0.02, "right stick should turn right, yaw {yaw}");
+    }
 }

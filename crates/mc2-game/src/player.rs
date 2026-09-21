@@ -28,6 +28,10 @@ const FLY_SPRINT: f64 = 48.0;
 const GROUND_ACCEL: f64 = 60.0;
 const AIR_ACCEL: f64 = 12.0;
 const MOUSE_SENSITIVITY: f32 = 0.0022;
+/// Full right-stick deflection, radians per second.
+const GAMEPAD_LOOK: f32 = 3.8;
+/// Push the left stick this far to sprint without clicking L3.
+const STICK_SPRINT: f32 = 0.92;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MoveMode {
@@ -115,11 +119,12 @@ pub fn step_player(field: &impl SolidField, p: &mut Player, b: &mut Body, input:
     let axis = |pos: Key, neg: Key| {
         f64::from(u8::from(input.held(pos))) - f64::from(u8::from(input.held(neg)))
     };
-    let mut wish = forward * axis(Key::Forward, Key::Back) + right * axis(Key::Right, Key::Left);
+    let mut wish = forward * (axis(Key::Forward, Key::Back) + f64::from(input.move_axis.y))
+        + right * (axis(Key::Right, Key::Left) + f64::from(input.move_axis.x));
     if wish.length_squared() > 1.0 {
         wish = wish.normalize();
     }
-    let sprint = input.held(Key::Sprint);
+    let sprint = input.held(Key::Sprint) || input.move_axis.length() >= STICK_SPRINT;
 
     match p.mode {
         MoveMode::Fly => {
@@ -214,14 +219,16 @@ impl XzLen for DVec3 {
     }
 }
 
-/// Mouse look, every frame.
-pub fn look(input: Res<Input>, mut players: Query<&mut Player>) {
+/// Mouse and right-stick look, every frame.
+pub fn look(input: Res<Input>, time: Res<Time>, mut players: Query<&mut Player>) {
     if !input.captured {
         return;
     }
+    let pad = GAMEPAD_LOOK * time.dt;
     for mut p in &mut players {
-        p.yaw -= input.mouse_delta.x * MOUSE_SENSITIVITY;
-        p.pitch = (p.pitch - input.mouse_delta.y * MOUSE_SENSITIVITY).clamp(-1.55, 1.55);
+        p.yaw -= input.mouse_delta.x * MOUSE_SENSITIVITY + input.look_axis.x * pad;
+        p.pitch = (p.pitch - input.mouse_delta.y * MOUSE_SENSITIVITY - input.look_axis.y * pad)
+            .clamp(-1.55, 1.55);
     }
 }
 
@@ -277,6 +284,7 @@ pub fn movement(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::Vec2;
     use mc2_voxel::material::ids;
     use mc2_voxel::world::VoxelWorld;
 
@@ -376,5 +384,27 @@ mod tests {
         input.key_up(Key::Crouch);
         run(&w, &mut p, &mut b, &input, 0.2);
         assert!(p.crouching, "no headroom to stand");
+    }
+
+    #[test]
+    fn analog_stick_walks_and_scales() {
+        let w = arena();
+        let mut p = Player::default();
+        let mut b = Body::at(DVec3::new(2.0, 10.0, 2.0));
+        let mut half = Input::default();
+        half.move_axis = Vec2::new(0.0, 0.5);
+        run(&w, &mut p, &mut b, &half, 1.0);
+        let half_z = b.feet.z;
+        p = Player::default();
+        b = Body::at(DVec3::new(2.0, 10.0, 2.0));
+        let mut full = Input::default();
+        full.move_axis = Vec2::new(0.0, 1.0);
+        run(&w, &mut p, &mut b, &full, 1.0);
+        assert!(half_z > 2.2, "half stick walked: {half_z}");
+        assert!(
+            b.feet.z > half_z + 0.5,
+            "full stick covers more ground: half {half_z} full {}",
+            b.feet.z
+        );
     }
 }
