@@ -12,7 +12,8 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 
 const MAGIC: &[u8; 8] = b"MC2TERR\0";
-const VERSION: u32 = 1;
+/// 2: kinematic plate uplift replaced the noise mountain belt.
+const VERSION: u32 = 2;
 const HEADER: usize = 40;
 
 fn fnv1a(bytes: &[u8]) -> u64 {

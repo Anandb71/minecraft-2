@@ -11,5 +11,6 @@ pub mod noise;
 pub mod settlement;
 pub mod strata;
 pub mod stream;
+pub mod tectonics;
 pub mod terrain;
 pub mod town;

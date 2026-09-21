@@ -46,7 +46,7 @@ pub struct CoarseTerrain {
 }
 
 /// Base elevation before erosion, metres, at world position `(x, z)`.
-pub fn base_height(noise: &Perlin, p: &TerrainParams, x: f32, z: f32) -> f32 {
+pub fn base_height(noise: &Perlin, seed: u64, p: &TerrainParams, x: f32, z: f32) -> f32 {
     let extent = p.extent_m();
     // A continent that falls to ocean within 2 km of the world edge.
     let edge = x.min(z).min(extent - x).min(extent - z);
@@ -57,14 +57,8 @@ pub fn base_height(noise: &Perlin, p: &TerrainParams, x: f32, z: f32) -> f32 {
 
     let mut h = p.sea_level - 45.0 + land * 120.0;
 
-    // Mountain belts: ridged ranges where the belt mask is high, strongest
-    // in the continental interior.
-    let belt = noise.fbm2(x / 5200.0 - 9.0, z / 5200.0 + 4.0, 3, 2.0, 0.5);
-    let belt = ((belt + 0.15) / 0.4).clamp(0.0, 1.0);
-    let belt = belt * belt * (3.0 - 2.0 * belt);
     let interior = ((land - 0.25) / 0.5).clamp(0.0, 1.0);
-    let ridges = noise.ridged2(x / 3200.0, z / 3200.0, 5, 2.05, 0.48);
-    h += belt * interior * ridges.powf(1.3) * 380.0;
+    h += crate::tectonics::uplift(noise, seed, x, z, interior);
 
     // Broad rolling hills on land; fine detail is added after erosion.
     let hills = noise.fbm2(x / 1400.0 + 12.0, z / 1400.0 - 5.0, 3, 2.0, 0.5);
@@ -80,7 +74,7 @@ impl CoarseTerrain {
         let height = Grid2::from_fn(params.size, params.size, |i, j| {
             let x = (i as f32 + 0.5) * params.cell_m;
             let z = (j as f32 + 0.5) * params.cell_m;
-            base_height(&noise, &params, x, z)
+            base_height(&noise, seed, &params, x, z)
         });
         let strata = crate::strata::Strata::new(seed);
         let out = erode(height, &strata, &params, progress);
