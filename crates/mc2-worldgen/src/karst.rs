@@ -22,16 +22,15 @@ const JOINT: f32 = 0.13;
 const OPEN_AT: f32 = 0.46;
 const ROOF_M: f32 = 3.0;
 /// On a steep face the slope itself is the entrance, so the roof thins.
-const HILLSIDE: f32 = 0.42;
 const HILLSIDE_ROOF_M: f32 = 0.5;
 const FLOOR_M: f32 = 88.0;
 
 fn roof_clearance(slope: f32) -> f32 {
-    if slope > HILLSIDE {
-        HILLSIDE_ROOF_M
-    } else {
-        ROOF_M
-    }
+    // Smooth, not a step: a step opened one side of a chunk seam and left
+    // the other sealed, a metre apart.
+    let t = ((slope - 0.28) / 0.42).clamp(0.0, 1.0);
+    let t = t * t * (3.0 - 2.0 * t);
+    ROOF_M + (HILLSIDE_ROOF_M - ROOF_M) * t
 }
 
 struct At {
@@ -219,6 +218,12 @@ impl Karst {
                 continue;
             }
             let y = (y_base + ly) as f32 * VOXEL_M + VOXEL_M * 0.5;
+            // Open ground is limestone with sky above it. A stalagmite
+            // grows in a cave, under the surface, not out of a pavement.
+            if y > surface - 0.15 {
+                continue;
+            }
+            let floor = floor.filter(|_| roof.is_some() || y < surface - 1.5);
             if let Some(m) = self.drip(Vec3::new(x, y, z), roof, floor, sea, surface) {
                 mats[ly as usize] = m;
             }
@@ -488,6 +493,9 @@ impl Karst {
                     }
                     let floor = (origin.y + cell.y * 8) as f32 * VOXEL_M;
                     let ground = *height.get_or_insert_with(|| surface.sample(x, z).height);
+                    if floor > ground - 1.5 {
+                        continue;
+                    }
                     for dy in 0..4 {
                         let c = cell + IVec3::Y * dy;
                         if c.y >= 64 {
