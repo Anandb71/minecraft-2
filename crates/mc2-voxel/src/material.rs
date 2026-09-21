@@ -140,6 +140,7 @@ materials! {
     ASPHALT = 62 => Material { name: "asphalt", albedo: [0.10, 0.10, 0.11], roughness: 0.9, density: 2300.0, compressive: 10.0, tensile: 1.0, hardness: 2.0, conductivity: 0.75, specific_heat: 920.0, absorption: 0.03, ..BASE },
     DARK_PLANKS = 63 => Material { name: "dark planks", albedo: [0.26, 0.16, 0.09], roughness: 0.7, density: 700.0, compressive: 35.0, tensile: 45.0, hardness: 1.4, conductivity: 0.13, specific_heat: 1700.0, flammability: 0.45, ignition_c: 285.0, absorption: 0.12, ..BASE },
     THATCH = 64 => Material { name: "thatch", albedo: [0.55, 0.44, 0.22], roughness: 0.95, density: 150.0, compressive: 0.1, tensile: 0.2, hardness: 0.3, conductivity: 0.06, specific_heat: 1500.0, flammability: 0.9, ignition_c: 220.0, absorption: 0.6, ..BASE },
+    LIGHTNING = 65 => Material { name: "lightning", kind: Kind::Foliage, albedo: [0.9, 0.93, 1.0], roughness: 1.0, emission: [60000.0, 64000.0, 80000.0], density: 1.0, compressive: 0.0, tensile: 0.0, hardness: 0.0, conductivity: 0.0, absorption: 0.0, ..BASE },
 }
 
 impl MaterialId {
@@ -173,7 +174,7 @@ mod tests {
         assert_eq!(ids::AIR.get().name, "air");
         assert_eq!(ids::GRANITE.get().name, "granite");
         assert_eq!(ids::GLOWING_ROCK.get().name, "cooling rock");
-        assert_eq!(count(), ids::THATCH.0 as usize + 1);
+        assert_eq!(count(), ids::LIGHTNING.0 as usize + 1);
         assert!(ids::LAVA.is_emissive());
         assert!(!ids::AIR.is_solid());
     }
