@@ -57,19 +57,21 @@ impl Climate {
 
     /// (temperature, moisture), each roughly 0..1, at a point `height`
     /// metres up by water carrying `river` (0..1).
-    pub fn at(&self, x: f32, z: f32, height: f32, sea: f32, river: f32) -> (f32, f32) {
+    pub fn at(&self, x: f32, z: f32, height: f32, sea: f32, river: f32, north: f32) -> (f32, f32) {
         let t = 0.5
             + 0.6
                 * self
                     .temp
                     .fbm2(x / 4200.0 + 7.0, z / 4200.0 - 3.0, 3, 2.0, 0.5)
-            - (height - sea).max(0.0) / 700.0;
+            - (height - sea).max(0.0) / 700.0
+            - north * 0.16;
         let w = 0.5
             + 0.65
                 * self
                     .wet
                     .fbm2(x / 2600.0 - 11.0, z / 2600.0 + 5.0, 3, 2.0, 0.5)
-            + river * 0.3;
+            + river * 0.3
+            + north * 0.08;
         (t.clamp(0.0, 1.0), w.clamp(0.0, 1.0))
     }
 }
@@ -82,10 +84,10 @@ impl SurfaceSample {
         if self.height < sea + 1.5 && self.slope < 0.25 {
             return Biome::Beach;
         }
-        if self.height > SNOWLINE_M {
+        if self.height > SNOWLINE_M - self.aspect * 80.0 {
             return Biome::Snow;
         }
-        if self.height > TREELINE_M {
+        if self.height > TREELINE_M - self.aspect * 55.0 {
             return Biome::Alpine;
         }
         let (t, w) = (self.temp, self.wet);

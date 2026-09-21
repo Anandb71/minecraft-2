@@ -586,6 +586,7 @@ impl ChunkGenerator {
                     ),
                     temp: lerp(c00.temp, c10.temp, c01.temp, c11.temp),
                     wet: lerp(c00.wet, c10.wet, c01.wet, c11.wet),
+                    aspect: lerp(c00.aspect, c10.aspect, c01.aspect, c11.aspect),
                 };
                 let sea = self.surface.terrain.params.sea_level;
                 // Grass and flowers grow on grassy ground above the sea.
