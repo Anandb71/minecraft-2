@@ -122,6 +122,68 @@ fn block_fuel(kind: Option<BlockKind>) -> f32 {
     }
 }
 
+/// What is in a block to burn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Tinder {
+    /// How readily it catches, 0..1.
+    flammability: f32,
+    /// Seconds it burns for.
+    fuel: f32,
+    tnt: bool,
+}
+
+/// What block `b` holds to burn: placed things by what they are, anything
+/// else by 27 voxels spread through it, so a trunk thinner than the block
+/// or a few leaves still count.
+fn tinder(world: &VoxelWorld, layer: &BlockLayer, b: BlockPos) -> Tinder {
+    let kind = layer.block_at(world, b);
+    match kind {
+        Some(BlockKind::Solid(ids::TNT)) => {
+            return Tinder {
+                flammability: 1.0,
+                fuel: 0.0,
+                tnt: true,
+            };
+        }
+        Some(BlockKind::CraftingTable | BlockKind::Window | BlockKind::Torch) => {
+            return Tinder {
+                flammability: block_flammability(kind),
+                fuel: block_fuel(kind),
+                tnt: false,
+            };
+        }
+        _ => {}
+    }
+    let o = b.origin();
+    let (mut count, mut flam, mut fuel) = (0, 0.0f32, 0.0f32);
+    for z in [2, 8, 13] {
+        for y in [2, 8, 13] {
+            for x in [2, 8, 13] {
+                let m = world.voxel(o + IVec3::new(x, y, z));
+                if flammable(m) {
+                    count += 1;
+                    flam = flam.max(m.get().flammability.max(0.02));
+                    fuel = fuel.max(fuel_s(m));
+                }
+            }
+        }
+    }
+    let share = count as f32 / 27.0;
+    Tinder {
+        flammability: if count > 0 {
+            flam * (0.4 + 0.6 * share)
+        } else {
+            0.0
+        },
+        fuel: if count > 0 {
+            fuel * (0.35 + 0.65 * share)
+        } else {
+            0.0
+        },
+        tnt: false,
+    }
+}
+
 fn block_flammability(kind: Option<BlockKind>) -> f32 {
     match kind {
         Some(BlockKind::Solid(m)) | Some(BlockKind::Slab(m)) if fuel_s(m) > 0.0 => {
@@ -152,13 +214,14 @@ impl Fire {
         self.burning.contains_key(&b)
     }
 
-    /// Sets block `b` alight: its own fuel if it has any, a short flame on
-    /// it if `forced` (flint and steel on stone). False if nothing caught.
-    pub fn light(&mut self, b: BlockPos, kind: Option<BlockKind>, forced: bool) -> bool {
+    /// Sets block `b` alight with `fuel` seconds of burning, a short flame
+    /// on it if it has none but is `forced` (flint and steel on stone).
+    /// False if nothing caught.
+    fn light(&mut self, b: BlockPos, fuel: f32, forced: bool) -> bool {
         if self.burning.contains_key(&b) || self.burning.len() >= MAX_BURNING {
             return false;
         }
-        let fuel = match block_fuel(kind) {
+        let fuel = match fuel {
             f if f > 0.0 => f * (0.8 + 0.4 * self.roll()),
             _ if forced => GROUND_FIRE_S,
             _ => return false,
@@ -336,12 +399,12 @@ pub fn update_fire(
         }
     }
     for (b, forced) in std::mem::take(&mut fire.ignite) {
-        let kind = layer.block_at(world, b);
-        if matches!(kind, Some(BlockKind::Solid(ids::TNT))) {
+        let t = tinder(world, &layer, b);
+        if t.tnt {
             crate::physics::ignite_block(world, &mut physics, b, 1.5);
             continue;
         }
-        fire.light(b, kind, forced);
+        fire.light(b, t.fuel, forced);
     }
 
     let blocks: Vec<BlockPos> = fire.burning.keys().copied().collect();
@@ -399,9 +462,9 @@ pub fn update_fire(
                     if fire.burning.contains_key(&nb) {
                         continue;
                     }
-                    let kind = layer.block_at(world, nb);
-                    let f = block_flammability(kind);
-                    if f <= 0.0 && !matches!(kind, Some(BlockKind::Solid(ids::TNT))) {
+                    let t = tinder(world, &layer, nb);
+                    let f = t.flammability;
+                    if f <= 0.0 {
                         continue;
                     }
                     let up = match dy {
@@ -416,20 +479,20 @@ pub fn update_fire(
                     } else {
                         1.0
                     };
-                    let p = f.max(0.3) * SPREAD_PER_S * TICK_S * up * downwind * intensity;
+                    let p = f * SPREAD_PER_S * TICK_S * up * downwind * intensity;
                     if fire.roll() < p {
-                        catch.push((nb, kind));
+                        catch.push((nb, t));
                     }
                 }
             }
         }
         fire.burning.insert(b, burn);
     }
-    for (nb, kind) in catch {
-        if matches!(kind, Some(BlockKind::Solid(ids::TNT))) {
+    for (nb, t) in catch {
+        if t.tnt {
             crate::physics::ignite_block(world, &mut physics, nb, 1.5);
         } else {
-            fire.light(nb, kind, false);
+            fire.light(nb, t.fuel, false);
         }
     }
     // Blocks the fire reached that water or a blast has since cleared.
@@ -437,9 +500,7 @@ pub fn update_fire(
         .burning
         .keys()
         .copied()
-        .filter(|&b| {
-            block_fuel(layer.block_at(world, b)) <= 0.0 && fire.burning[&b].total > GROUND_FIRE_S
-        })
+        .filter(|&b| tinder(world, &layer, b).fuel <= 0.0 && fire.burning[&b].total > GROUND_FIRE_S)
         .collect();
     for b in gone {
         fire.put_out(world, b);
