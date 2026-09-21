@@ -8,9 +8,10 @@
 
 use crate::amplify::Surface;
 use crate::chunkgen::Lod;
-use crate::noise::Perlin;
+use crate::noise::{Perlin, hash_unit, hash3};
 use crate::strata::Strata;
 use glam::{IVec3, Vec3};
+use mc2_voxel::brick::Brick;
 use mc2_voxel::coords::{CHUNK_VOXELS, ChunkPos};
 use mc2_voxel::material::{MaterialId, ids};
 use mc2_voxel::tree::{Cell, ChunkTree};
@@ -39,8 +40,16 @@ struct At {
     slope: f32,
 }
 
+struct DripAt {
+    roof: Option<f32>,
+    floor: Option<f32>,
+    sea: f32,
+    surface: f32,
+}
+
 pub struct Karst {
     noise: Perlin,
+    seed: u64,
 }
 
 pub fn soluble(m: MaterialId) -> bool {
@@ -51,6 +60,7 @@ impl Karst {
     pub fn new(seed: u64) -> Self {
         Self {
             noise: Perlin::new(seed ^ 0x0ca7_e501),
+            seed,
         }
     }
 
@@ -122,6 +132,99 @@ impl Karst {
         })
     }
 
+    /// Length of the drip on this 2-voxel column, metres, if it grows one.
+    fn drip_length(&self, vx: i32, vz: i32) -> Option<f32> {
+        let h = hash3(vx >> 1, 0, vz >> 1, self.seed ^ 0xD51B);
+        if hash_unit(h) > 0.2 {
+            return None;
+        }
+        Some(0.35 + hash_unit(h.rotate_left(17)) * 2.05)
+    }
+
+    /// Limestone where a stalactite or stalagmite occupies this air voxel.
+    /// `roof` and `floor` are the contact planes in metres, if known.
+    pub fn drip(
+        &self,
+        p: Vec3,
+        roof: Option<f32>,
+        floor: Option<f32>,
+        sea: f32,
+        surface: f32,
+    ) -> Option<MaterialId> {
+        let water_table = sea.max(surface - 26.0);
+        if p.y < water_table {
+            return None;
+        }
+        let vx = (p.x / VOXEL_M).floor() as i32;
+        let vz = (p.z / VOXEL_M).floor() as i32;
+        let len = self.drip_length(vx, vz)?;
+        let off_axis = (vx & 1) != 0 || (vz & 1) != 0;
+        let fits = |along: f32, reach: f32| {
+            along >= 0.0 && along <= reach && (!off_axis || along <= reach * 0.42)
+        };
+        if let Some(roof) = roof
+            && fits(roof - p.y, len)
+        {
+            return Some(ids::LIMESTONE);
+        }
+        if let Some(floor) = floor
+            && fits(p.y - floor, len * 0.7)
+        {
+            return Some(ids::LIMESTONE);
+        }
+        None
+    }
+
+    /// Dress one voxel column inside a brick. `y_base` is the world voxel y
+    /// of `mats[0]`.
+    pub fn dress_column(
+        &self,
+        mats: &mut [MaterialId; 8],
+        y_base: i32,
+        vx: i32,
+        vz: i32,
+        surface: f32,
+        sea: f32,
+    ) {
+        if self.drip_length(vx, vz).is_none() {
+            return;
+        }
+        let x = vx as f32 * VOXEL_M + VOXEL_M * 0.5;
+        let z = vz as f32 * VOXEL_M + VOXEL_M * 0.5;
+        for ly in 0..8i32 {
+            if !mats[ly as usize].is_air() {
+                continue;
+            }
+            let mut roof = None;
+            for up in (ly + 1)..8 {
+                if mats[up as usize].is_air() {
+                    continue;
+                }
+                if soluble(mats[up as usize]) {
+                    roof = Some((y_base + up) as f32 * VOXEL_M);
+                }
+                break;
+            }
+            let mut floor = None;
+            for down in (0..ly).rev() {
+                if mats[down as usize].is_air() {
+                    continue;
+                }
+                if soluble(mats[down as usize]) {
+                    floor = Some((y_base + down + 1) as f32 * VOXEL_M);
+                }
+                break;
+            }
+            if roof.is_none() && floor.is_none() {
+                continue;
+            }
+            let y = (y_base + ly) as f32 * VOXEL_M + VOXEL_M * 0.5;
+            if let Some(m) = self.drip(Vec3::new(x, y, z), roof, floor, sea, surface) {
+                mats[ly as usize] = m;
+            }
+        }
+    }
+
     /// Carves passages into an already-generated tree. Node8 skips: caves
     /// thinner than 8 m would alias into Swiss cheese at that lod.
     pub fn carve(
@@ -142,6 +245,7 @@ impl Karst {
         let origin = pos.origin();
         let sea = surface.terrain.params.sea_level;
         let n = CHUNK_VOXELS / step;
+        let mut opened = false;
         for cz in 0..n {
             for cy in 0..n {
                 for cx in 0..n {
@@ -157,7 +261,7 @@ impl Karst {
                     if lod == Lod::Node2 && radius_m < 3.2 {
                         continue;
                     }
-                    self.carve_ellipsoid(
+                    opened |= self.carve_ellipsoid(
                         tree,
                         origin,
                         centre,
@@ -171,7 +275,10 @@ impl Karst {
                 }
             }
         }
-        self.carve_sinkholes(tree, origin, surface, sea, lod);
+        opened |= self.carve_sinkholes(tree, origin, surface, sea, lod);
+        if opened && lod == Lod::Full {
+            self.decorate(tree, origin, surface, sea);
+        }
     }
 
     fn carve_sinkholes(
@@ -181,12 +288,13 @@ impl Karst {
         surface: &Surface,
         sea: f32,
         lod: Lod,
-    ) {
+    ) -> bool {
         if lod == Lod::Node2 {
-            return;
+            return false;
         }
         let step = 32;
         let n = CHUNK_VOXELS / step;
+        let mut opened = false;
         for cz in 0..n {
             for cx in 0..n {
                 let x = (origin.x + cx * step + step / 2) as f32 * VOXEL_M;
@@ -207,7 +315,7 @@ impl Karst {
                         y,
                         origin.z + cz * step + step / 2,
                     );
-                    self.carve_ellipsoid(
+                    opened |= self.carve_ellipsoid(
                         tree,
                         origin,
                         centre,
@@ -221,6 +329,7 @@ impl Karst {
                 }
             }
         }
+        opened
     }
 
     fn carve_ellipsoid(
@@ -230,8 +339,12 @@ impl Karst {
         centre: IVec3,
         radius_m: f32,
         at: At,
-    ) {
-        let At { surface, sea, slope } = at;
+    ) -> bool {
+        let At {
+            surface,
+            sea,
+            slope,
+        } = at;
         let rx = radius_m * 16.0;
         let ry = radius_m * 16.0 * 0.62;
         let rz = radius_m * 16.0;
@@ -240,10 +353,11 @@ impl Karst {
         let hi: IVec3 = (centre + IVec3::new(rx as i32, ry as i32, rz as i32) - origin)
             .min(IVec3::splat(CHUNK_VOXELS - 1));
         if lo.cmpgt(hi).any() {
-            return;
+            return false;
         }
         let cell_lo: IVec3 = lo >> 3;
         let cell_hi: IVec3 = hi >> 3;
+        let mut opened = false;
         for cz in cell_lo.z..=cell_hi.z {
             for cy in cell_lo.y..=cell_hi.y {
                 for cx in cell_lo.x..=cell_hi.x {
@@ -268,6 +382,131 @@ impl Karst {
                         tree.set_cell(cell, Cell::Empty);
                     } else {
                         tree.set_cell(cell, Cell::Uniform(fill));
+                    }
+                    opened = true;
+                }
+            }
+        }
+        opened
+    }
+
+    fn carbonate_ceiling(&self, tree: &ChunkTree, cell: IVec3) -> bool {
+        if cell.cmplt(IVec3::ZERO).any() || cell.cmpge(IVec3::splat(64)).any() {
+            return false;
+        }
+        match tree.cell(cell) {
+            Cell::Uniform(m) => soluble(m),
+            Cell::Brick(_) => soluble(tree.voxel(cell * 8 + IVec3::new(4, 0, 4))),
+            _ => false,
+        }
+    }
+
+    fn carbonate_floor(&self, tree: &ChunkTree, cell: IVec3) -> bool {
+        if cell.cmplt(IVec3::ZERO).any() || cell.cmpge(IVec3::splat(64)).any() {
+            return false;
+        }
+        match tree.cell(cell) {
+            Cell::Uniform(m) => soluble(m),
+            Cell::Brick(_) => soluble(tree.voxel(cell * 8 + IVec3::new(4, 7, 4))),
+            _ => false,
+        }
+    }
+
+    fn paint_drip(&self, tree: &mut ChunkTree, origin: IVec3, cell: IVec3, at: DripAt) {
+        let mut brick = match tree.cell(cell) {
+            Cell::Empty => Brick::empty(),
+            Cell::Brick(i) => tree.brick(i).clone(),
+            _ => return,
+        };
+        let mut any = false;
+        for ly in 0..8 {
+            for lz in 0..8 {
+                for lx in 0..8 {
+                    let v = IVec3::new(lx, ly, lz);
+                    if !brick.get(v).is_air() {
+                        continue;
+                    }
+                    let world = origin + cell * 8 + v;
+                    let p = (world.as_vec3() + 0.5) * VOXEL_M;
+                    if let Some(m) = self.drip(p, at.roof, at.floor, at.sea, at.surface) {
+                        brick.set(v, m);
+                        any = true;
+                    }
+                }
+            }
+        }
+        if any {
+            tree.set_brick(cell, brick);
+        }
+    }
+
+    /// Stalactites from ceilings and stalagmites from floors, full detail
+    /// only. Coarser levels stay open cells: a drip is thinner than them.
+    fn decorate(&self, tree: &mut ChunkTree, origin: IVec3, surface: &Surface, sea: f32) {
+        for cz in 0..64 {
+            for cx in 0..64 {
+                let x = (origin.x + cx * 8 + 4) as f32 * VOXEL_M;
+                let z = (origin.z + cz * 8 + 4) as f32 * VOXEL_M;
+                let mut height = None;
+                for cy in (0..64).rev() {
+                    let cell = IVec3::new(cx, cy, cz);
+                    if !matches!(tree.cell(cell), Cell::Empty) {
+                        continue;
+                    }
+                    let above = cell + IVec3::Y;
+                    if !self.carbonate_ceiling(tree, above) {
+                        continue;
+                    }
+                    let roof = (origin.y + above.y * 8) as f32 * VOXEL_M;
+                    let ground = *height.get_or_insert_with(|| surface.sample(x, z).height);
+                    for dy in 0..6 {
+                        let c = cell - IVec3::Y * dy;
+                        if c.y < 0 || (dy > 0 && !matches!(tree.cell(c), Cell::Empty)) {
+                            break;
+                        }
+                        self.paint_drip(
+                            tree,
+                            origin,
+                            c,
+                            DripAt {
+                                roof: Some(roof),
+                                floor: None,
+                                sea,
+                                surface: ground,
+                            },
+                        );
+                    }
+                }
+                for cy in 0..64 {
+                    let cell = IVec3::new(cx, cy, cz);
+                    let below = cell - IVec3::Y;
+                    if !self.carbonate_floor(tree, below) {
+                        continue;
+                    }
+                    if !matches!(tree.cell(cell), Cell::Empty | Cell::Brick(_)) {
+                        continue;
+                    }
+                    let floor = (origin.y + cell.y * 8) as f32 * VOXEL_M;
+                    let ground = *height.get_or_insert_with(|| surface.sample(x, z).height);
+                    for dy in 0..4 {
+                        let c = cell + IVec3::Y * dy;
+                        if c.y >= 64 {
+                            break;
+                        }
+                        match tree.cell(c) {
+                            Cell::Empty | Cell::Brick(_) => self.paint_drip(
+                                tree,
+                                origin,
+                                c,
+                                DripAt {
+                                    roof: None,
+                                    floor: Some(floor),
+                                    sea,
+                                    surface: ground,
+                                },
+                            ),
+                            _ => break,
+                        }
                     }
                 }
             }
@@ -353,5 +592,38 @@ mod tests {
         }
         assert_eq!(flat, 0, "a metre of soil should still seal flat ground");
         assert!(steep > 8, "a hillside should cut into joints: {steep}");
+    }
+
+    #[test]
+    fn stalactite_hangs_under_a_dry_roof_and_stops() {
+        let k = Karst::new(3);
+        let surface = 140.0;
+        let sea = 96.0;
+        let roof = 130.0;
+        let mut hung = None;
+        for x in 0..48 {
+            for z in 0..48 {
+                let p = Vec3::new(
+                    (x as f32 + 0.5) * VOXEL_M,
+                    roof - VOXEL_M * 0.5,
+                    (z as f32 + 0.5) * VOXEL_M,
+                );
+                if k.drip(p, Some(roof), None, sea, surface).is_some() {
+                    hung = Some(p);
+                    break;
+                }
+            }
+            if hung.is_some() {
+                break;
+            }
+        }
+        let p = hung.expect("a column should grow a stalactite");
+        let tip = Vec3::new(p.x, roof - 3.2, p.z);
+        assert!(k.drip(tip, Some(roof), None, sea, surface).is_none());
+        let flooded = Vec3::new(p.x, 40.0, p.z);
+        assert!(
+            k.drip(flooded, Some(42.0), None, sea, surface).is_none(),
+            "drips do not grow under the water table"
+        );
     }
 }

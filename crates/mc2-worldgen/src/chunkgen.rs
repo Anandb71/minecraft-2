@@ -593,6 +593,7 @@ impl ChunkGenerator {
                     && sample.soil_depth > 0.1
                     && self.surface.loose_material(&sample, 0.05, sample.height) == ids::GRASS;
                 let (vx, vz) = (base_x + lx, base_z + lz);
+                let mut column_m = [MaterialId(0); 8];
                 for ly in 0..8 {
                     let y = (y_base + ly) as f32 * VOXEL_M + VOXEL_M * 0.5;
                     let mut m = material_at(&self.surface, &sample, column, y);
@@ -612,8 +613,13 @@ impl ChunkGenerator {
                     ) {
                         m = fill;
                     }
+                    column_m[ly as usize] = m;
+                }
+                self.karst
+                    .dress_column(&mut column_m, y_base, vx, vz, sample.height, sea);
+                for (ly, m) in column_m.into_iter().enumerate() {
                     if !m.is_air() {
-                        brick.set(IVec3::new(lx, ly, lz), m);
+                        brick.set(IVec3::new(lx, ly as i32, lz), m);
                     }
                 }
             }
