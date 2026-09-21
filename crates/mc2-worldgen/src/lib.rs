@@ -6,6 +6,7 @@ pub mod chunkgen;
 pub mod erosion;
 pub mod flora;
 pub mod grid;
+pub mod karst;
 pub mod noise;
 pub mod settlement;
 pub mod strata;
