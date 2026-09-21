@@ -246,16 +246,29 @@ fn range_view(
             }
         }
     }
-    // Stand a kilometre toward the map centre, so the shot isn't the world edge.
+    // Walk away from the summit until the ground is well below it, so the
+    // camera is not buried in the same slope it is trying to photograph.
     let centre = extent * 0.5;
     let mut dir = (centre - peak.0, centre - peak.2);
     let len = (dir.0 * dir.0 + dir.1 * dir.1).sqrt().max(1.0);
     dir = (dir.0 / len, dir.1 / len);
-    let sx = peak.0 + dir.0 * 900.0;
-    let sz = peak.2 + dir.1 * 900.0;
-    let sh = surface.sample(sx, sz).height;
-    let eye = (sx as f64, (sh + 8.0) as f64, sz as f64);
-    let look = (peak.0 as f64, (peak.1 - 40.0) as f64, peak.2 as f64);
+    let mut sx = peak.0;
+    let mut sz = peak.2;
+    let mut sh = peak.1;
+    for step in 1..18 {
+        sx = peak.0 + dir.0 * (step as f32 * 180.0);
+        sz = peak.2 + dir.1 * (step as f32 * 180.0);
+        sh = surface.sample(sx, sz).height;
+        if peak.1 - sh > 160.0 {
+            break;
+        }
+    }
+    let eye = (sx as f64, (sh + 12.0) as f64, sz as f64);
+    let look = (
+        peak.0 as f64,
+        (peak.1 * 0.55 + sh * 0.45) as f64,
+        peak.2 as f64,
+    );
     (eye, look)
 }
 
