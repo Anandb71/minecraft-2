@@ -20,7 +20,24 @@ const VOXEL_M: f32 = 1.0 / 16.0;
 const JOINT: f32 = 0.13;
 const OPEN_AT: f32 = 0.46;
 const ROOF_M: f32 = 3.0;
+/// On a steep face the slope itself is the entrance, so the roof thins.
+const HILLSIDE: f32 = 0.42;
+const HILLSIDE_ROOF_M: f32 = 0.5;
 const FLOOR_M: f32 = 88.0;
+
+fn roof_clearance(slope: f32) -> f32 {
+    if slope > HILLSIDE {
+        HILLSIDE_ROOF_M
+    } else {
+        ROOF_M
+    }
+}
+
+struct At {
+    surface: f32,
+    sea: f32,
+    slope: f32,
+}
 
 pub struct Karst {
     noise: Perlin,
@@ -51,10 +68,12 @@ impl Karst {
         (bed, jx, jz)
     }
 
-    /// 0 closed, 1 fully open. Independent of the host rock.
-    pub fn openness(&self, x: f32, y: f32, z: f32, surface: f32) -> f32 {
+    /// 0 closed, 1 fully open. Independent of the host rock. `slope` is
+    /// rise over run of the ground above this column: steep ground cuts
+    /// the roof so a joint can daylight.
+    pub fn openness(&self, x: f32, y: f32, z: f32, surface: f32, slope: f32) -> f32 {
         let depth = surface - y;
-        if !(ROOF_M..=FLOOR_M).contains(&depth) || y < 8.0 {
+        if !(roof_clearance(slope)..=FLOOR_M).contains(&depth) || y < 8.0 {
             return 0.0;
         }
         let (bed, jx, jz) = self.joints(x, y, z);
@@ -86,11 +105,12 @@ impl Karst {
         surface: f32,
         sea: f32,
         river: f32,
+        slope: f32,
     ) -> Option<MaterialId> {
         if !soluble(host) {
             return None;
         }
-        let joint = self.openness(p.x, p.y, p.z, surface) >= OPEN_AT;
+        let joint = self.openness(p.x, p.y, p.z, surface, slope) >= OPEN_AT;
         if !joint && !self.sinkhole_shaft(p, surface, sea, river) {
             return None;
         }
@@ -129,7 +149,7 @@ impl Karst {
                     let p = centre.as_vec3() * VOXEL_M;
                     let sample = surface.sample(p.x, p.z);
                     let host = strata.layer(p.x, p.y, p.z).material;
-                    let open = self.openness(p.x, p.y, p.z, sample.height);
+                    let open = self.openness(p.x, p.y, p.z, sample.height, sample.slope);
                     if open < OPEN_AT || !soluble(host) {
                         continue;
                     }
@@ -137,7 +157,17 @@ impl Karst {
                     if lod == Lod::Node2 && radius_m < 3.2 {
                         continue;
                     }
-                    self.carve_ellipsoid(tree, origin, centre, radius_m, sample.height, sea);
+                    self.carve_ellipsoid(
+                        tree,
+                        origin,
+                        centre,
+                        radius_m,
+                        At {
+                            surface: sample.height,
+                            sea,
+                            slope: sample.slope,
+                        },
+                    );
                 }
             }
         }
@@ -177,7 +207,17 @@ impl Karst {
                         y,
                         origin.z + cz * step + step / 2,
                     );
-                    self.carve_ellipsoid(tree, origin, centre, 1.35, sample.height, sea);
+                    self.carve_ellipsoid(
+                        tree,
+                        origin,
+                        centre,
+                        1.35,
+                        At {
+                            surface: sample.height,
+                            sea,
+                            slope: sample.slope,
+                        },
+                    );
                 }
             }
         }
@@ -189,9 +229,9 @@ impl Karst {
         origin: IVec3,
         centre: IVec3,
         radius_m: f32,
-        surface: f32,
-        sea: f32,
+        at: At,
     ) {
+        let At { surface, sea, slope } = at;
         let rx = radius_m * 16.0;
         let ry = radius_m * 16.0 * 0.62;
         let rz = radius_m * 16.0;
@@ -221,7 +261,7 @@ impl Karst {
                     }
                     let here = tree.voxel(local);
                     let p = world.as_vec3() * VOXEL_M;
-                    let Some(fill) = self.dissolve(here, p, surface, sea, 0.0) else {
+                    let Some(fill) = self.dissolve(here, p, surface, sea, 0.0, slope) else {
                         continue;
                     };
                     if fill.is_air() {
@@ -243,8 +283,15 @@ mod tests {
     fn only_carbonates_dissolve() {
         let k = Karst::new(1);
         assert!(
-            k.dissolve(ids::GRANITE, Vec3::new(40.0, 50.0, 40.0), 90.0, 96.0, 0.0)
-                .is_none()
+            k.dissolve(
+                ids::GRANITE,
+                Vec3::new(40.0, 50.0, 40.0),
+                90.0,
+                96.0,
+                0.0,
+                0.0,
+            )
+            .is_none()
         );
         assert!(soluble(ids::LIMESTONE) && soluble(ids::CHALK) && soluble(ids::MARBLE));
         assert!(!soluble(ids::SANDSTONE));
@@ -254,9 +301,9 @@ mod tests {
     fn same_seed_same_openness() {
         let a = Karst::new(9);
         let b = Karst::new(9);
-        let u = a.openness(120.0, 44.0, 80.0, 92.0);
-        assert_eq!(u, b.openness(120.0, 44.0, 80.0, 92.0));
-        assert_ne!(u, Karst::new(10).openness(120.0, 44.0, 80.0, 92.0));
+        let u = a.openness(120.0, 44.0, 80.0, 92.0, 0.0);
+        assert_eq!(u, b.openness(120.0, 44.0, 80.0, 92.0, 0.0));
+        assert_ne!(u, Karst::new(10).openness(120.0, 44.0, 80.0, 92.0, 0.0));
         assert!((0.0..=1.0).contains(&u));
     }
 
@@ -275,6 +322,7 @@ mod tests {
                         92.0,
                         96.0,
                         0.0,
+                        0.0,
                     )
                     .is_some()
                     {
@@ -285,5 +333,25 @@ mod tests {
         }
         assert!(hits > 30, "karst never opened: {hits} / {n}");
         assert!(hits * 12 < n, "too much was dissolved: {hits} / {n}");
+    }
+
+    #[test]
+    fn flat_ground_keeps_its_roof_and_a_hillside_does_not() {
+        let k = Karst::new(4);
+        let mut flat = 0;
+        let mut steep = 0;
+        for x in (0..180).step_by(3) {
+            for z in (0..180).step_by(3) {
+                let p = (x as f32, 90.0, z as f32, 91.5);
+                if k.openness(p.0, p.1, p.2, p.3, 0.0) >= OPEN_AT {
+                    flat += 1;
+                }
+                if k.openness(p.0, p.1, p.2, p.3, 0.8) >= OPEN_AT {
+                    steep += 1;
+                }
+            }
+        }
+        assert_eq!(flat, 0, "a metre of soil should still seal flat ground");
+        assert!(steep > 8, "a hillside should cut into joints: {steep}");
     }
 }

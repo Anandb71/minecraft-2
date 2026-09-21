@@ -608,6 +608,7 @@ impl ChunkGenerator {
                         sample.height,
                         sea,
                         sample.river,
+                        sample.slope,
                     ) {
                         m = fill;
                     }
