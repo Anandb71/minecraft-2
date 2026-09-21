@@ -2,8 +2,10 @@
 //!
 //! The sky moves between clear, cloudy, rain and storm, each lasting a few
 //! minutes; cloud cover, rain and wind ease toward what the sky calls for.
-//! Storms throw lightning near the player now and then: a flash, and what
-//! the bolt strikes may catch fire. Fire feels the wind and the rain.
+//! Storms throw lightning near the player now and then: a jagged bolt of
+//! blinding voxels from the clouds to the ground for a quarter second,
+//! lighting everything around like any emitter, a flash, and what it
+//! strikes may catch fire. Fire feels the wind and the rain.
 
 use crate::Voxels;
 use crate::fire::Fire;
@@ -12,6 +14,7 @@ use crate::player::Body;
 use bevy_ecs::prelude::*;
 use glam::{DVec3, IVec3, Vec2};
 use mc2_voxel::coords::{BlockPos, VOXELS_PER_BLOCK};
+use mc2_voxel::material::ids;
 use mc2_voxel::world::VoxelWorld;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,10 +100,14 @@ pub struct Weather {
     pub flash: f32,
     /// Where lightning struck since the last frame, metres.
     pub strikes: Vec<DVec3>,
+    /// Bolts in the air: their voxels, and seconds left.
+    bolts: Vec<(Vec<IVec3>, f32)>,
     next_strike: f32,
     rng: u64,
     /// Holds the sky as it is (captures, photo mode).
     pub frozen: bool,
+    /// Where the next bolt comes down, and at once (scripted scenes).
+    pub aim: Option<DVec3>,
 }
 
 impl Default for Weather {
@@ -115,9 +122,11 @@ impl Default for Weather {
             wind_goal: Vec2::new(2.0, 1.0),
             flash: 0.0,
             strikes: Vec::new(),
+            bolts: Vec::new(),
             next_strike: 8.0,
             rng: 0x9e37_79b9_97f4_a7c1,
             frozen: false,
+            aim: None,
         }
     }
 }
@@ -132,6 +141,10 @@ const WIND_EASE_S: f32 = 8.0;
 const STRIKE_EVERY: (f32, f32) = (4.0, 15.0);
 /// Lightning strikes this far from the player, metres, least and most.
 const STRIKE_RANGE: (f32, f32) = (25.0, 90.0);
+/// A bolt shows for this long, seconds.
+const BOLT_S: f32 = 0.25;
+/// A bolt reaches this far up from where it strikes, voxels (60 m).
+const BOLT_VOXELS: i32 = 960;
 
 impl Weather {
     fn roll(&mut self) -> f32 {
@@ -193,18 +206,26 @@ impl Weather {
     /// In a storm, now and then, a bolt somewhere around `around`: returns
     /// where it came down, the top of what it hit.
     fn lightning(&mut self, world: &VoxelWorld, around: DVec3, dt: f32) -> Option<DVec3> {
-        if self.sky != Sky::Storm || self.rain < 0.7 {
-            return None;
-        }
-        self.next_strike -= dt;
-        if self.next_strike > 0.0 {
-            return None;
+        let aimed = self.aim.take();
+        if aimed.is_none() {
+            if self.sky != Sky::Storm || self.rain < 0.7 {
+                return None;
+            }
+            self.next_strike -= dt;
+            if self.next_strike > 0.0 {
+                return None;
+            }
         }
         self.next_strike = self.between(STRIKE_EVERY);
         let angle = self.roll() * std::f32::consts::TAU;
         let dist = self.between(STRIKE_RANGE);
-        let x = around.x + f64::from(angle.cos() * dist);
-        let z = around.z + f64::from(angle.sin() * dist);
+        let (x, z) = match aimed {
+            Some(a) => (a.x, a.z),
+            None => (
+                around.x + f64::from(angle.cos() * dist),
+                around.z + f64::from(angle.sin() * dist),
+            ),
+        };
         // Down from well above the player to the first solid thing.
         let top = ((around.y + 80.0) * f64::from(VOXELS_PER_BLOCK)) as i32;
         let (vx, vz) = (
@@ -224,9 +245,57 @@ impl Weather {
     }
 }
 
-/// Every frame: the sky moves on, lightning strikes, fire hears of it.
+impl Weather {
+    /// A bolt's path from `ground` up into the clouds: kinks every two or
+    /// three metres, two voxels thick, with a fork or two.
+    fn bolt_path(&mut self, ground: IVec3) -> Vec<IVec3> {
+        let mut trunk = vec![ground];
+        let mut p = ground;
+        while p.y < ground.y + BOLT_VOXELS {
+            let step = 24 + (self.roll() * 24.0) as i32;
+            let sway_x = ((self.roll() - 0.5) * 28.0) as i32;
+            let sway_z = ((self.roll() - 0.5) * 28.0) as i32;
+            p += IVec3::new(sway_x, step, sway_z);
+            trunk.push(p);
+        }
+        let mut lines = vec![trunk.clone()];
+        for _ in 0..2 {
+            let from = trunk[1 + (self.roll() * (trunk.len() - 2) as f32) as usize];
+            let mut q = from;
+            let mut fork = vec![q];
+            for _ in 0..3 {
+                q += IVec3::new(
+                    ((self.roll() - 0.5) * 40.0) as i32,
+                    -(8 + (self.roll() * 16.0) as i32),
+                    ((self.roll() - 0.5) * 40.0) as i32,
+                );
+                fork.push(q);
+            }
+            lines.push(fork);
+        }
+        let mut out = Vec::new();
+        for line in lines {
+            for w in line.windows(2) {
+                let (a, b) = (w[0].as_vec3(), w[1].as_vec3());
+                let n = (b - a).abs().max_element().ceil().max(1.0) as i32;
+                for k in 0..=n {
+                    let c = a.lerp(b, k as f32 / n as f32).round().as_ivec3();
+                    for d in [IVec3::ZERO, IVec3::X, IVec3::Z, IVec3::new(1, 0, 1)] {
+                        out.push(c + d);
+                    }
+                }
+            }
+        }
+        out.sort_unstable_by_key(|v| (v.x, v.y, v.z));
+        out.dedup();
+        out
+    }
+}
+
+/// Every frame: the sky moves on, lightning strikes and fades, fire hears
+/// of it.
 pub fn update_weather(
-    voxels: Res<Voxels>,
+    mut voxels: ResMut<Voxels>,
     time: Res<Time>,
     mut weather: ResMut<Weather>,
     mut fire: ResMut<Fire>,
@@ -235,10 +304,33 @@ pub fn update_weather(
     let dt = time.dt;
     weather.advance(dt);
     weather.strikes.clear();
+    let world = &mut voxels.0;
+    // Bolts fade.
+    for bolt in &mut weather.bolts {
+        bolt.1 -= dt;
+        if bolt.1 <= 0.0 {
+            for &v in &bolt.0 {
+                if world.voxel(v) == ids::LIGHTNING {
+                    world.set_voxel(v, ids::AIR);
+                }
+            }
+        }
+    }
+    weather.bolts.retain(|b| b.1 > 0.0);
     if let Some(body) = players.iter().next()
-        && let Some(at) = weather.lightning(&voxels.0, body.feet, dt)
+        && let Some(at) = weather.lightning(world, body.feet, dt)
     {
         weather.strikes.push(at);
+        let ground = (at * f64::from(VOXELS_PER_BLOCK)).floor().as_ivec3() + IVec3::Y;
+        let path = weather.bolt_path(ground);
+        let mut lit = Vec::with_capacity(path.len());
+        for v in path {
+            if world.voxel(v).is_air() {
+                world.set_voxel(v, ids::LIGHTNING);
+                lit.push(v);
+            }
+        }
+        weather.bolts.push((lit, BOLT_S));
         let b = BlockPos((at * f64::from(VOXELS_PER_BLOCK)).floor().as_ivec3() >> 4);
         fire.ignite.push((b, false));
         fire.ignite.push((BlockPos(b.0 - IVec3::Y), false));
@@ -291,5 +383,11 @@ mod tests {
         let at = struck.expect("a storm strikes within 20 s");
         assert!((at.y - 4.0).abs() < 0.3, "struck at {at}");
         assert_eq!(w.flash, 1.0);
+        // The bolt reaches from the ground up into the sky, unbroken.
+        let ground = (at * 16.0).floor().as_ivec3() + IVec3::Y;
+        let path = w.bolt_path(ground);
+        let top = path.iter().map(|v| v.y).max().unwrap();
+        assert!(top >= ground.y + BOLT_VOXELS && path.len() > 2000);
+        assert!(path.iter().any(|&v| v.y == ground.y));
     }
 }
