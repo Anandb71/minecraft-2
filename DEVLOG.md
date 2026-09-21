@@ -955,3 +955,75 @@ a flowing surface steps in 0.5 m columns with 6.25 cm levels.
 **Rejected.** Heightfield water, SPH and FLIP (D37), no-slip walls (D38),
 hanging droplets (D39), drawing the lattice in the marcher (D40), and
 simulating the whole sea (D41).
+
+## Step 12: Fire, heat, wind and weather (`v0.12-weather`)
+
+**Fire.** Fire burns 1 m blocks. A block holds so many seconds of fuel by
+what is in it (a log 40 s, planks 25, leaves 5, grass 1.5), judged by 27
+voxels through it so a trunk thinner than its block or a block of scattered
+leaves still counts. Ten times a second its flames are drawn again: tongues
+of fire voxels two across at the root, up to a metre tall, in the air
+beside its flammable voxels, lighting everything around through the same
+emitter path as torches. Its flammable voxels char from the outside in
+(wood to charcoal, leaves and grass to nothing, wool and thatch to ash),
+and it tries its neighbours: more readily above it (fire climbs) and
+downwind. Water beside a burning block puts it out and rain does now and
+then where it reaches; its heat melts snow and ice. Charring is an edit
+like any other, so the structure solver judges a burning building as it
+weakens. Flint and steel lights things; blasts set what is flammable
+around them alight; TNT that catches goes off.
+
+**Weather.** The sky drifts between clear, cloudy, rain and storm, each
+lasting minutes; cloud cover, rain and wind ease toward what it calls for.
+The renderer takes cover, precipitation and wind for the cloud layer,
+thickens the fog in rain, and draws rain or snow by the climate where the
+camera stands (nothing falls under a roof). Open ground soaks while it
+rains (45 s) and dries slowly after (4 min): surfaces the traced sky
+visibility reaches darken and turn glossy, and water stands in the hollows
+of level ground, flat as mirrors; compose and the reflection trace agree
+on the wet roughness, so puddles really reflect. Rain and snow are drawn at
+display resolution in four layers of air 1.5 to 12 m out, gridded over the
+view direction's angles so they hold still as the camera turns, sheared
+along the wind and hidden behind anything nearer.
+
+Storms strike every few seconds within 90 m: a jagged bolt of lightning
+voxels, 60 m tall with a fork or two, for a quarter second (lighting the
+scene and showing in the puddles), a flash over the whole image, and
+whatever it hits may catch fire. `--weather clear|cloudy|rain|storm`
+starts in a sky and holds it in captures; `--demo wildfire` and
+`--demo lightning` show both.
+
+**Measurements** (RTX 3050 Laptop, 1280x720):
+
+| | Before | After |
+|---|---|---|
+| fire.tick, a canopy catching (350 blocks, mean / p99) | 1.76 / 28.4 ms | 1.11 / 10.4 ms |
+| lights.update while water flows (mean) | 8.75 ms | 0.84 ms |
+
+The fire runs ten times a second, so its cost lands on one frame in six.
+Lights and sky heights were rebuilt for every chunk an edit touched,
+every frame; a chunk now skips the emitter scan unless it had lights or a
+changed brick holds an emissive voxel, and a chunk scanned in the last 12
+frames waits.
+
+**Bugs found.**
+
+- A trunk thinner than its block looked like air to the eight probes that
+  name a block's material, so fire never climbed a tree.
+- Grass was floored at 0.3 flammability for spreading and set whole
+  meadows alight.
+- Charring stopped at the outer shell of a log: voxels were exposed only
+  next to air, fire or ash, not to the charcoal the shell had become.
+- A test of spreading fire failed until its ground had bedrock under it:
+  the structure solver rightly dropped an unanchored slab and the logs on
+  it as debris.
+- The weather hooks landed in the commit before the function they call; the
+  five commits were rebuilt from the same final tree in order before they
+  were pushed.
+
+**Known.** Fire is block-grained: heat does not flow through voxels, and
+smoke is not drawn yet. The GPU frame at 720p is around 40 ms on the RTX
+3050, most of it ReSTIR direct light: step 18's business.
+
+**Rejected.** A voxel heat field (D42), particle rain (D43), lightning as
+a screen effect (D44).

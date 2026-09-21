@@ -269,3 +269,18 @@ Both were built behind one output with the same hit shading and denoiser, and me
 
 - **Simulate all of it.** A 16 km world's oceans would be millions of tiles.
 - **Still until disturbed, with a refilling edge (chosen).** Generated water is plain voxels. An edit beside it takes the water around into the simulation, and cells on the edge of what was taken refill once they drain, standing in for the sea beyond.
+
+## D42. What burns
+
+- **A heat field over the voxels.** Temperature conducted and convected voxel by voxel, ignition where a material passes its ignition point: the material table already carries conductivity, specific heat and ignition temperatures. At 6.25 cm voxels a burning house is millions of cells stepped many times a second.
+- **Burning 1 m blocks (chosen).** A block has fuel by what is in it and may take its neighbours each tick, faster upward and downwind; its voxels char from the outside in and its flames are voxels drawn fresh ten times a second. A forest fire is a few hundred blocks, and the flames are real emitters.
+
+## D43. Rain and snow
+
+- **Particles.** Drops as quads or lines in the world: correct parallax, but tens of thousands of them to keep the air full, each needing an occlusion test against a world with no depth buffer of its own.
+- **Layers in the display pass (chosen).** Four layers of air at fixed distances, gridded over the view direction's angles and hidden behind anything nearer by the visibility buffer's depth. No geometry, a few dozen instructions a pixel, and drops that stay put as the camera turns.
+
+## D44. Lightning
+
+- **A screen effect.** A bright jagged line drawn over the image: cheap, but it lights nothing and is missing from reflections.
+- **Voxels of light (chosen).** A bolt written into the world as emissive voxels for a quarter second: the emitter path lights the scene with it, reflections and puddles show it, and it comes down where it strikes.

@@ -12,6 +12,7 @@ then quits.
 | Middle click (held) | Preview the targeted block |
 | I | Inventory and recipes |
 | Right click with a bucket | Fill it from water; pour a full one where you aim |
+| Right click with flint and steel | Set what you aim at alight |
 | W A S D | Move |
 | Space | Jump (fly: up) |
 | Ctrl or C | Crouch (fly: down) |

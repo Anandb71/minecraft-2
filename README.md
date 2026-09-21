@@ -118,6 +118,13 @@ Radiance cascades or ReSTIR GI. SVGF. Volumetric clouds that shadow the
 ground. Froxel fog with light shafts. Glossy reflections. AgX. Photo mode
 with focal length, focus, aperture and exposure.
 
+**Fire and weather.** Blocks burn by what they hold, spread uphill and
+downwind, char wood to charcoal and light the night; water and rain put
+them out. Clear, cloudy, rain and storm drift by with the wind: rain soaks
+open ground into glossy stone and mirror puddles, snow falls where it is
+cold, and lightning comes down as a real bolt of light that can start a
+fire.
+
 **Water.** Free-surface lattice Boltzmann on the GPU in half-metre cells,
 written back into the voxel world as it flows, so it is lit, refracted and
 reflected like everything else. The sea stays still until you dig beside
@@ -181,8 +188,8 @@ What it cost: [DEVLOG.md](DEVLOG.md).
 | done | Rigid bodies, destruction | `v0.9-destruction` |
 | done | Structural integrity | `v0.10-structure` |
 | done | Water: lattice Boltzmann on the GPU | `v0.11-fluids` |
-| now | Fire, heat, wind, weather | |
-| next | Worldgen v2: tectonics, caves, ecology | |
+| done | Fire, heat, wind, weather | `v0.12-weather` |
+| now | Worldgen v2: tectonics, caves, ecology | |
 | next | Animation, IK, ragdolls | |
 | next | NPCs, economy, vehicles | |
 | next | Traced audio | |
