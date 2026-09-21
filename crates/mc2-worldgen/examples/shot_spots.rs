@@ -157,17 +157,18 @@ fn outside_mouth(
     surface: &Surface,
     mouth: (f32, f32, f32, f32),
 ) -> ((f64, f64, f64), (f64, f64, f64)) {
-    let (x, h, z, _) = mouth;
+    let (x, _, z, _) = mouth;
     let dx = surface.sample(x + 4.0, z).height - surface.sample(x - 4.0, z).height;
     let dz = surface.sample(x, z + 4.0).height - surface.sample(x, z - 4.0).height;
     let len = (dx * dx + dz * dz).sqrt().max(0.2);
     // Stand downhill, looking back into the hill.
     let (ux, uz) = (dx / len, dz / len);
-    let sx = x - ux * 7.0;
-    let sz = z - uz * 7.0;
+    let sx = x - ux * 18.0;
+    let sz = z - uz * 18.0;
     let sh = surface.sample(sx, sz).height;
-    let eye = (sx as f64, (sh + 1.7) as f64, sz as f64);
-    let look = (x as f64, (h - 1.2) as f64, z as f64);
+    let eye_y = sh + 1.8;
+    let eye = (sx as f64, eye_y as f64, sz as f64);
+    let look = (x as f64, (eye_y - 0.4) as f64, z as f64);
     (eye, look)
 }
 
