@@ -500,9 +500,17 @@ mod tests {
         s.edited(a, b);
     }
 
-    /// Runs until `done`, or gives up after 20 simulated seconds.
+    /// Runs until `done`, or gives up after 20 simulated seconds. While a
+    /// solve is out on the worker thread no simulated time passes (a busy
+    /// machine running many tests could otherwise outrun it), up to 30 real
+    /// seconds.
     fn run_until(game: &mut Game, mut done: impl FnMut(&mut Game) -> bool) -> bool {
+        let start = std::time::Instant::now();
         for _ in 0..1200 {
+            while game.world.resource::<Structure>().solver.busy && start.elapsed().as_secs() < 30 {
+                game.update(0.0);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
             game.update(1.0 / 60.0);
             if done(game) {
                 return true;
