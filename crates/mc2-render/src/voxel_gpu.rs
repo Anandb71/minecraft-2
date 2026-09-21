@@ -317,6 +317,71 @@ impl GpuWorld {
         }
     }
 
+    /// GPU chunks whose CPU tree has streamed out. Structure upload is
+    /// nearest-first and budgeted, so distant unloads otherwise sit in
+    /// `pending` while their tree words stay allocated.
+    fn reclaim_unloaded(&mut self, world: &VoxelWorld) {
+        let stale: Vec<ChunkPos> = self
+            .chunks
+            .keys()
+            .copied()
+            .filter(|&p| world.chunk(p).is_none())
+            .collect();
+        for pos in stale {
+            self.pending.remove(&pos);
+            self.changed.push((pos, true));
+            self.free_chunk(pos);
+        }
+    }
+
+    fn release_bricks(&mut self, chunk: &mut GpuChunk) {
+        for (_, b) in chunk.bricks.drain() {
+            self.voxel_alloc.free(b.range);
+            if let Some(s) = b.state {
+                self.voxel_alloc.free(s);
+            }
+        }
+    }
+
+    /// Tree words from the free lists, evicting the farthest resident
+    /// chunks if the pool is full. Prefers ranges big enough to reuse.
+    fn alloc_tree(
+        &mut self,
+        words: u32,
+        camera_m: DVec3,
+        keep: impl Fn(ChunkPos) -> bool,
+    ) -> Option<Range> {
+        if let Some(r) = self.tree_alloc.alloc(words) {
+            self.tree_pool_warned = false;
+            return Some(r);
+        }
+        let cam_v = camera_m * VOXELS_PER_METRE;
+        let mut ranked: Vec<(bool, u64, ChunkPos)> = self
+            .chunks
+            .iter()
+            .filter(|(p, _)| !keep(**p))
+            .map(|(p, c)| {
+                let centre = p.origin().as_dvec3() + f64::from(coords::CHUNK_VOXELS / 2);
+                (
+                    c.range.words >= words,
+                    centre.distance_squared(cam_v) as u64,
+                    *p,
+                )
+            })
+            .collect();
+        ranked.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+        for (_, _, pos) in ranked {
+            self.changed.push((pos, true));
+            self.free_chunk(pos);
+            if let Some(r) = self.tree_alloc.alloc(words) {
+                log::info!("reclaimed GPU trees to upload nearby chunks");
+                self.tree_pool_warned = false;
+                return Some(r);
+            }
+        }
+        None
+    }
+
     /// Encodes and writes one brick, reusing its allocation when the size
     /// class is unchanged. Returns bytes written.
     fn upload_brick(
@@ -372,6 +437,7 @@ impl GpuWorld {
         pos: ChunkPos,
         tree: &ChunkTree,
         prepared: Option<gl::FlatChunk>,
+        camera_m: DVec3,
     ) {
         // A different tree (regenerated at another level of detail) shares no
         // brick slots with the old one: drop its bricks before flattening.
@@ -442,10 +508,12 @@ impl GpuWorld {
         {
             if chunk.range.words != 0 {
                 self.tree_alloc.free(chunk.range);
+                chunk.range.words = 0;
             }
-            match self.tree_alloc.alloc(words) {
+            match self.alloc_tree(words, camera_m, |p| p == pos) {
                 Some(r) => chunk.range = r,
                 None => {
+                    self.release_bricks(&mut chunk);
                     if !self.tree_pool_warned {
                         log::error!(
                             "voxel tree pool exhausted; chunks beyond this are not uploaded"
@@ -490,7 +558,7 @@ impl GpuWorld {
         self.chunks.insert(pos, chunk);
     }
 
-    fn rebuild_sector(&mut self, queue: &wgpu::Queue, s: usize) {
+    fn rebuild_sector(&mut self, queue: &wgpu::Queue, s: usize, camera_m: DVec3) {
         let sx = s as i32 % coords::WORLD_SECTORS_XZ;
         let sz = s as i32 / coords::WORLD_SECTORS_XZ;
         let origin = IVec3::new(sx, 0, sz) * CHUNKS_PER_SECTOR;
@@ -517,7 +585,8 @@ impl GpuWorld {
         let n4 = l4.len();
         let total_chunks: usize = l4.values().map(Vec::len).sum();
         let words = 4 + 4 * n4 + 4 * total_chunks;
-        let Some(range) = self.tree_alloc.alloc(words as u32) else {
+        let protect: FxHashSet<ChunkPos> = l4.values().flatten().map(|&(_, p)| p).collect();
+        let Some(range) = self.alloc_tree(words as u32, camera_m, |p| protect.contains(&p)) else {
             log::error!("voxel tree pool exhausted; sector {s} not linked");
             return;
         };
@@ -609,6 +678,7 @@ impl GpuWorld {
     /// Streams structure, bricks and sector links for this frame.
     pub fn update(&mut self, queue: &wgpu::Queue, world: &mut VoxelWorld, camera_m: DVec3) {
         mc2_core::scope!("voxel_gpu.update");
+        self.reclaim_unloaded(world);
         let mut uploaded = 0usize;
         let mut bytes = 0usize;
 
@@ -642,7 +712,7 @@ impl GpuWorld {
                 });
             self.changed.push((pos, lit));
             if structure || new {
-                self.upload_structure(queue, pos, tree, prepared);
+                self.upload_structure(queue, pos, tree, prepared, camera_m);
             }
             for slot in bricks {
                 let resident = self
@@ -733,7 +803,7 @@ impl GpuWorld {
         drop(resident_scope);
         let _sector_scope = mc2_core::profiler::ScopeGuard::new("voxel_gpu.sectors");
         for s in std::mem::take(&mut self.dirty_sectors) {
-            self.rebuild_sector(queue, s);
+            self.rebuild_sector(queue, s, camera_m);
         }
 
         self.stats.chunks = self.chunks.len();
