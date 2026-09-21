@@ -134,6 +134,7 @@ pub struct GpuWorld {
     queue: Vec<(ChunkPos, u32)>,
     config: GpuWorldConfig,
     tree_pool_warned: bool,
+    reclaim_logged: bool,
     /// Chunks changed in the world but not yet re-uploaded.
     pending: FxHashSet<ChunkPos>,
     /// Camera brick cell at the last proximity scan.
@@ -285,6 +286,7 @@ impl GpuWorld {
             queue: Vec::new(),
             config,
             tree_pool_warned: false,
+            reclaim_logged: false,
             pending: FxHashSet::default(),
             proximity_at: None,
             changed: Vec::new(),
@@ -356,25 +358,30 @@ impl GpuWorld {
             return Some(r);
         }
         let cam_v = camera_m * VOXELS_PER_METRE;
-        let mut ranked: Vec<(bool, u64, ChunkPos)> = self
+        // Keep the neighbourhood. A big near chunk used to be the first
+        // victim because its allocation was large enough to reuse, which
+        // deleted the ground to store the horizon.
+        let hold = 192.0 * VOXELS_PER_METRE;
+        let hold2 = hold * hold;
+        let mut ranked: Vec<(u64, ChunkPos)> = self
             .chunks
             .iter()
             .filter(|(p, _)| !keep(**p))
-            .map(|(p, c)| {
+            .filter_map(|(p, _)| {
                 let centre = p.origin().as_dvec3() + f64::from(coords::CHUNK_VOXELS / 2);
-                (
-                    c.range.words >= words,
-                    centre.distance_squared(cam_v) as u64,
-                    *p,
-                )
+                let d2 = centre.distance_squared(cam_v);
+                (d2 > hold2).then_some((d2 as u64, *p))
             })
             .collect();
-        ranked.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
-        for (_, _, pos) in ranked {
+        ranked.sort_unstable_by_key(|a| std::cmp::Reverse(a.0));
+        for (_, pos) in ranked {
             self.changed.push((pos, true));
             self.free_chunk(pos);
             if let Some(r) = self.tree_alloc.alloc(words) {
-                log::info!("reclaimed GPU trees to upload nearby chunks");
+                if !self.reclaim_logged {
+                    log::info!("reclaimed distant GPU trees to make room");
+                    self.reclaim_logged = true;
+                }
                 self.tree_pool_warned = false;
                 return Some(r);
             }
