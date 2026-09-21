@@ -110,7 +110,9 @@ generated until someone digs.
 **Biomes and settlements.** Climate cools with height: oak and birch forest,
 pine and snowy taiga, plains, desert, alpine rock and snow, beaches and sea.
 Villages around a plaza and well. Towns on a street grid with lamps, parks
-and glass towers, lit at night.
+and glass towers, lit at night. Caves dissolve limestone, chalk and marble
+along joints and bedding, with sinkholes under rivers; they are not noise
+worms.
 
 **Renderer.** Visibility buffer with exact voxel ids. Physically based sky
 (Hillaire 2020). Traced soft shadows. ReSTIR from every emissive cluster.

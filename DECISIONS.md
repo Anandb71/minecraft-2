@@ -17,6 +17,7 @@ writing the thing ourselves.
 | `png` | Deflate compression for screenshots and golden references; stored-block PNGs would be 11 MB per 1440p shot. |
 | `font8x8` | Public domain 8x8 glyph bitmaps. Data, not code: the HUD renderer that uses it is ours. |
 | `log` | The logging facade wgpu already emits through; our logger is 20 lines. |
+| `gilrs` | Gamepad hotplug, analog axes and a mapping database across Windows, Linux and macOS; writing HID parsers is not the product. |
 
 ## D1. Who owns the frame graph
 
@@ -284,3 +285,9 @@ Both were built behind one output with the same hit shading and denoiser, and me
 
 - **A screen effect.** A bright jagged line drawn over the image: cheap, but it lights nothing and is missing from reflections.
 - **Voxels of light (chosen).** A bolt written into the world as emissive voxels for a quarter second: the emitter path lights the scene with it, reflections and puddles show it, and it comes down where it strikes.
+
+## D45. Caves
+
+- **3D noise worms.** The usual Minecraft tunnels: a few Perlin corridors that ignore the host rock, so granite, chalk and clay all look the same underground.
+- **CSG blobs / sphere stamps.** Cheap rooms, but they float in the strata and do not follow joints, so they read as Swiss cheese rather than dissolved carbonate.
+- **Karst along joints and bedding (chosen).** Two vertical joint sets and a bedding plane open only in limestone, chalk and marble; passages stay mostly horizontal, meet in rooms, flood below a water table, and punch sinkholes where a river sits over a shaft. Node8 skips them (thinner than 8 m would alias). Voxel bricks dissolve in `brick_at` so digging a cave wall matches the generated chunk.

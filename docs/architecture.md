@@ -38,7 +38,7 @@ flowchart TB
 | `mc2-gpu` | Device, frame graph, shader library, timestamp profiler, capture |
 | `mc2-voxel` | Bricks, 64-trees, materials, GPU layout, CPU reference marcher |
 | `mc2-game` | ECS game state, player, collision, blocks, interaction, inventory |
-| `mc2-worldgen` | Noise, strata, erosion, flora, settlements, chunk streaming |
+| `mc2-worldgen` | Noise, strata, erosion, flora, settlements, karst, chunk streaming |
 | `mc2-physics` | Rigid bodies (XPBD), contacts, explosions, baking |
 | `mc2-structure` | Load graph, stress, collapse |
 | `mc2-fluid` | Free-surface lattice Boltzmann water: the CPU reference the GPU version is tested against |

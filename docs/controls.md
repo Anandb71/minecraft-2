@@ -53,7 +53,7 @@ east crouch, west TNT, north fly. Push the left stick all the way to sprint.
 | D-pad up | Block / carve mode |
 | D-pad down (held) | Preview the targeted block |
 | Start | Capture or release play |
-| Back / Select | Photo mode |
+| Back / Select | Inventory |
 
 ## Photo mode
 
