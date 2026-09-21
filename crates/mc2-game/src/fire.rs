@@ -30,6 +30,47 @@ const FLAMES_PER_BLOCK: usize = 160;
 const SPREAD_PER_S: f32 = 0.6;
 /// Seconds a block lit with nothing to burn keeps a small flame.
 const GROUND_FIRE_S: f32 = 2.5;
+/// Burning blocks nearest the player whose flames flicker every tick; the
+/// rest keep the flames they last drew.
+const FLICKER_BLOCKS: usize = 24;
+/// Voxels one block chars a tick at most; what is left chars through when
+/// it burns out.
+const MAX_CHAR_PER_TICK: usize = 40;
+/// Blocks that finish burning in one tick at most (each chars through all
+/// its voxels); the rest keep burning a tick longer.
+const BURN_OUTS_PER_TICK: usize = 6;
+/// Neighbours a burning block tries each tick, of the thirty it has.
+const SPREAD_TRIES: usize = 6;
+
+/// Where fire can spread from a block: its 26 neighbours, and straight up
+/// two blocks (fire climbs), with how much more readily it goes that way.
+const NEIGHBOURS: [(IVec3, f32); 27] = {
+    let mut out = [(IVec3::ZERO, 0.0); 27];
+    let mut i = 0;
+    let mut dz = -1;
+    while dz <= 1 {
+        let mut dy = -1;
+        while dy <= 1 {
+            let mut dx = -1;
+            while dx <= 1 {
+                if dx != 0 || dy != 0 || dz != 0 {
+                    let up = match dy {
+                        1 => 3.0,
+                        0 => 1.0,
+                        _ => 0.4,
+                    };
+                    out[i] = (IVec3::new(dx, dy, dz), up);
+                    i += 1;
+                }
+                dx += 1;
+            }
+            dy += 1;
+        }
+        dz += 1;
+    }
+    out[26] = (IVec3::new(0, 2, 0), 1.5);
+    out
+};
 
 #[derive(Clone, Debug)]
 struct Burn {
@@ -289,13 +330,21 @@ fn burn_block(
     flames: &mut Vec<IVec3>,
     intensity: f32,
     char_voxels: usize,
+    flicker: bool,
 ) -> Option<(IVec3, IVec3)> {
     let o = b.origin();
     let n = VOXELS_PER_BLOCK;
-    clear_flames(world, flames);
-    flames.clear();
-    // Flames: seeds in the air beside flammable voxels, each a tongue up.
-    let want = (FLAMES_PER_BLOCK as f32 * intensity.clamp(0.2, 1.0)) as usize;
+    // Flames: seeds in the air beside flammable voxels, each a tongue up;
+    // drawn again each tick near the player, once elsewhere.
+    let want = if flicker || flames.is_empty() {
+        clear_flames(world, flames);
+        flames.clear();
+        let all = FLAMES_PER_BLOCK as f32 * intensity.clamp(0.2, 1.0);
+        // Far blocks draw their flames once, and fewer of them.
+        (if flicker { all } else { all / 3.0 }) as usize
+    } else {
+        0
+    };
     let mut tries = 0;
     while flames.len() < want && tries < want * 6 {
         tries += 1;
@@ -340,7 +389,7 @@ fn burn_block(
     let mut charred: Option<(IVec3, IVec3)> = None;
     let mut done = 0;
     let mut tries = 0;
-    while done < char_voxels && tries < char_voxels * 8 {
+    while done < char_voxels && tries < char_voxels * 3 {
         tries += 1;
         let v = o + IVec3::new(fire.roll_int(n), fire.roll_int(n), fire.roll_int(n));
         let m = world.voxel(v);
@@ -386,6 +435,7 @@ pub fn update_fire(
     mut fire: ResMut<Fire>,
     mut physics: ResMut<Physics>,
     time: Res<Time>,
+    players: Query<&crate::player::Body>,
 ) {
     let fire = &mut *fire;
     fire.acc += time.dt;
@@ -421,11 +471,17 @@ pub fn update_fire(
         fire.light(b, t.fuel, forced);
     }
 
-    let blocks: Vec<BlockPos> = fire.burning.keys().copied().collect();
+    // Nearest first, so the flicker goes where it is seen.
+    let mut blocks: Vec<BlockPos> = fire.burning.keys().copied().collect();
+    if let Some(body) = players.iter().next() {
+        let at = body.feet.floor().as_ivec3();
+        blocks.sort_by_key(|b| (b.0 - at).length_squared());
+    }
     let wind = fire.wind;
     let wind_speed = wind.length();
     let mut catch = Vec::new();
-    for b in blocks {
+    let mut burn_outs = 0;
+    for (rank, b) in blocks.into_iter().enumerate() {
         let Some(mut burn) = fire.burning.remove(&b) else {
             continue;
         };
@@ -437,7 +493,8 @@ pub fn update_fire(
             continue;
         }
         burn.fuel -= TICK_S;
-        if burn.fuel <= 0.0 {
+        if burn.fuel <= 0.0 && burn_outs < BURN_OUTS_PER_TICK {
+            burn_outs += 1;
             clear_flames(world, &burn.flames);
             fire.burnt_out += 1;
             // What is left of it chars through.
@@ -457,47 +514,40 @@ pub fn update_fire(
             physics.world_edited(o, hi);
             continue;
         }
-        let intensity = (burn.fuel / burn.total * 2.0).clamp(0.25, 1.0);
+        let intensity = (burn.fuel.max(0.0) / burn.total * 2.0).clamp(0.25, 1.0);
         // A block's flammable voxels char over its burn time.
-        let per_tick = (4096.0 / burn.total * TICK_S * 0.8).ceil() as usize;
+        let per_tick =
+            ((4096.0 / burn.total * TICK_S * 0.8).ceil() as usize).min(MAX_CHAR_PER_TICK);
         let mut flames = std::mem::take(&mut burn.flames);
-        if let Some((lo, hi)) = burn_block(world, fire, b, &mut flames, intensity, per_tick) {
+        let flicker = rank < FLICKER_BLOCKS;
+        if let Some((lo, hi)) =
+            burn_block(world, fire, b, &mut flames, intensity, per_tick, flicker)
+        {
             physics.world_edited(lo, hi);
         }
         burn.flames = flames;
-        // Spread: neighbours within a block, and two above.
-        for dz in -1..=1 {
-            for dy in -1..=2 {
-                for dx in -1..=1 {
-                    if (dx, dy, dz) == (0, 0, 0) || (dy == 2 && (dx != 0 || dz != 0)) {
-                        continue;
-                    }
-                    let nb = BlockPos(b.0 + IVec3::new(dx, dy, dz));
-                    if fire.burning.contains_key(&nb) {
-                        continue;
-                    }
-                    let t = tinder(world, &layer, nb);
-                    let f = t.flammability;
-                    if f <= 0.0 {
-                        continue;
-                    }
-                    let up = match dy {
-                        2 => 1.5,
-                        1 => 3.0,
-                        0 => 1.0,
-                        _ => 0.4,
-                    };
-                    let dir = Vec2::new(dx as f32, dz as f32).normalize_or_zero();
-                    let downwind = if wind_speed > 0.1 {
-                        (1.0 + dir.dot(wind / wind_speed) * wind_speed / 4.0).max(0.15)
-                    } else {
-                        1.0
-                    };
-                    let p = f * SPREAD_PER_S * TICK_S * up * downwind * intensity;
-                    if fire.roll() < p {
-                        catch.push((nb, t));
-                    }
-                }
+        // Spread: a few neighbours a tick, the odds scaled to all of them.
+        for _ in 0..SPREAD_TRIES {
+            let (d, up) = NEIGHBOURS[fire.roll_int(NEIGHBOURS.len() as i32) as usize];
+            let nb = BlockPos(b.0 + d);
+            if fire.burning.contains_key(&nb) {
+                continue;
+            }
+            let t = tinder(world, &layer, nb);
+            let f = t.flammability;
+            if f <= 0.0 {
+                continue;
+            }
+            let dir = Vec2::new(d.x as f32, d.z as f32).normalize_or_zero();
+            let downwind = if wind_speed > 0.1 {
+                (1.0 + dir.dot(wind / wind_speed) * wind_speed / 4.0).max(0.15)
+            } else {
+                1.0
+            };
+            let share = NEIGHBOURS.len() as f32 / SPREAD_TRIES as f32;
+            let p = f * SPREAD_PER_S * TICK_S * up * downwind * intensity * share;
+            if fire.roll() < p {
+                catch.push((nb, t));
             }
         }
         fire.burning.insert(b, burn);
