@@ -4,6 +4,7 @@ mod app;
 mod cli;
 mod demo;
 mod game_hud;
+mod gamepad;
 mod headless;
 mod icons;
 mod inventory_ui;
