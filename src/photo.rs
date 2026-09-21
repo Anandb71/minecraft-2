@@ -27,6 +27,9 @@ pub struct PhotoMode {
     pub depth_of_field: bool,
     /// Held movement keys: forward, back, left, right, up, down.
     held: [bool; 6],
+    analog_move: glam::Vec2,
+    analog_up: f32,
+    analog_sprint: bool,
     clock_was_paused: bool,
     capture_requested: bool,
 }
@@ -42,6 +45,9 @@ impl Default for PhotoMode {
             exposure_ev: 0.0,
             depth_of_field: true,
             held: [false; 6],
+            analog_move: glam::Vec2::ZERO,
+            analog_up: 0.0,
+            analog_sprint: false,
             clock_was_paused: false,
             capture_requested: false,
         }
@@ -60,6 +66,9 @@ impl PhotoMode {
         self.camera = camera;
         self.clock_was_paused = clock_paused;
         self.held = [false; 6];
+        self.analog_move = glam::Vec2::ZERO;
+        self.analog_up = 0.0;
+        self.analog_sprint = false;
     }
 
     /// Leaves photo mode; returns the clock pause state to restore.
@@ -87,17 +96,50 @@ impl PhotoMode {
             return false;
         }
         match code {
-            KeyCode::KeyQ => self.focus_m = (self.focus_m / 1.15).max(0.3),
-            KeyCode::KeyE => self.focus_m = (self.focus_m * 1.15).min(2000.0),
-            KeyCode::KeyZ => self.f_number = next_stop(self.f_number, -1),
-            KeyCode::KeyX => self.f_number = next_stop(self.f_number, 1),
-            KeyCode::Comma => self.exposure_ev -= 1.0 / 3.0,
-            KeyCode::Period => self.exposure_ev += 1.0 / 3.0,
+            KeyCode::KeyQ => self.bump_focus(-1),
+            KeyCode::KeyE => self.bump_focus(1),
+            KeyCode::KeyZ => self.bump_aperture(-1),
+            KeyCode::KeyX => self.bump_aperture(1),
+            KeyCode::Comma => self.bump_exposure(-1),
+            KeyCode::Period => self.bump_exposure(1),
             KeyCode::KeyG => self.depth_of_field = !self.depth_of_field,
             KeyCode::Enter | KeyCode::F2 => self.capture_requested = true,
             _ => return false,
         }
         true
+    }
+
+    pub fn bump_focus(&mut self, dir: i32) {
+        if dir < 0 {
+            self.focus_m = (self.focus_m / 1.15).max(0.3);
+        } else {
+            self.focus_m = (self.focus_m * 1.15).min(2000.0);
+        }
+    }
+
+    pub fn bump_aperture(&mut self, dir: i32) {
+        self.f_number = next_stop(self.f_number, dir);
+    }
+
+    pub fn bump_exposure(&mut self, dir: i32) {
+        self.exposure_ev += dir as f32 / 3.0;
+    }
+
+    pub fn request_capture(&mut self) {
+        self.capture_requested = true;
+    }
+
+    pub fn set_analog(&mut self, move_xz: glam::Vec2, up: f32, sprint: bool) {
+        self.analog_move = move_xz;
+        self.analog_up = up;
+        self.analog_sprint = sprint;
+    }
+
+    /// Right stick, already curved. Scales with focal length like the mouse.
+    pub fn stick_look(&mut self, axis: glam::Vec2, dt: f32) {
+        let scale = 2.2 * 35.0 / self.focal_mm * dt;
+        self.camera.yaw -= axis.x * scale;
+        self.camera.pitch = (self.camera.pitch - axis.y * scale).clamp(-1.55, 1.55);
     }
 
     pub fn look(&mut self, dx: f32, dy: f32) {
@@ -123,7 +165,10 @@ impl PhotoMode {
                 v += axis;
             }
         }
-        self.camera.position += (v.normalize_or_zero() * 4.0 * dt).as_dvec3();
+        v +=
+            flat * self.analog_move.y + right * self.analog_move.x + glam::Vec3::Y * self.analog_up;
+        let speed = if self.analog_sprint { 12.0 } else { 4.0 };
+        self.camera.position += (v.normalize_or_zero() * speed * dt).as_dvec3();
         self.camera.fov_y = fov_for_focal(self.focal_mm);
     }
 
@@ -141,9 +186,14 @@ impl PhotoMode {
         std::mem::take(&mut self.capture_requested)
     }
 
-    pub fn status(&self) -> String {
+    pub fn status(&self, gamepad: bool) -> String {
+        let hints = if gamepad {
+            "LS/A/B fly  RS look  L3 fast  LT/RT zoom  D-pad focus/EV  LB/RB aperture  Y DoF  Start capture  Back exit"
+        } else {
+            "WASD/space/ctrl fly  wheel zoom  Q/E focus  Z/X aperture  , . exposure  G DoF  Enter capture  P exit"
+        };
         format!(
-            "PHOTO  {:.0} mm  f/{:.1}  focus {:.1} m  {:+.1} EV  DoF {}  |  WASD/space/ctrl fly  wheel zoom  Q/E focus  Z/X aperture  , . exposure  G DoF  Enter capture  P exit",
+            "PHOTO  {:.0} mm  f/{:.1}  focus {:.1} m  {:+.1} EV  DoF {}  |  {hints}",
             self.focal_mm,
             self.f_number,
             self.focus_m,

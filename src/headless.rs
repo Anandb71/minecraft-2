@@ -158,6 +158,7 @@ pub fn run(args: &Args) -> Result<(), String> {
                 &mut renderer.frame.hud,
                 &mut renderer.frame.gizmos,
                 screen,
+                false,
             );
         }
         if args.demo.is_some() {

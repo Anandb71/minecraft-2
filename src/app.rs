@@ -1,6 +1,7 @@
 //! Windowed application: event loop, surface management, input, frame pacing.
 
 use crate::cli::Args;
+use crate::gamepad::{Gamepads, Pad};
 use crate::world::{TerrainLoader, spawn_camera, stream, stream_stats};
 use glam::Vec2;
 use mc2_core::RollingStats;
@@ -35,6 +36,8 @@ pub struct App {
     loader: TerrainLoader,
     camera: Camera,
     grabbed: bool,
+    gamepads: Gamepads,
+    pad_connected: bool,
     last_frame: Instant,
     start: Instant,
     frame_ms: RollingStats,
@@ -100,6 +103,8 @@ impl App {
             loader: TerrainLoader::start(args.seed, args.world_dir.clone(), Default::default()),
             camera: Camera::default(),
             grabbed: false,
+            gamepads: Gamepads::new(),
+            pad_connected: false,
             last_frame: Instant::now(),
             start: Instant::now(),
             frame_ms: RollingStats::default(),
@@ -196,25 +201,27 @@ impl App {
         }
     }
 
-    fn set_grab(&mut self, grab: bool) {
+    fn set_play(&mut self, play: bool) {
         let Some(r) = &self.running else {
             return;
         };
-        if grab {
-            let ok = r
+        if play {
+            r.window.focus_window();
+            let grabbed = r
                 .window
                 .set_cursor_grab(CursorGrabMode::Locked)
                 .or_else(|_| r.window.set_cursor_grab(CursorGrabMode::Confined))
                 .is_ok();
-            r.window.set_cursor_visible(!ok);
-            self.grabbed = ok;
+            r.window.set_cursor_visible(false);
+            self.grabbed = grabbed;
+            self.game.input().captured = true;
         } else {
             let _ = r.window.set_cursor_grab(CursorGrabMode::None);
             r.window.set_cursor_visible(true);
             self.grabbed = false;
             self.game.input().release_all();
+            self.game.input().captured = false;
         }
-        self.game.input().captured = self.grabbed;
     }
 
     /// Opens (at a station, if one was used) or closes the inventory
@@ -222,10 +229,139 @@ impl App {
     fn toggle_inventory(&mut self, station: Option<mc2_game::crafting::Station>) {
         if self.inventory.open {
             self.inventory.close(&mut self.game);
-            self.set_grab(true);
+            self.set_play(true);
         } else {
-            self.set_grab(false);
+            self.set_play(false);
             self.inventory.open_at(station);
+            if let Some(r) = &self.running {
+                self.inventory.center((r.config.width, r.config.height));
+            }
+        }
+    }
+
+    fn playing(&self) -> bool {
+        self.game
+            .world
+            .resource::<mc2_game::input::Input>()
+            .captured
+    }
+
+    fn toggle_photo(&mut self) {
+        if self.photo.active {
+            let paused = self.photo.exit();
+            self.game.clock().paused = paused;
+        } else {
+            let paused = self.game.clock().paused;
+            self.game.input().release_all();
+            self.photo.enter(self.camera, paused);
+            self.game.clock().paused = true;
+        }
+    }
+
+    fn apply_gamepad(&mut self, dt: f32) {
+        let pad = self.gamepads.poll();
+        self.pad_connected = pad.connected;
+        self.game.input().clear_pad();
+        if !pad.connected {
+            self.photo.set_analog(Vec2::ZERO, 0.0, false);
+            return;
+        }
+        if self.inventory.open {
+            if pad.select || pad.start || pad.crouch_pressed {
+                self.toggle_inventory(None);
+                return;
+            }
+            let size = self
+                .running
+                .as_ref()
+                .map(|r| (r.config.width, r.config.height))
+                .unwrap_or((1280, 720));
+            self.inventory.stick_move(pad.move_axis, dt, size);
+            if pad.jump_pressed {
+                self.inventory.click(&mut self.game, false, false);
+            }
+            if pad.interact {
+                self.inventory.click(&mut self.game, true, false);
+            }
+            if pad.dpad_up {
+                self.inventory.wheel(1.0);
+            }
+            if pad.dpad_down {
+                self.inventory.wheel(-1.0);
+            }
+            return;
+        }
+        if self.photo.active {
+            if pad.select {
+                self.toggle_photo();
+                self.photo.set_analog(Vec2::ZERO, 0.0, false);
+                return;
+            }
+            if pad.start || pad.interact {
+                self.photo.request_capture();
+            }
+            apply_photo_pad(&mut self.photo, &pad, dt);
+            return;
+        }
+        if pad.start {
+            self.set_play(!self.playing());
+            return;
+        }
+        if !self.playing() {
+            if pad.stick_active || pad.any_edge {
+                self.set_play(true);
+            } else {
+                return;
+            }
+        }
+        if pad.select {
+            self.toggle_inventory(None);
+            return;
+        }
+        let mut input = self.game.input();
+        input.move_axis = pad.move_axis;
+        input.look_axis = pad.look_axis;
+        if pad.jump {
+            input.pad_hold_key(Key::Jump);
+        }
+        if pad.crouch {
+            input.pad_hold_key(Key::Crouch);
+        }
+        if pad.sprint {
+            input.pad_hold_key(Key::Sprint);
+        }
+        if pad.fly {
+            input.pad_press_key(Key::ToggleFly);
+        }
+        if pad.view {
+            input.pad_press_key(Key::ToggleView);
+        }
+        if pad.mode {
+            input.pad_press_key(Key::ToggleMode);
+        }
+        if pad.interact {
+            input.pad_press_key(Key::Interact);
+        }
+        if pad.break_block {
+            input.pad_hold_button(Button::Primary);
+        }
+        if pad.break_pressed {
+            input.pad_press_button(Button::Primary);
+        }
+        if pad.place {
+            input.pad_hold_button(Button::Secondary);
+        }
+        if pad.place_pressed {
+            input.pad_press_button(Button::Secondary);
+        }
+        if pad.preview {
+            input.pad_hold_button(Button::Middle);
+        }
+        if pad.slot_next {
+            input.scroll -= 1.0;
+        }
+        if pad.slot_prev {
+            input.scroll += 1.0;
         }
     }
 
@@ -240,6 +376,7 @@ impl App {
         self.frame_ms
             .push((now - self.last_frame).as_secs_f32() * 1000.0);
         self.last_frame = now;
+        self.apply_gamepad(dt);
 
         match self.loader.poll(&mut self.game) {
             Ok(Some(terrain)) => {
@@ -342,7 +479,7 @@ impl App {
         renderer.frame.hud.clear();
         let screen = renderer.output_size();
         if self.photo.active {
-            let status = self.photo.status();
+            let status = self.photo.status(self.pad_connected);
             renderer.frame.hud.text(8.0, 8.0, 1.0, 0xffff_ffff, &status);
         } else {
             crate::game_hud::draw(
@@ -350,11 +487,16 @@ impl App {
                 &mut renderer.frame.hud,
                 &mut renderer.frame.gizmos,
                 screen,
+                self.pad_connected,
             );
         }
         if !self.photo.active {
-            self.inventory
-                .draw(&mut self.game, &mut renderer.frame.hud, screen);
+            self.inventory.draw(
+                &mut self.game,
+                &mut renderer.frame.hud,
+                screen,
+                self.pad_connected,
+            );
         }
         if self.show_profiler && !self.photo.active {
             let cpu_rows = mc2_core::profiler::rows();
@@ -398,11 +540,19 @@ impl App {
                         if clock.paused { " paused" } else { "" }
                     )
                 },
-                format!(
-                    "click capture  WASD move  space jump  ctrl crouch  shift sprint  F fly  F5 view  Tab mode  1-9 slot  E light TNT  F2 shot  F3 HUD  F4 view {}  V vsync {}  P photo",
-                    self.debug_mode,
-                    if self.vsync { "on" } else { "off" }
-                ),
+                if self.pad_connected {
+                    format!(
+                        "LS move  RS look  A jump  B crouch  RT break  LT place  LB/RB hotbar  Y fly  X TNT  L3 sprint  R3 view  D-pad mode  Start play  Back pack  P photo  F4 view {}  vsync {}",
+                        self.debug_mode,
+                        if self.vsync { "on" } else { "off" }
+                    )
+                } else {
+                    format!(
+                        "click capture  WASD move  space jump  ctrl crouch  shift sprint  F fly  F5 view  Tab mode  1-9 slot  E light TNT  F2 shot  F3 HUD  F4 view {}  V vsync {}  P photo",
+                        self.debug_mode,
+                        if self.vsync { "on" } else { "off" }
+                    )
+                },
             ];
             let input = OverlayInput {
                 gpu: &renderer.profiler,
@@ -461,31 +611,23 @@ impl App {
             return;
         }
         if let Some(k) = map_key(code)
-            && self.grabbed
+            && self.playing()
         {
             self.game.input().key_down(k);
         }
         match code {
             KeyCode::Escape => {
-                if self.grabbed {
-                    self.set_grab(false);
+                if self.photo.active {
+                    self.toggle_photo();
+                } else if self.playing() {
+                    self.set_play(false);
                 } else {
                     event_loop.exit();
                 }
             }
             KeyCode::F2 => self.screenshot_requested = true,
             KeyCode::F3 => self.show_profiler = !self.show_profiler,
-            KeyCode::KeyP => {
-                if self.photo.active {
-                    let paused = self.photo.exit();
-                    self.game.clock().paused = paused;
-                } else {
-                    let paused = self.game.clock().paused;
-                    self.game.input().release_all();
-                    self.photo.enter(self.camera, paused);
-                    self.game.clock().paused = true;
-                }
-            }
+            KeyCode::KeyP => self.toggle_photo(),
             KeyCode::F4 => self.debug_mode = (self.debug_mode + 1) % 4,
             KeyCode::F6 => {
                 self.quality = self.quality.next();
@@ -516,6 +658,36 @@ impl App {
     }
 }
 
+fn apply_photo_pad(photo: &mut crate::photo::PhotoMode, pad: &Pad, dt: f32) {
+    let up = f32::from(u8::from(pad.jump)) - f32::from(u8::from(pad.crouch));
+    photo.set_analog(pad.move_axis, up, pad.sprint);
+    photo.stick_look(pad.look_axis, dt);
+    if pad.zoom.abs() > 0.05 {
+        photo.zoom(pad.zoom * dt * 4.0);
+    }
+    if pad.dpad_up {
+        photo.bump_focus(-1);
+    }
+    if pad.dpad_down {
+        photo.bump_focus(1);
+    }
+    if pad.dpad_left {
+        photo.bump_exposure(-1);
+    }
+    if pad.dpad_right {
+        photo.bump_exposure(1);
+    }
+    if pad.lb {
+        photo.bump_aperture(-1);
+    }
+    if pad.rb {
+        photo.bump_aperture(1);
+    }
+    if pad.fly {
+        photo.depth_of_field = !photo.depth_of_field;
+    }
+}
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.running.is_none()
@@ -539,7 +711,7 @@ impl ApplicationHandler for App {
                     self.reconfigure();
                 }
             }
-            WindowEvent::Focused(false) => self.set_grab(false),
+            WindowEvent::Focused(false) => self.set_play(false),
             WindowEvent::MouseInput { state, button, .. } => {
                 let mapped = match button {
                     MouseButton::Left => Some(Button::Primary),
@@ -556,7 +728,7 @@ impl ApplicationHandler for App {
                     return;
                 }
                 match (state, mapped) {
-                    (ElementState::Pressed, _) if !self.grabbed => self.set_grab(true),
+                    (ElementState::Pressed, _) if !self.playing() => self.set_play(true),
                     (ElementState::Pressed, Some(b)) => self.game.input().button_down(b),
                     (ElementState::Released, Some(b)) => self.game.input().button_up(b),
                     _ => {}

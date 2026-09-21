@@ -198,8 +198,8 @@ pub fn overlay(game: &mut Game, hud: &mut HudCanvas, screen: (u32, u32), demo: O
     let (w, h) = (screen.0 as f32, screen.1 as f32);
     inv.mouse_move(w * 0.72, h * 0.5 - 150.0);
     // Once aside to lay out, then for real with the cursor's hover.
-    inv.draw(game, &mut HudCanvas::default(), screen);
-    inv.draw(game, hud, screen);
+    inv.draw(game, &mut HudCanvas::default(), screen, false);
+    inv.draw(game, hud, screen, false);
 }
 
 /// Runs the script. Streaming must already cover the player.

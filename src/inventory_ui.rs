@@ -146,6 +146,17 @@ impl Screen {
         self.cursor = Vec2::new(x, y);
     }
 
+    pub fn center(&mut self, screen: (u32, u32)) {
+        self.cursor = Vec2::new(screen.0 as f32 * 0.5, screen.1 as f32 * 0.5);
+    }
+
+    /// Left stick, player-space (x right, y forward): moves the cursor.
+    pub fn stick_move(&mut self, axis: Vec2, dt: f32, screen: (u32, u32)) {
+        let speed = 1100.0;
+        self.cursor.x = (self.cursor.x + axis.x * speed * dt).clamp(0.0, screen.0 as f32);
+        self.cursor.y = (self.cursor.y - axis.y * speed * dt).clamp(0.0, screen.1 as f32);
+    }
+
     pub fn wheel(&mut self, lines: f32) {
         self.scroll = (self.scroll - lines * ROW).max(0.0);
     }
@@ -226,7 +237,7 @@ impl Screen {
     }
 
     /// Draws the screen over everything else.
-    pub fn draw(&mut self, game: &mut Game, hud: &mut HudCanvas, screen: (u32, u32)) {
+    pub fn draw(&mut self, game: &mut Game, hud: &mut HudCanvas, screen: (u32, u32), pad: bool) {
         self.hits.clear();
         self.tooltip = None;
         if !self.open {
@@ -298,7 +309,7 @@ impl Screen {
         for hint in [
             "left: pick up / put down   right: half / one",
             "shift: move to or from the hotbar   1-9: swap",
-            "E on TNT lights it   I or Esc closes",
+            "E on TNT lights it   I or Esc closes   pad: LS cursor  A pick  X half  B close",
         ] {
             hud.text(lx, y, 1.0, dim(), hint);
             y += 14.0;
@@ -366,6 +377,12 @@ impl Screen {
             self.catalogue(hud, list);
         } else {
             self.recipes(hud, inv, near, list);
+        }
+
+        // Pad users have no OS cursor; draw one where clicks land.
+        if pad {
+            hud.rect(self.cursor.x - 7.0, self.cursor.y - 1.0, 14.0, 2.0, gold());
+            hud.rect(self.cursor.x - 1.0, self.cursor.y - 7.0, 2.0, 14.0, gold());
         }
 
         // What the cursor carries, and a name for what it is over.

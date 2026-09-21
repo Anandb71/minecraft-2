@@ -8,7 +8,13 @@ use mc2_game::{Voxels, view::ViewCamera};
 use mc2_render::gizmo::{AMBER, Gizmos, RED, WHITE};
 use mc2_render::hud::{HudCanvas, rgba};
 
-pub fn draw(game: &mut Game, hud: &mut HudCanvas, gizmos: &mut Gizmos, screen: (u32, u32)) {
+pub fn draw(
+    game: &mut Game,
+    hud: &mut HudCanvas,
+    gizmos: &mut Gizmos,
+    screen: (u32, u32),
+    gamepad: bool,
+) {
     let view: ViewCamera = game.view();
     gizmos.begin(view.position);
     let (w, h) = (screen.0 as f32, screen.1 as f32);
@@ -33,9 +39,14 @@ pub fn draw(game: &mut Game, hud: &mut HudCanvas, gizmos: &mut Gizmos, screen: (
 
     // Hotbar, held item, break progress and news.
     let (x0, y0) = crate::inventory_ui::draw_hotbar(game, hud, screen);
-    let mode = match state.mode {
-        Mode::Block => "BLOCK  (Tab: carve)".to_owned(),
-        Mode::Carve => format!(
+    let mode = match (state.mode, gamepad) {
+        (Mode::Block, true) => "BLOCK  (D-pad up: carve)".to_owned(),
+        (Mode::Block, false) => "BLOCK  (Tab: carve)".to_owned(),
+        (Mode::Carve, true) => format!(
+            "CARVE r={:.0} voxels  (LB/RB: size, D-pad up: block)",
+            state.radius_voxels
+        ),
+        (Mode::Carve, false) => format!(
             "CARVE r={:.0} voxels  (wheel: size, Tab: block)",
             state.radius_voxels
         ),
@@ -60,7 +71,9 @@ pub fn draw(game: &mut Game, hud: &mut HudCanvas, gizmos: &mut Gizmos, screen: (
             format!(
                 "{}{}",
                 if p.mode == MoveMode::Fly {
-                    "flying (F)"
+                    if gamepad { "flying (Y)" } else { "flying (F)" }
+                } else if gamepad {
+                    "walking (Y: fly)"
                 } else {
                     "walking (F: fly)"
                 },
