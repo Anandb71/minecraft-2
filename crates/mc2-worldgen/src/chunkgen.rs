@@ -10,6 +10,7 @@
 
 use crate::amplify::{Surface, SurfaceSample, material_at};
 use crate::flora::{self, FLORA_HEIGHT_M, GROUND_COVER_M};
+use crate::karst::Karst;
 use crate::noise::Perlin;
 use crate::noise::{hash_unit, hash3};
 use crate::settlement::Settlements;
@@ -52,6 +53,7 @@ pub struct ChunkGenerator {
     /// measurements).
     pub flora: bool,
     pub settlements: Settlements,
+    karst: Karst,
     /// Plants by chunk column: every chunk stacked in a column shares them.
     plant_cache: std::sync::Mutex<PlantCache>,
 }
@@ -157,6 +159,7 @@ impl ChunkGenerator {
             flora_noise: Perlin::new(seed ^ 0x1eaf_b10b),
             flora: true,
             settlements: Settlements::new(seed),
+            karst: Karst::new(seed),
             plant_cache: Default::default(),
         }
     }
@@ -271,6 +274,8 @@ impl ChunkGenerator {
         if lod == Lod::Cell {
             self.generate_coarse(&mut b, pos, lod);
             let mut tree = ChunkTree::from_dense(&b.cells, b.bricks);
+            self.karst
+                .carve(&mut tree, pos, &self.surface, &self.strata, lod);
             flora::stamp_coarse(&mut tree, pos.origin(), &self.plants_near(pos), 1);
             for v in self.villages_near(pos) {
                 v.stamp_coarse(&mut tree, pos.origin(), 1);
@@ -284,6 +289,8 @@ impl ChunkGenerator {
             self.node(&mut b, &s, 2, c2 * 16, 16, base_y);
         }
         let mut tree = ChunkTree::from_dense(&b.cells, b.bricks);
+        self.karst
+            .carve(&mut tree, pos, &self.surface, &self.strata, lod);
         self.stamp_ores(&mut tree, pos);
         flora::stamp_full(
             &mut tree,
@@ -410,6 +417,8 @@ impl ChunkGenerator {
         self.coarse_columns(pos, lod, &mut |level, min_cell, m| {
             tree.set_node(level, min_cell / cells, m);
         });
+        self.karst
+            .carve(&mut tree, pos, &self.surface, &self.strata, lod);
         if lod == Lod::Node2 {
             flora::stamp_coarse(&mut tree, pos.origin(), &self.plants_near(pos), 4);
             for v in self.villages_near(pos) {
@@ -590,6 +599,17 @@ impl ChunkGenerator {
                     let above = y - sample.height;
                     if m.is_air() && grassy && self.flora && above < GROUND_COVER_M {
                         m = flora::ground_cover(&sample, sea, vx, vz, above, self.seed);
+                    }
+                    let wx = vx as f32 * VOXEL_M;
+                    let wz = vz as f32 * VOXEL_M;
+                    if let Some(fill) = self.karst.dissolve(
+                        m,
+                        glam::Vec3::new(wx, y, wz),
+                        sample.height,
+                        sea,
+                        sample.river,
+                    ) {
+                        m = fill;
                     }
                     if !m.is_air() {
                         brick.set(IVec3::new(lx, ly, lz), m);
