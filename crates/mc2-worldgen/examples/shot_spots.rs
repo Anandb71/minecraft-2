@@ -42,8 +42,10 @@ fn main() {
     let karst = Karst::new(SEED);
     let sea = terrain.params.sea_level;
     let extent = terrain.params.extent_m();
+    let mut generator = ChunkGenerator::new(terrain.clone());
+    generator.flora = false;
 
-    let mouth = find_mouth(&surface, &strata, &karst, sea, extent);
+    let mouth = find_mouth(&generator, &surface, &strata, &karst, sea, extent);
     println!(
         "mouth at {:.1} {:.1} {:.1} slope {:.2}",
         mouth.0, mouth.1, mouth.2, mouth.3
@@ -51,8 +53,6 @@ fn main() {
     let (stand, look) = outside_mouth(&surface, mouth);
     print_cam("cave-mouth", stand, look);
 
-    let mut generator = ChunkGenerator::new(terrain.clone());
-    generator.flora = false;
     if let Some(inside) = find_inside(&generator, &surface, mouth) {
         let look = (mouth.0 as f64, inside.1, mouth.2 as f64);
         print_cam("cave-inside", inside, look);
@@ -79,38 +79,78 @@ fn print_cam(name: &str, eye: (f64, f64, f64), look: (f64, f64, f64)) {
     );
 }
 
-/// (x, surface height, z, slope) of a steep carbonate joint that daylights.
+/// (x, surface height, z, slope) of a walkable carbonate joint that is
+/// actually open in the generated chunk, not only in the noise.
 fn find_mouth(
+    generator: &ChunkGenerator,
     surface: &Surface,
     strata: &Strata,
     karst: &Karst,
     sea: f32,
     extent: f32,
 ) -> (f32, f32, f32, f32) {
-    let mut best = None;
-    let mut score_best = 0.0f32;
+    let mut cands = Vec::new();
     let mut x = 2500.0f32;
     while x < extent - 2500.0 {
         let mut z = 2500.0f32;
         while z < extent - 2500.0 {
             let s = surface.sample(x, z);
-            if s.slope > 0.5 && s.height > sea + 12.0 && s.height < 280.0 {
-                let y = s.height - 1.4;
+            if (0.55..1.15).contains(&s.slope) && s.height > sea + 12.0 && s.height < 260.0 {
+                let y = s.height - 1.6;
                 let host = strata.layer(x, y, z).material;
                 let open = karst.openness(x, y, z, s.height, s.slope);
-                if soluble(host) && open > 0.5 {
-                    let score = open * s.slope;
-                    if score > score_best {
-                        score_best = score;
-                        best = Some((x, s.height, z, s.slope));
-                    }
+                if soluble(host) && open > 0.52 {
+                    cands.push((open, (x, s.height, z, s.slope)));
                 }
             }
             z += 48.0;
         }
         x += 48.0;
     }
-    best.expect("no hillside cave on this seed")
+    cands.sort_by(|a, b| b.0.total_cmp(&a.0));
+    cands.truncate(16);
+    let mut best_air = 0;
+    for (_, spot) in &cands {
+        let air = air_under(generator, spot.0, spot.1, spot.2);
+        best_air = best_air.max(air);
+        if air > 30 {
+            println!("mouth air samples {air}");
+            return *spot;
+        }
+    }
+    panic!(
+        "no open hillside cave (best air samples {best_air}, candidates {})",
+        cands.len()
+    );
+}
+
+fn air_under(generator: &ChunkGenerator, x: f32, height: f32, z: f32) -> i32 {
+    let mut n = 0;
+    for down in [2.0f32, 4.0, 7.0] {
+        let y = height - down;
+        let origin = glam::IVec3::new(
+            (x / VOXEL_M) as i32,
+            (y / VOXEL_M) as i32,
+            (z / VOXEL_M) as i32,
+        );
+        let pos = ChunkPos::of_voxel(origin);
+        let tree = generator.generate(pos, Lod::Cell);
+        for oz in (-12..12).step_by(4) {
+            for oy in (-8..8).step_by(4) {
+                for ox in (-12..12).step_by(4) {
+                    let v = origin + glam::IVec3::new(ox, oy, oz);
+                    if ChunkPos::of_voxel(v) != pos {
+                        continue;
+                    }
+                    let world_y = v.y as f32 * VOXEL_M;
+                    if world_y < height - 0.8 && tree.voxel(v - pos.origin()).is_air() {
+                        n += 1;
+                    }
+                }
+            }
+        }
+    }
+    n
 }
 
 fn outside_mouth(
