@@ -26,6 +26,9 @@ pub const CELL_VOXELS: i32 = 8;
 const PROMOTE_RADIUS: i32 = 16;
 /// Most cells one edit takes in.
 const PROMOTE_MAX: usize = 8_000;
+/// Edits bigger than this many cells are searched for still water only on
+/// their shell.
+const SEARCH_CELLS: i64 = 32_768;
 /// A reservoir cell is refilled once it has drained below this (eighths):
 /// not at every ripple, which would keep the sea from ever sleeping.
 const REFILL_BELOW: u8 = 6;
@@ -104,10 +107,19 @@ impl Water {
         let (a, b) = (cell_of(lo), cell_of(hi));
         self.changed.push((a, b));
         let mut seeds = Vec::new();
-        for z in a.z - 1..=b.z + 1 {
-            for y in a.y - 1..=b.y + 1 {
-                for x in a.x - 1..=b.x + 1 {
+        let (lo, hi) = (a - 1, b + 1);
+        let size = (hi - lo + 1).as_i64vec3();
+        // A big edit is only searched on its shell: still water it cut into
+        // meets the shell anyway.
+        let shell_only = size.x * size.y * size.z > SEARCH_CELLS;
+        for z in lo.z..=hi.z {
+            for y in lo.y..=hi.y {
+                for x in lo.x..=hi.x {
                     let c = IVec3::new(x, y, z);
+                    let on_shell = c.cmpeq(lo).any() || c.cmpeq(hi).any();
+                    if shell_only && !on_shell {
+                        continue;
+                    }
                     if self.still_water(world, c) {
                         seeds.push(c);
                     }
