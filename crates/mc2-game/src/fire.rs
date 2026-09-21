@@ -25,7 +25,7 @@ pub const TICK_S: f32 = 0.1;
 /// Most blocks burning at once; beyond it nothing new catches.
 pub const MAX_BURNING: usize = 400;
 /// Flame voxels drawn a tick for one block, at most.
-const FLAMES_PER_BLOCK: usize = 72;
+const FLAMES_PER_BLOCK: usize = 160;
 /// Chance a second that a fully flammable neighbour catches.
 const SPREAD_PER_S: f32 = 0.6;
 /// Seconds a block lit with nothing to burn keeps a small flame.
@@ -312,14 +312,28 @@ fn burn_block(
         if !beside && !on_top {
             continue;
         }
-        let height = 1 + fire.roll_int((2.0 + 8.0 * intensity) as i32);
+        // A tongue two voxels across at its root, narrowing to one, leaning
+        // a little as it rises.
+        let height = 2 + fire.roll_int((3.0 + 13.0 * intensity) as i32);
+        let lean = IVec3::new(fire.roll_int(3) - 1, 0, fire.roll_int(3) - 1);
         for k in 0..height {
-            let f = v + IVec3::Y * k;
-            if !world.voxel(f).is_air() {
+            let spine = v + IVec3::Y * k + lean * (k / 5);
+            let width = if k < height / 2 { 2 } else { 1 };
+            let mut blocked = false;
+            for dz in 0..width {
+                for dx in 0..width {
+                    let f = spine + IVec3::new(dx, 0, dz);
+                    if !world.voxel(f).is_air() {
+                        blocked |= dx == 0 && dz == 0;
+                        continue;
+                    }
+                    world.set_voxel(f, ids::FIRE);
+                    flames.push(f);
+                }
+            }
+            if blocked {
                 break;
             }
-            world.set_voxel(f, ids::FIRE);
-            flames.push(f);
         }
     }
     // Charring: flammable voxels at the surface go first.
