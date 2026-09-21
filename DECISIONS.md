@@ -290,4 +290,16 @@ Both were built behind one output with the same hit shading and denoiser, and me
 
 - **3D noise worms.** The usual Minecraft tunnels: a few Perlin corridors that ignore the host rock, so granite, chalk and clay all look the same underground.
 - **CSG blobs / sphere stamps.** Cheap rooms, but they float in the strata and do not follow joints, so they read as Swiss cheese rather than dissolved carbonate.
-- **Karst along joints and bedding (chosen).** Two vertical joint sets and a bedding plane open only in limestone, chalk and marble; passages stay mostly horizontal, meet in rooms, flood below a water table, and punch sinkholes where a river sits over a shaft. Node8 skips them (thinner than 8 m would alias). Voxel bricks dissolve in `brick_at` so digging a cave wall matches the generated chunk.
+- **Karst along joints and bedding (chosen).** Two vertical joint sets and a bedding plane open only in limestone, chalk and marble; passages stay mostly horizontal, meet in rooms, flood below a water table, and punch sinkholes where a river sits over a shaft. Steep ground thins the roof so a joint can daylight. Dry passages grow stalactites and stalagmites; flooded ones do not, and open limestone pavement does not sprout drips into the sky. Node8 skips them (thinner than 8 m would alias). Voxel bricks dissolve in `brick_at` so digging a cave wall matches the generated chunk.
+
+## D46. Where the mountains are
+
+- **A noise belt mask.** What v1 did: ridged ranges wherever a second fBm is high. They exist, and they never collide, rift, or slide past each other.
+- **A full lithosphere simulation.** Stress, yield, and plate motion over time. Erosion already spends half a minute on the coarse grid; a second iterative crust model would dominate world creation and fight the hydraulic pass for the same sediment.
+- **Kinematic plates (chosen).** A few plates with seeded velocities. Convergent boundaries raise a ridged range aligned with the fault, divergent ones open a rift, transforms leave a scarp. Erosion still cuts the result. The terrain cache version bumps because the uplift field changed.
+
+## D47. Why a slope has a biome
+
+- **Climate noise alone.** Temperature and moisture are fields of position. The north and south faces of one ridge share a biome, and limestone country has the same soil as granite.
+- **A plant-competition simulation.** Succession and shade would need a stored map, so a chunk could not be generated on its own.
+- **Aspect and the rock under the soil (chosen).** +z is north. A steep north face is colder and a little wetter, so its snow line and tree line sit lower. Carbonate rock keeps a thin soil and the stone shows through. Both are functions of the column, same on every machine.

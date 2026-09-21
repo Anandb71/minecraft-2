@@ -101,18 +101,21 @@ Keys, pad and photo mode: [docs/controls.md](docs/controls.md).
 
 ## What is in
 
-**World.** 16 km grown from geology: continents and ridged belts, eroded
-once by a virtual-pipe hydraulic model. Stratified rock (basement, cyclic
-sediments, folds, volcanic provinces) exposed by that erosion. Ores that
-follow their host. Four LODs streamed on worker threads; buried rock is not
-generated until someone digs.
+**World.** 16 km grown from geology: a few plates. Where they collide, a
+ridged range; where they pull apart, a rift; where they slide, a scarp.
+Eroded once by a virtual-pipe hydraulic model. Stratified rock (basement,
+cyclic sediments, folds, volcanic provinces) exposed by that erosion. Ores
+that follow their host. Four LODs streamed on worker threads; buried rock
+is not generated until someone digs.
 
-**Biomes and settlements.** Climate cools with height: oak and birch forest,
-pine and snowy taiga, plains, desert, alpine rock and snow, beaches and sea.
-Villages around a plaza and well. Towns on a street grid with lamps, parks
-and glass towers, lit at night. Caves dissolve limestone, chalk and marble
-along joints and bedding, with sinkholes under rivers; they are not noise
-worms.
+**Biomes and settlements.** Climate cools with height, and a steep north
+face cools further, so snow and the tree line sit lower there. Limestone
+country keeps a thin soil. Oak and birch forest, pine and snowy taiga,
+plains, desert, alpine rock and snow, beaches and sea. Villages around a
+plaza and well. Towns on a street grid with lamps, parks and glass towers,
+lit at night. Caves dissolve limestone, chalk and marble along joints and
+bedding, break the surface on a hillside, flood below a water table, and
+grow stalactites where they stay dry.
 
 **Renderer.** Visibility buffer with exact voxel ids. Physically based sky
 (Hillaire 2020). Traced soft shadows. ReSTIR from every emissive cluster.

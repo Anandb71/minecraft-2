@@ -1028,14 +1028,19 @@ smoke is not drawn yet. The GPU frame at 720p is around 40 ms on the RTX
 **Rejected.** A voxel heat field (D42), particle rain (D43), lightning as
 a screen effect (D44).
 
-## Worldgen v2, first slice: karst (in progress)
+## Worldgen v2, in progress
 
-Noise-worm caves were rejected in step 4. Passages now follow two joint
-sets and a bedding plane in limestone, chalk and marble (`mc2-worldgen`
-`karst`). Voxel bricks dissolve in `brick_at`; coarser LODs stamp empty or
-flooded cells after the rock is generated and before ores, flora and
-villages. Node8 stays solid: an 8 m cave would alias. Sinkholes drop where
-a river sits over a shaft. Tectonics and ecology are still later slices.
+Noise-worm caves were rejected in step 4. Passages follow two joint sets and
+a bedding plane in limestone, chalk and marble. Steep ground thins the roof
+so a hillside cuts into a joint; flat ground keeps three metres of cover.
+Sinkholes drop where a river sits over a shaft. The dry part of a passage
+grows stalactites and stalagmites. Node8 stays solid.
+
+Uplift comes from kinematic plates (D46): colliding edges raise ranges,
+parting edges open rifts, sliding edges leave a scarp. The coarse-terrain
+cache is version 2, so an old eroded world is rebuilt rather than mixed
+with the new field. North faces run colder, and carbonate ground keeps a
+thin soil (D47).
 
 The GPU tree pool no longer leaks when chunks stream out. Structure upload
 is nearest-first and budgeted, so distant unloads never reached `free_chunk`;
