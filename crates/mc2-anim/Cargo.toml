@@ -1,0 +1,10 @@
+[package]
+name = "mc2-anim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mc2-voxel.workspace = true
+mc2-physics.workspace = true
+glam.workspace = true
