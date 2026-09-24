@@ -141,6 +141,23 @@ materials! {
     DARK_PLANKS = 63 => Material { name: "dark planks", albedo: [0.26, 0.16, 0.09], roughness: 0.7, density: 700.0, compressive: 35.0, tensile: 45.0, hardness: 1.4, conductivity: 0.13, specific_heat: 1700.0, flammability: 0.45, ignition_c: 285.0, absorption: 0.12, ..BASE },
     THATCH = 64 => Material { name: "thatch", albedo: [0.55, 0.44, 0.22], roughness: 0.95, density: 150.0, compressive: 0.1, tensile: 0.2, hardness: 0.3, conductivity: 0.06, specific_heat: 1500.0, flammability: 0.9, ignition_c: 220.0, absorption: 0.6, ..BASE },
     LIGHTNING = 65 => Material { name: "lightning", kind: Kind::Foliage, albedo: [0.9, 0.93, 1.0], roughness: 1.0, emission: [60000.0, 64000.0, 80000.0], density: 1.0, compressive: 0.0, tensile: 0.0, hardness: 0.0, conductivity: 0.0, absorption: 0.0, ..BASE },
+    SKIN_PALE = 66 => Material { name: "pale skin", albedo: [0.72, 0.53, 0.43], roughness: 0.5, density: 400.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, ..BASE },
+    SKIN_TAN = 67 => Material { name: "tan skin", albedo: [0.58, 0.39, 0.27], roughness: 0.5, density: 400.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, ..BASE },
+    SKIN_BROWN = 68 => Material { name: "brown skin", albedo: [0.36, 0.22, 0.14], roughness: 0.5, density: 400.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, ..BASE },
+    SKIN_DARK = 69 => Material { name: "dark skin", albedo: [0.20, 0.12, 0.08], roughness: 0.5, density: 400.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, ..BASE },
+    HAIR_BLACK = 70 => Material { name: "black hair", albedo: [0.03, 0.03, 0.02], roughness: 0.55, density: 150.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, flammability: 0.4, ignition_c: 240.0, ..BASE },
+    HAIR_BROWN = 71 => Material { name: "brown hair", albedo: [0.16, 0.09, 0.05], roughness: 0.55, density: 150.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, flammability: 0.4, ignition_c: 240.0, ..BASE },
+    HAIR_BLOND = 72 => Material { name: "blond hair", albedo: [0.62, 0.48, 0.25], roughness: 0.55, density: 150.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, flammability: 0.4, ignition_c: 240.0, ..BASE },
+    HAIR_RED = 73 => Material { name: "red hair", albedo: [0.42, 0.13, 0.05], roughness: 0.55, density: 150.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, flammability: 0.4, ignition_c: 240.0, ..BASE },
+    CLOTH_RED = 74 => Material { name: "red cloth", albedo: [0.45, 0.06, 0.05], roughness: 0.9, density: 350.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, flammability: 0.5, ignition_c: 250.0, ..BASE },
+    CLOTH_BLUE = 75 => Material { name: "blue cloth", albedo: [0.07, 0.15, 0.42], roughness: 0.9, density: 350.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, flammability: 0.5, ignition_c: 250.0, ..BASE },
+    CLOTH_GREEN = 76 => Material { name: "green cloth", albedo: [0.10, 0.27, 0.09], roughness: 0.9, density: 350.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, flammability: 0.5, ignition_c: 250.0, ..BASE },
+    CLOTH_OCHRE = 77 => Material { name: "ochre cloth", albedo: [0.55, 0.38, 0.10], roughness: 0.9, density: 350.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, flammability: 0.5, ignition_c: 250.0, ..BASE },
+    CLOTH_WHITE = 78 => Material { name: "white cloth", albedo: [0.80, 0.79, 0.74], roughness: 0.9, density: 350.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, flammability: 0.5, ignition_c: 250.0, ..BASE },
+    CLOTH_GREY = 79 => Material { name: "grey cloth", albedo: [0.25, 0.25, 0.26], roughness: 0.9, density: 350.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, flammability: 0.5, ignition_c: 250.0, ..BASE },
+    DENIM = 80 => Material { name: "denim", albedo: [0.09, 0.13, 0.24], roughness: 0.85, density: 380.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, flammability: 0.4, ignition_c: 260.0, ..BASE },
+    LEATHER = 81 => Material { name: "leather", albedo: [0.22, 0.12, 0.06], roughness: 0.6, density: 450.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, flammability: 0.3, ignition_c: 280.0, ..BASE },
+    EYE = 82 => Material { name: "eye", albedo: [0.02, 0.02, 0.03], roughness: 0.1, density: 400.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, ..BASE },
 }
 
 impl MaterialId {
@@ -174,7 +191,7 @@ mod tests {
         assert_eq!(ids::AIR.get().name, "air");
         assert_eq!(ids::GRANITE.get().name, "granite");
         assert_eq!(ids::GLOWING_ROCK.get().name, "cooling rock");
-        assert_eq!(count(), ids::LIGHTNING.0 as usize + 1);
+        assert_eq!(count(), ids::EYE.0 as usize + 1);
         assert!(ids::LAVA.is_emissive());
         assert!(!ids::AIR.is_solid());
     }
