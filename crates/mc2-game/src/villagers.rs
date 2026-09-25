@@ -215,10 +215,14 @@ pub fn people_villages(
         // Try again later if none of the ground has streamed in yet.
         if !people.is_empty() {
             population.villages.insert(key, people);
-            // Someone in the village owns a car, parked by the square.
+            // Someone in a village owns a car, parked by the square; a town
+            // has three.
             if garage.parked.insert(key) {
                 let seed = (key.0 as u64).wrapping_mul(31) ^ (key.1 as u64);
-                garage.park_by(&mut physics, &voxels.0, v.centre.as_dvec3(), seed);
+                for n in 0..if v.town { 3 } else { 1 } {
+                    let seed = seed.wrapping_add(n * 97);
+                    garage.park_by(&mut physics, &voxels.0, v.centre.as_dvec3(), seed);
+                }
             }
         }
     }
