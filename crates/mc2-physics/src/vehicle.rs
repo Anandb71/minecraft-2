@@ -87,7 +87,9 @@ impl Vehicle {
 }
 
 /// Where a ray from `from` down `dir` first enters a solid voxel of the
-/// window within `max` metres.
+/// window within `max` metres, if that voxel is a top with air over it: a
+/// wheel stands on the ground, never on the face of a wall it has run
+/// into.
 fn ground<S: SolidCells>(
     window: &CollisionWindow<S>,
     from: DVec3,
@@ -98,7 +100,7 @@ fn ground<S: SolidCells>(
     while t <= max {
         let v = ((from + dir * t) * 16.0).floor().as_ivec3();
         if window.solid(v) {
-            return Some(t);
+            return (!window.solid(v + glam::IVec3::Y)).then_some(t);
         }
         t += RAY_STEP;
     }
@@ -118,6 +120,10 @@ pub(crate) fn drive<S: SolidCells>(
     }
     let hd = v.handling;
     let up = b.rot * v.up;
+    // On its side or its roof, the wheels do nothing: it tumbles.
+    if up.y < 0.5 {
+        return;
+    }
     let down = -up.as_dvec3();
     let driven = v.wheels.iter().filter(|w| w.driven).count().max(1) as f32;
     let steer = v.steer.clamp(-1.0, 1.0) * hd.max_steer;
@@ -282,5 +288,25 @@ mod tests {
         let b = p.body(id).unwrap();
         assert!(b.vel.length() < 0.2, "still going {}", b.vel);
         assert!((b.grid_rotation() * Vec3::Y).y > 0.98);
+    }
+
+    #[test]
+    fn driving_into_a_wall_does_not_climb_it() {
+        let mut w = ground();
+        // A wall 3 m high across the way, 8 m ahead.
+        w.fill_box(
+            IVec3::new(0, 32, 560),
+            IVec3::new(1023, 79, 575),
+            ids::GRANITE,
+        );
+        let mut p = PhysicsWorld::new();
+        let id = cart(&mut p, DVec3::new(32.0, 2.8, 44.0));
+        run(&mut p, &w, 1.0);
+        p.vehicles[0].throttle = 1.0;
+        run(&mut p, &w, 4.0);
+        let b = p.body(id).unwrap();
+        let up = b.grid_rotation() * Vec3::Y;
+        assert!(up.y > 0.8, "reared up: {up}");
+        assert!(b.pos.y < 3.2, "climbed to {}", b.pos.y);
     }
 }
