@@ -42,6 +42,8 @@ pub struct Character {
     pub look: Look,
     /// Which way it faces when nobody steers it, radians about +Y.
     pub facing: f32,
+    /// What it looks at when nobody steers it.
+    pub look_at: Option<DVec3>,
     pub parts: Arc<[Part; BONES]>,
     pub gait: Gait,
     pub pose: Pose,
@@ -59,6 +61,7 @@ impl Character {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             look,
             facing: 0.0,
+            look_at: None,
             parts: Arc::new(mc2_anim::look::parts(&look)),
             gait: Gait::default(),
             pose,
@@ -223,7 +226,7 @@ pub fn pose_characters(
                 Some(feet + DVec3::Y * EYES + p.forward().as_dvec3() * 8.0),
                 p.view == View::ThirdPerson,
             ),
-            None => (c.facing, true, false, None, true),
+            None => (c.facing, true, false, c.look_at, true),
         };
         c.pose_at(
             &voxels.0,
