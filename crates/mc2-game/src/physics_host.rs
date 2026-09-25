@@ -16,7 +16,9 @@ use glam::{DVec3, IVec3, Quat, Vec3};
 use mc2_core::{FxHashMap, FxHashSet};
 use mc2_physics::collision::{CollisionMap, Occ, world_occ};
 use mc2_physics::explode::Debris;
-use mc2_physics::{Body, BodyId, BodyShape, Obstacle, PhysicsStats, PhysicsWorld};
+use mc2_physics::{
+    Body, BodyId, BodyShape, Handling, Obstacle, PhysicsStats, PhysicsWorld, Vehicle, Wheel,
+};
 use mc2_voxel::world::VoxelWorld;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex};
@@ -56,6 +58,24 @@ pub enum Command {
         hang: Hang,
         group: u32,
     },
+    /// Puts a body on wheels.
+    Vehicle(Vehicle),
+    /// A vehicle's controls: throttle and steering -1..1, brake 0..1.
+    Drive {
+        body: BodyId,
+        throttle: f32,
+        steer: f32,
+        brake: f32,
+    },
+}
+
+/// A wheel of a vehicle to spawn: where its suspension meets the body
+/// (grid voxels), and whether it steers and whether it drives.
+#[derive(Clone, Copy, Debug)]
+pub struct WheelAt {
+    pub mount: Vec3,
+    pub steered: bool,
+    pub driven: bool,
 }
 
 /// One part of a ragdoll: its shape and pose (centre of mass and principal
@@ -156,6 +176,19 @@ impl Sim {
                             None => mc2_physics::Joint::new(ba, bb, h.at, h.cone, h.axis, h.swing),
                         };
                         self.world.add_joint(j, group);
+                    }
+                }
+                Command::Vehicle(v) => self.world.add_vehicle(v),
+                Command::Drive {
+                    body,
+                    throttle,
+                    steer,
+                    brake,
+                } => {
+                    if let Some(v) = self.world.vehicle_mut(body) {
+                        v.throttle = throttle;
+                        v.steer = steer;
+                        v.brake = brake;
                     }
                 }
             }
@@ -358,6 +391,65 @@ impl PhysicsHost {
             }
         }
         ids
+    }
+
+    /// Spawns a body on wheels with its voxel grid's corner at `corner` and
+    /// turned by `grid_rot`. `up` and `forward` are grid axes; `reach` is
+    /// how far below its mount each wheel's rim sits at rest, plus a
+    /// little clearance. Returns its id.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_vehicle(
+        &mut self,
+        shape: Arc<BodyShape>,
+        corner: DVec3,
+        grid_rot: Quat,
+        wheels: &[WheelAt],
+        up: Vec3,
+        forward: Vec3,
+        reach: f32,
+    ) -> BodyId {
+        let rot = grid_rot * shape.principal;
+        let pos = corner + (grid_rot * (shape.com * mc2_physics::shape::VOXEL_M)).as_dvec3();
+        let id = self.spawn(shape.clone(), pos, rot, Vec3::ZERO);
+        // The same body the physics side builds, to put the wheels in its
+        // principal frame.
+        let body = Body::new(id, shape, pos, rot);
+        let grid_to_local = |g: Vec3| {
+            body.local_point(
+                body.grid_origin()
+                    + (body.grid_rotation() * (g * mc2_physics::shape::VOXEL_M)).as_dvec3(),
+            )
+        };
+        let axis = |a: Vec3| body.rot.inverse() * (body.grid_rotation() * a);
+        let vehicle = Vehicle {
+            body: id,
+            wheels: wheels
+                .iter()
+                .map(|w| Wheel {
+                    mount: grid_to_local(w.mount),
+                    steered: w.steered,
+                    driven: w.driven,
+                })
+                .collect(),
+            up: axis(up),
+            forward: axis(forward),
+            handling: Handling::for_mass(body.shape.mass, wheels.len(), reach),
+            throttle: 0.0,
+            steer: 0.0,
+            brake: 0.0,
+        };
+        self.commands.push(Command::Vehicle(vehicle));
+        id
+    }
+
+    /// Sets a vehicle's controls.
+    pub fn drive(&mut self, body: BodyId, throttle: f32, steer: f32, brake: f32) {
+        self.commands.push(Command::Drive {
+            body,
+            throttle,
+            steer,
+            brake,
+        });
     }
 
     /// Removes a body; returns its last known state.
