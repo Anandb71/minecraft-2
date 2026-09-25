@@ -1178,3 +1178,52 @@ engine's own stills.
 **Known.** Villagers do not drive, and nobody lives above a town's ground
 floor. Cars do not collide with villagers, who give way only to each
 other. A capture ended with a car on its side after a crash; E rights it.
+
+## Step 16: Traced audio (`v0.16-audio`)
+
+**Built.** `mc2-audio`, and sound out of the game.
+
+- Signal core: noise, one-pole filters, delay lines, constant-power
+  panning, and an eight-line feedback delay network reverb through a
+  Householder matrix, each line damped and its gain set from the asked
+  decay time.
+- Acoustics, traced: 64 rays from the listener, evenly over the sphere,
+  through the voxels. The share that escapes is the open sky; the mean
+  hit distance is the mean free path; the materials' own `absorption`
+  gives what the surfaces swallow. Sabine, with open sky as a surface
+  that swallows everything, gives the decay; the nearest six hits give
+  the first echoes. Between a source and the ear: 18 dB for any matter
+  and 70 dB a metre more, capped at 60 and duller as it thickens, or the
+  way round it (over, or past either side) a little quieter, whichever
+  loses least.
+- Synthesis, no recordings: steps on soft ground, stone, wood, gravel and
+  water; breaking by hardness; placing; blasts by radius; thunder that
+  cracks when near and rolls when far; splashes; beds of rain, fire,
+  gusting wind and an engine that climbs with speed.
+- The mix: voices dulled by their occlusion, panned by the listener's
+  heading, delayed by their flight time at 343 m/s, then the place's
+  early echoes and its reverb, the wet share easing between places.
+- The game only says what is heard: footsteps every 0.75 m by what is
+  underfoot, blasts, thunder, breaking and placing, rain and wind (less
+  of both under cover), fire by what burns near, the engine by the car.
+  The app plays it through `cpal`, or with `--wav` writes a demo's sound
+  to a file.
+- Villagers hear by the same trace: one that hears a blast runs from it;
+  one sealed behind a metre of stone does not.
+
+**Measured** (i5-13450HX):
+
+| | |
+|---|---|
+| a place probe, 64 rays, closed stone room / open ground | 10 / 9 us |
+| an occlusion trace, 30 m through a wall | 21 us |
+| reverb decay asked 0.5 / 1.5 / 3 s | within 30 per cent of each |
+| stone room vs woollen room decay | over 2 s vs under a quarter of it |
+| blast demo, rendered to WAV | charges at 5.1 s, peak 0.74, a 1.5 s tail |
+
+**Rejected.** See D52 and D53.
+
+**Known.** One listener position is traced per update; sources are not
+re-traced as they move. The device must offer 48 kHz or pitch is off by
+the ratio. Thunder is placed at the strike, not along the bolt.
+

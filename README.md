@@ -197,7 +197,7 @@ What it cost: [DEVLOG.md](DEVLOG.md).
 | now | Worldgen v2: tectonics, caves, ecology | |
 | done | Animation, IK, ragdolls | `v0.14-animation` |
 | done | NPCs, economy, vehicles | `v0.15-people` |
-| next | Traced audio | |
+| done | Traced audio | `v0.16-audio` |
 | next | Persistence, settings, polish | |
 
 Flora, settlements, survival and the gamepad landed beside that list, not

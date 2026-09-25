@@ -18,6 +18,7 @@ writing the thing ourselves.
 | `font8x8` | Public domain 8x8 glyph bitmaps. Data, not code: the HUD renderer that uses it is ours. |
 | `log` | The logging facade wgpu already emits through; our logger is 20 lines. |
 | `gilrs` | Gamepad hotplug, analog axes and a mapping database across Windows, Linux and macOS; writing HID parsers is not the product. |
+| `cpal` | A sample stream out of WASAPI, CoreAudio and ALSA; the mixer, synthesis and acoustics that feed it are ours. |
 
 ## D1. Who owns the frame graph
 
@@ -327,3 +328,14 @@ Both were built behind one output with the same hit shading and denoiser, and me
 - **Wheels as jointed bodies.** Each wheel a rigid body on a hinge, rolling on the voxels through ordinary contacts: faithful, but contacts on a 6.25 cm staircase make a wheel judder, and four more bodies per car in the coupled solve.
 - **A kinematic car.** Moved where the keys say, snapped to the ground: no weight, no roll, no crash.
 - **Raycast wheels (chosen).** One body, and per wheel one ray, a spring and a tyre model applied as impulses inside the physics substeps. The voxel staircase is felt through the springs rather than as hits, the car keeps its mass and momentum, and its body still collides, tips and sleeps like any other.
+
+## D52. Where the sounds come from
+
+- **Recordings.** Real footsteps and blasts sound real, but each is one fixed take: every step on stone the same, a blast the same size whatever its radius, and a library of files to license and ship.
+- **Procedural synthesis (chosen).** Noise, filters and oscillators shaped per sound: a step by what it lands on, a break by how hard the thing was, a blast by its radius, thunder by how far off it struck. Nothing to ship, never twice the same, and every parameter a thing the world already knows.
+
+## D53. How a place is heard
+
+- **A reverb picked per biome or per room tag.** Cheap, and wrong the moment a player digs: the new cave sounds like the meadow it was cut from.
+- **Acoustics traced on the GPU.** The marcher is there, but results come back a frame or more late through a readback, for a job that needs 64 rays.
+- **Traced on the CPU through the same 64-trees (chosen).** Sixty-four rays from the listener every 150 ms give the open sky, the mean free path and the absorption the materials already carry, and so Sabine's decay, the reverb's size and damping, and six early echoes; a source is weighed by the matter on its path or round it. The whole probe costs about 10 microseconds, and a villager's ears use the same trace as the player's.
