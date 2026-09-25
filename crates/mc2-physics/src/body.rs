@@ -32,6 +32,9 @@ pub struct Body {
     pub still_time: f32,
     /// Seconds since spawning.
     pub age: f32,
+    /// Bodies sharing a non-zero group never collide with each other (the
+    /// parts of one ragdoll).
+    pub group: u32,
 }
 
 impl Body {
@@ -56,6 +59,7 @@ impl Body {
             asleep: false,
             still_time: 0.0,
             age: 0.0,
+            group: 0,
         }
     }
 
@@ -123,6 +127,30 @@ impl Body {
             self.rot.w + 0.5 * dq.w,
         )
         .normalize();
+    }
+
+    /// Generalised inverse mass for a rotation about `n` (world) (Eq. 3).
+    pub fn angular_inverse_mass(&self, n: Vec3) -> f32 {
+        let nl = self.rot.inverse() * n;
+        nl.dot(self.inv_inertia * nl)
+    }
+
+    /// Applies an angular correction `p` (world) (Eqs. 7, 9).
+    pub fn apply_rotation_correction(&mut self, p: Vec3, sign: f32) {
+        let omega = self.rot * (self.inv_inertia * (self.rot.inverse() * p)) * sign;
+        let dq = Quat::from_xyzw(omega.x, omega.y, omega.z, 0.0) * self.rot;
+        self.rot = Quat::from_xyzw(
+            self.rot.x + 0.5 * dq.x,
+            self.rot.y + 0.5 * dq.y,
+            self.rot.z + 0.5 * dq.z,
+            self.rot.w + 0.5 * dq.w,
+        )
+        .normalize();
+    }
+
+    /// Applies an angular impulse `p` (world) to the spin.
+    pub fn apply_angular_impulse(&mut self, p: Vec3, sign: f32) {
+        self.ang_vel += self.rot * (self.inv_inertia * (self.rot.inverse() * p)) * sign;
     }
 
     /// Applies a velocity impulse `p` (world) at offset `r` (Eq. 33).

@@ -7,6 +7,7 @@ pub mod body;
 pub mod collision;
 pub mod eigen;
 pub mod explode;
+pub mod joint;
 mod pair_contact;
 pub mod probe;
 pub mod raycast;
@@ -15,5 +16,6 @@ pub mod world;
 mod world_contact;
 
 pub use body::{Body, BodyId};
+pub use joint::Joint;
 pub use shape::BodyShape;
 pub use world::{Obstacle, PhysicsStats, PhysicsWorld};

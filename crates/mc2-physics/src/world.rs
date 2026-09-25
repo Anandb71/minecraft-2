@@ -3,6 +3,7 @@
 
 use crate::body::{Body, BodyId};
 use crate::collision::{CollisionWindow, SolidCells};
+use crate::joint::{Joint, damp_joints, solve_joint_positions};
 use crate::pair_contact::{
     candidate_pairs, find_pair_contacts, refresh_pair_contacts, solve_pair_positions,
     solve_pair_velocities,
@@ -48,6 +49,8 @@ pub struct PhysicsWorld {
     pub bodies: Vec<Body>,
     /// Kinematic boxes for the next step.
     pub obstacles: Vec<Obstacle>,
+    /// Joints between bodies; one whose body is gone is dropped.
+    pub joints: Vec<Joint>,
     /// Brick cells the last step needed and the collision source lacked.
     /// Bodies that needed them were held in place.
     pub missing_cells: Vec<IVec3>,
@@ -67,6 +70,7 @@ impl PhysicsWorld {
         Self {
             bodies: Vec::new(),
             obstacles: Vec::new(),
+            joints: Vec::new(),
             missing_cells: Vec::new(),
             next_id: 1,
             substeps: 8,
@@ -100,7 +104,19 @@ impl PhysicsWorld {
         self.bodies.iter_mut().find(|b| b.id == id)
     }
 
+    /// Joins two bodies and puts both in `group`, whose members do not
+    /// collide with each other.
+    pub fn add_joint(&mut self, joint: Joint, group: u32) {
+        for id in [joint.a, joint.b] {
+            if let Some(b) = self.body_mut(id) {
+                b.group = group;
+            }
+        }
+        self.joints.push(joint);
+    }
+
     pub fn remove(&mut self, id: BodyId) -> Option<Body> {
+        self.joints.retain(|j| j.a != id && j.b != id);
         let i = self.bodies.iter().position(|b| b.id == id)?;
         Some(self.bodies.swap_remove(i))
     }
@@ -126,9 +142,40 @@ impl PhysicsWorld {
             b.step_start_rot = b.rot;
             b.age += dt;
         }
+        // Joints between bodies that still exist, by index. A body that
+        // moved last step wakes the body it is jointed to; one merely not
+        // yet asleep does not, so a still pair can fall asleep together.
+        let index: std::collections::HashMap<BodyId, usize> = self
+            .bodies
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.id, i))
+            .collect();
+        self.joints
+            .retain(|j| index.contains_key(&j.a) && index.contains_key(&j.b));
+        let joints: Vec<(Joint, usize, usize)> = self
+            .joints
+            .iter()
+            .map(|j| (*j, index[&j.a], index[&j.b]))
+            .collect();
+        for &(_, a, b) in &joints {
+            let moving = |b: &Body| !b.asleep && b.still_time == 0.0;
+            if moving(&self.bodies[a]) || moving(&self.bodies[b]) {
+                for i in [a, b] {
+                    if self.bodies[i].asleep {
+                        self.bodies[i].wake();
+                    }
+                }
+            }
+        }
         // Broad phase once per step: bounding sphere pairs, expanded by
-        // how far the bodies can travel.
-        let pairs = candidate_pairs(&self.bodies, dt);
+        // how far the bodies can travel. Parts of one group pass through
+        // each other.
+        let mut pairs = candidate_pairs(&self.bodies, dt);
+        pairs.retain(|&(i, j)| {
+            let g = self.bodies[i].group;
+            g == 0 || g != self.bodies[j].group
+        });
         for o in self.obstacles.iter().filter(|o| o.vel.length() > 0.05) {
             for b in self.bodies.iter_mut().filter(|b| b.asleep) {
                 let r = f64::from(b.shape.radius);
@@ -163,6 +210,10 @@ impl PhysicsWorld {
             paired[i] = true;
             paired[j] = true;
         }
+        for (_, i, j) in &joints {
+            paired[*i] = true;
+            paired[*j] = true;
+        }
         // A body near no other body is independent for the whole step: one
         // parallel task runs all of its substeps.
         let mut world_contacts: usize = self
@@ -192,7 +243,7 @@ impl PhysicsWorld {
         let group: Vec<usize> = (0..self.bodies.len()).filter(|&i| paired[i]).collect();
         // Small groups are cheaper serial than split across threads.
         let serial = group.len() < 24;
-        if !pairs.is_empty() {
+        if !group.is_empty() {
             // Narrow phase once for the step, then every substep solves the
             // same contacts against the poses it finds (Mueller et al. 2020,
             // Section 3.5).
@@ -248,6 +299,7 @@ impl PhysicsWorld {
                 let pair_start = std::time::Instant::now();
                 refresh_pair_contacts(&self.bodies, &mut pc);
                 solve_pair_positions(&mut self.bodies, &mut pc);
+                solve_joint_positions(&mut self.bodies, &joints);
                 pair_time += pair_start.elapsed();
                 let finish = |b: &mut Body, contacts: &Vec<Contact>| {
                     if !b.asleep {
@@ -269,6 +321,7 @@ impl PhysicsWorld {
                         .for_each(|((b, c), _)| finish(b, c));
                 }
                 solve_pair_velocities(&mut self.bodies, &pc, h);
+                damp_joints(&mut self.bodies, &joints, h);
             }
             world_contacts += contacts.iter().map(Vec::len).sum::<usize>();
         }
