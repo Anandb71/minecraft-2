@@ -12,7 +12,7 @@
 
 use crate::amplify::Surface;
 use crate::noise::hash_unit;
-use crate::settlement::{FacadeStyle, Marks, Op, Shape, b, path_op, street_op};
+use crate::settlement::{FacadeStyle, Home, Marks, Op, Shape, b, path_op, street_op};
 use glam::{Vec2, Vec3};
 use mc2_voxel::material::{MaterialId, ids};
 
@@ -56,6 +56,7 @@ struct Town<'a> {
     ops: Vec<Op>,
     claimed: Vec<(Vec2, Vec2)>,
     lit: u32,
+    homes: Vec<Home>,
 }
 
 #[derive(Clone, Copy)]
@@ -218,6 +219,19 @@ impl Town<'_> {
         self.ops.push(b(dlo, dhi, ids::AIR));
         self.ops
             .push(b(dlo, v3(dhi.x, floor + 0.5, dhi.z), ids::CONCRETE));
+        // People live here: the pavement two metres out from the door, and
+        // the middle of the ground floor.
+        let out = if street.x.abs() > street.y.abs() {
+            Vec2::new(street.x.signum(), 0.0)
+        } else {
+            Vec2::new(0.0, street.y.signum())
+        };
+        let mid = Vec2::new((dlo.x + dhi.x) * 0.5, (dlo.z + dhi.z) * 0.5);
+        let door = mid + out * 2.0;
+        self.homes.push(Home {
+            door: v3(door.x, self.ground(door.x, door.y), door.y),
+            inside: v3(c.x, floor + 0.5, c.y),
+        });
     }
 
     /// Storeys `floor..` of a building on `lo..hi`: shell, hollow, floors,
@@ -373,7 +387,11 @@ impl Town<'_> {
 }
 
 /// Plans a town centred on `centre` (its ground there).
-pub(crate) fn plan(surface: &Surface, centre: Vec3, seed: u64) -> (Vec<Op>, Vec<(Vec2, Vec2)>) {
+pub(crate) fn plan(
+    surface: &Surface,
+    centre: Vec3,
+    seed: u64,
+) -> (Vec<Op>, Vec<(Vec2, Vec2)>, Vec<Home>) {
     let mut rng = Rand(seed ^ 0x70_77);
     let (n, extent) = size(seed);
     let o = Vec2::new(centre.x, centre.z) - Vec2::splat(extent * 0.5);
@@ -381,6 +399,7 @@ pub(crate) fn plan(surface: &Surface, centre: Vec3, seed: u64) -> (Vec<Op>, Vec<
         surface,
         ops: Vec::new(),
         claimed: Vec::new(),
+        homes: Vec::new(),
         lit: (seed & 0xffff) as u32,
     };
     let pitch = BLOCK_M + STREET_M;
@@ -486,5 +505,5 @@ pub(crate) fn plan(surface: &Surface, centre: Vec3, seed: u64) -> (Vec<Op>, Vec<
             }
         }
     }
-    (town.ops, town.claimed)
+    (town.ops, town.claimed, town.homes)
 }

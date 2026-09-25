@@ -446,7 +446,7 @@ pub struct Village {
     /// Footprints (x, z min and max) of everything built, where no tree
     /// may grow.
     pub claimed: Vec<(Vec2, Vec2)>,
-    /// Its houses, for the people who live in them.
+    /// Its houses (a town's buildings), for the people who live in them.
     pub homes: Vec<Home>,
 }
 
@@ -1228,9 +1228,8 @@ impl Settlements {
         }
         let v = self.site(surface, i, k).map(|(centre, h, town)| {
             Arc::new(if town {
-                let (ops, claimed) = crate::town::plan(surface, centre, h);
-                // Towns have no homes yet: nobody lives in them.
-                assemble(centre, ops, claimed, Vec::new(), true)
+                let (ops, claimed, homes) = crate::town::plan(surface, centre, h);
+                assemble(centre, ops, claimed, homes, true)
             } else {
                 plan(surface, centre, h)
             })
@@ -1474,7 +1473,7 @@ mod tests {
     use crate::terrain::{CoarseTerrain, TerrainParams};
 
     #[test]
-    fn every_village_house_is_a_home_with_its_door_outside() {
+    fn every_building_is_a_home_with_its_door_outside() {
         let params = TerrainParams {
             size: 128,
             cell_m: 128.0,
@@ -1493,9 +1492,6 @@ mod tests {
                 let Some(v) = settlements.village(&surface, i, k) else {
                     continue;
                 };
-                if v.town {
-                    continue;
-                }
                 villages += 1;
                 assert!(!v.homes.is_empty(), "nobody lives at {}", v.centre);
                 for h in &v.homes {
@@ -1507,7 +1503,9 @@ mod tests {
                     // The floor is under a roof, the door a few steps from it
                     // and no higher than the floor.
                     assert!(within(h.inside), "{h:?}");
-                    assert!(h.door.distance(h.inside) < 12.0, "{h:?}");
+                    // A town's lots are a street block across.
+                    let far = if v.town { 30.0 } else { 12.0 };
+                    assert!(h.door.distance(h.inside) < far, "{h:?}");
                     assert!(h.door.y <= h.inside.y + 0.1, "{h:?}");
                 }
             }
