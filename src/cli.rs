@@ -45,6 +45,8 @@ pub struct Args {
     pub creative: bool,
     /// Weather to start in (headless: held there).
     pub weather: Option<mc2_game::weather::Sky>,
+    /// Captures without the game's HUD (hotbar, crosshair, target box).
+    pub clean: bool,
 }
 
 /// Quality settings from the preset plus command line overrides.
@@ -79,6 +81,7 @@ impl Default for Args {
             dof: None,
             creative: false,
             weather: None,
+            clean: false,
         }
     }
 }
@@ -96,6 +99,7 @@ usage: minecraft-2 [options]
   --physics-thread       headless: physics on its own thread, paced in real time
   --creative             creative play: nothing runs out (default survival)
   --weather <sky>        clear, cloudy, rain or storm (headless: held)
+  --clean                captures without the hotbar, crosshair or target box
   --seed <n>             world seed (default 42)
   --world <dir>          world directory (default worlds/default)
   --camera x,y,z,lx,ly,lz  headless camera position and look-at target (m)
@@ -137,6 +141,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--hide-bodies" => out.hide_bodies = true,
             "--physics-thread" => out.physics_thread = true,
             "--creative" => out.creative = true,
+            "--clean" => out.clean = true,
             "--weather" => {
                 let v = value("--weather")?;
                 out.weather = Some(

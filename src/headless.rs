@@ -151,7 +151,7 @@ pub fn run(args: &Args) -> Result<(), String> {
             1.0 / 60.0,
         );
         renderer.frame.hud.clear();
-        if args.demo.is_some() {
+        if args.demo.is_some() && !args.clean {
             let screen = renderer.output_size();
             crate::game_hud::draw(
                 &mut game,
