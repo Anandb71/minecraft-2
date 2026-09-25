@@ -38,7 +38,7 @@ Useful flags:
 | `--quality <0-3>` | Realistic … Super Ultra Crazy Duper Realistic |
 | `--gi restir\|cascades` | Indirect light method |
 | `--dof <metres>,<f>` | Thin lens for captures, e.g. `--dof 12,2.8` |
-| `--demo <name>` | Scripted scene: `build`, `lights`, `mirror`, `blast`, `collapse`, `glass`, `craft`, `workshop`, `flood`, `shore`, `wildfire`, `lightning` |
+| `--demo <name>` | Scripted scene: `build`, `lights`, `mirror`, `blast`, `collapse`, `glass`, `craft`, `workshop`, `flood`, `shore`, `wildfire`, `lightning`, `people`, `ragdoll` |
 | `--weather <sky>` | `clear`, `cloudy`, `rain` or `storm` (held in captures) |
 | `--creative` | Nothing runs out |
 | `--software` | WARP (Windows) or lavapipe (Linux) |
