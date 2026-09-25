@@ -20,7 +20,7 @@ then quits.
 | F | Toggle flying |
 | F5 | First / third person |
 | Tab | Block mode / carve mode |
-| E | Light the targeted TNT (4 s fuse) |
+| E | Light the targeted TNT (4 s fuse); trade with the villager you aim at; get into or out of a car beside you |
 | 1–9, mouse wheel | Hotbar (carve mode: wheel changes radius) |
 | F3 | Profiler HUD |
 | F4 | Debug view: shaded, LOD hits, march heatmap, unlit |
@@ -43,7 +43,7 @@ east crouch, west TNT, north fly. Push the left stick all the way to sprint.
 | Right stick | Look |
 | A / south | Jump (fly: up) |
 | B / east | Crouch (fly: down) |
-| X / west | Light TNT |
+| X / west | Light TNT; trade; get into or out of a car |
 | Y / north | Toggle flying |
 | RT | Break / carve |
 | LT | Place / deposit |
@@ -54,6 +54,20 @@ east crouch, west TNT, north fly. Push the left stick all the way to sprint.
 | D-pad down (held) | Preview the targeted block |
 | Start | Capture or release play |
 | Back / Select | Inventory |
+
+## Driving
+
+In a car, W and S are throttle and reverse, A and D steer, Space brakes
+and E gets out on the driver's side. The camera starts behind the car;
+F5 puts you in the driver's seat. On a pad the left stick drives and A
+brakes.
+
+## Trading
+
+Aim at a villager within four metres and press E. The pack opens at its
+trades: a woodcutter, mason, smith or miner, each selling what it makes
+and buying what it needs, for gold ingots. It stands and faces you until
+you close the pack or walk off.
 
 ## Photo mode
 
