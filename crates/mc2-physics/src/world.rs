@@ -10,6 +10,7 @@ use crate::pair_contact::{
 };
 use crate::probe::SAMPLE_RADIUS;
 use crate::shape::{BodyShape, VOXEL_M};
+use crate::vehicle::{Vehicle, drive};
 use crate::world_contact::{
     Contact, find_world_contacts, refresh_contacts, solve_world_positions, solve_world_velocities,
 };
@@ -51,6 +52,8 @@ pub struct PhysicsWorld {
     pub obstacles: Vec<Obstacle>,
     /// Joints between bodies; one whose body is gone is dropped.
     pub joints: Vec<Joint>,
+    /// Bodies on wheels; one whose body is gone is dropped.
+    pub vehicles: Vec<Vehicle>,
     /// Brick cells the last step needed and the collision source lacked.
     /// Bodies that needed them were held in place.
     pub missing_cells: Vec<IVec3>,
@@ -71,6 +74,7 @@ impl PhysicsWorld {
             bodies: Vec::new(),
             obstacles: Vec::new(),
             joints: Vec::new(),
+            vehicles: Vec::new(),
             missing_cells: Vec::new(),
             next_id: 1,
             substeps: 8,
@@ -115,8 +119,19 @@ impl PhysicsWorld {
         self.joints.push(joint);
     }
 
+    /// Puts a body on wheels.
+    pub fn add_vehicle(&mut self, vehicle: Vehicle) {
+        self.vehicles.retain(|v| v.body != vehicle.body);
+        self.vehicles.push(vehicle);
+    }
+
+    pub fn vehicle_mut(&mut self, id: BodyId) -> Option<&mut Vehicle> {
+        self.vehicles.iter_mut().find(|v| v.body == id)
+    }
+
     pub fn remove(&mut self, id: BodyId) -> Option<Body> {
         self.joints.retain(|j| j.a != id && j.b != id);
+        self.vehicles.retain(|v| v.body != id);
         let i = self.bodies.iter().position(|b| b.id == id)?;
         Some(self.bodies.swap_remove(i))
     }
@@ -168,6 +183,19 @@ impl PhysicsWorld {
                 }
             }
         }
+        // Vehicles by body; one being driven is awake.
+        self.vehicles.retain(|v| index.contains_key(&v.body));
+        let vehicles: Vec<(usize, usize)> = self
+            .vehicles
+            .iter()
+            .enumerate()
+            .map(|(vi, v)| (vi, index[&v.body]))
+            .collect();
+        for &(vi, bi) in &vehicles {
+            if self.vehicles[vi].controlled() && self.bodies[bi].asleep {
+                self.bodies[bi].wake();
+            }
+        }
         // Broad phase once per step: bounding sphere pairs, expanded by
         // how far the bodies can travel. Parts of one group pass through
         // each other.
@@ -213,6 +241,11 @@ impl PhysicsWorld {
         for (_, i, j) in &joints {
             paired[*i] = true;
             paired[*j] = true;
+        }
+        // Vehicles take their wheels' pushes substep by substep with the
+        // coupled bodies.
+        for &(_, bi) in &vehicles {
+            paired[bi] = true;
         }
         // A body near no other body is independent for the whole step: one
         // parallel task runs all of its substeps.
@@ -276,6 +309,14 @@ impl PhysicsWorld {
             pair_time += pair_start.elapsed();
             pair_contacts = pc.len();
             for _ in 0..substeps {
+                for &(vi, bi) in &vehicles {
+                    drive(
+                        &self.vehicles[vi],
+                        &mut self.bodies[bi],
+                        windows[bi].as_ref(),
+                        h,
+                    );
+                }
                 let begin = |(b, contacts): (&mut Body, &mut Vec<Contact>)| {
                     if !b.asleep {
                         integrate(b, h);

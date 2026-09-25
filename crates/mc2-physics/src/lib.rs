@@ -12,10 +12,12 @@ mod pair_contact;
 pub mod probe;
 pub mod raycast;
 pub mod shape;
+pub mod vehicle;
 pub mod world;
 mod world_contact;
 
 pub use body::{Body, BodyId};
 pub use joint::{Hinge, Joint};
 pub use shape::BodyShape;
+pub use vehicle::{Handling, Vehicle, Wheel};
 pub use world::{Obstacle, PhysicsStats, PhysicsWorld};
