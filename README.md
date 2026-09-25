@@ -27,7 +27,7 @@
 </p>
 
 The world is a sparse voxel structure marched directly in compute shaders.
-Resolution, traced lighting, arbitrary destruction and (later) traced audio
+Resolution, traced lighting, arbitrary destruction and traced audio
 all come from the same acceleration structure. There is no mesh, no greedy
 meshing pass, no LOD that turns a mountain into a handful of quads.
 

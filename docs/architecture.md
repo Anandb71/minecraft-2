@@ -2,7 +2,7 @@
 
 Minecraft 2 meshes nothing. The world is 6.25 cm voxels in 4-bit palette
 bricks, under per-chunk sparse 64-trees, ray marched in a compute shader.
-Lighting, destruction, rigid bodies and (later) audio all read that same
+Lighting, destruction, rigid bodies and audio all read that same
 structure.
 
 The why behind each fork lives in [DECISIONS.md](../DECISIONS.md). What it
