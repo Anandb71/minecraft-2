@@ -13,7 +13,9 @@ use crate::crafting::{Profession, Station};
 use crate::input::{Input, Key, Time};
 use crate::interact::Interaction;
 use crate::nav;
+use crate::physics::Physics;
 use crate::player::{Body, EYE, Player};
+use crate::vehicles::Garage;
 use crate::view::ViewCamera;
 use crate::{Streaming, Voxels};
 use bevy_ecs::prelude::*;
@@ -124,6 +126,7 @@ pub struct Population {
 
 /// Twice a second: people the villages the player has come near, and
 /// empty the ones it has left.
+#[allow(clippy::too_many_arguments)]
 pub fn people_villages(
     mut commands: Commands,
     time: Res<Time>,
@@ -131,6 +134,8 @@ pub fn people_villages(
     voxels: Res<Voxels>,
     clock: Res<WorldClock>,
     mut population: ResMut<Population>,
+    mut garage: ResMut<Garage>,
+    mut physics: ResMut<Physics>,
     players: Query<&Body, With<Player>>,
 ) {
     population.wait -= time.dt;
@@ -203,6 +208,11 @@ pub fn people_villages(
         // Try again later if none of the ground has streamed in yet.
         if !people.is_empty() {
             population.villages.insert(key, people);
+            // Someone in the village owns a car, parked by the square.
+            if garage.parked.insert(key) {
+                let seed = (key.0 as u64).wrapping_mul(31) ^ (key.1 as u64);
+                garage.park_by(&mut physics, &voxels.0, v.centre.as_dvec3(), seed);
+            }
         }
     }
 }

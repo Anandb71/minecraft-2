@@ -168,11 +168,13 @@ pub struct Car {
     pub door: Vec3,
 }
 
-/// Every car, and which one the player is driving.
+/// Every car, which one the player is driving, and the villages that
+/// have had theirs parked.
 #[derive(Resource, Default)]
 pub struct Garage {
     pub cars: Vec<Car>,
     pub driving: Option<usize>,
+    pub parked: mc2_core::FxHashSet<(i32, i32)>,
 }
 
 impl Garage {
@@ -200,6 +202,51 @@ impl Garage {
             door: model.door,
         });
         body
+    }
+
+    /// Parks a car on level open ground a little way from `square`, if
+    /// there is room for one: across the radius, like a car at a kerb.
+    pub fn park_by(
+        &mut self,
+        physics: &mut Physics,
+        world: &mc2_voxel::world::VoxelWorld,
+        square: DVec3,
+        seed: u64,
+    ) -> Option<BodyId> {
+        let half = SIZE.as_dvec3() * 0.5 * f64::from(VOXEL_M);
+        for k in 0..24u64 {
+            let a = (seed.wrapping_add(k * 7) % 24) as f64 / 24.0 * std::f64::consts::TAU;
+            let d = 10.0 + (k % 3) as f64 * 2.5;
+            let at = square + DVec3::new(a.cos() * d, 0.0, a.sin() * d);
+            let yaw = (a + std::f64::consts::FRAC_PI_2) as f32;
+            let rot = glam::DQuat::from_rotation_y(f64::from(yaw));
+            let corners = [
+                (-1.0, -1.0),
+                (1.0, -1.0),
+                (-1.0, 1.0),
+                (1.0, 1.0),
+                (0.0, 0.0),
+            ];
+            let grounds: Option<Vec<f64>> = corners
+                .iter()
+                .map(|&(sx, sz)| {
+                    let p = at + rot * DVec3::new(sx * half.x, 0.0, sz * half.z);
+                    nav::stand(world, p.x, p.z, square.y)
+                })
+                .collect();
+            let Some(grounds) = grounds else { continue };
+            let (lo, hi) = grounds
+                .iter()
+                .fold((f64::MAX, f64::MIN), |(lo, hi), &g| (lo.min(g), hi.max(g)));
+            if hi - lo > 0.3 {
+                continue;
+            }
+            let corner =
+                at + rot * DVec3::new(-half.x, 0.0, -half.z) + DVec3::Y * (hi + 0.08 - at.y);
+            let model = car(PAINTS[(seed % PAINTS.len() as u64) as usize]);
+            return Some(self.park(physics, &model, corner, yaw));
+        }
+        None
     }
 
     /// The car being driven, if any.
