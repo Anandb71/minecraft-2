@@ -1,6 +1,7 @@
 //! Game layer: player, interaction, blocks, on a standalone bevy_ecs world.
 
 pub mod blocks;
+pub mod character;
 pub mod clock;
 pub mod collide;
 pub mod crafting;
@@ -60,6 +61,7 @@ impl Game {
         world.insert_resource(water::Water::default());
         world.insert_resource(fire::Fire::default());
         world.insert_resource(weather::Weather::default());
+        world.insert_resource(character::Drawn::default());
 
         let mut frame = Schedule::default();
         frame.add_systems((clock::advance_clock, player::look, player::toggles).chain());
@@ -69,6 +71,7 @@ impl Game {
         late.add_systems(
             (
                 view::update_view,
+                character::pose_characters,
                 interact::interact,
                 physics::light_fuses,
                 structure::update_structure,
