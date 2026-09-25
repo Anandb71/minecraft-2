@@ -46,6 +46,12 @@ pub enum Demo {
     Wildfire,
     /// A storm, and a bolt brought down forty metres ahead.
     Lightning,
+    /// Seen from behind in third person, walking into the square, with
+    /// five villagers standing in an arc ahead, facing the player.
+    People,
+    /// The same villagers, and a charge going off beside them: caught a
+    /// third of a second later, thrown limp across the square.
+    Ragdoll,
 }
 
 impl Demo {
@@ -63,6 +69,8 @@ impl Demo {
             "shore" => Some(Self::Shore),
             "wildfire" => Some(Self::Wildfire),
             "lightning" => Some(Self::Lightning),
+            "people" => Some(Self::People),
+            "ragdoll" => Some(Self::Ragdoll),
             _ => None,
         }
     }
@@ -101,6 +109,39 @@ fn select(game: &mut Game, slot: u8) {
 fn look(game: &mut Game, dx: f32, dy: f32) {
     game.input().mouse_delta += glam::Vec2::new(dx, dy);
     tick(game, 1);
+}
+
+/// Level and to the left, for a way the player faces.
+fn side_of(ahead: glam::DVec3) -> glam::DVec3 {
+    glam::DVec3::new(ahead.z, 0.0, -ahead.x)
+}
+
+/// Five villagers in an arc six metres ahead of the player, facing it.
+/// Returns the player's feet and the way it faces.
+fn villagers(game: &mut Game) -> Option<(glam::DVec3, glam::DVec3)> {
+    use glam::DVec3;
+    use mc2_game::character::{Character, Look, ground};
+    use mc2_game::player::{Body, Player};
+    let (feet, yaw) = {
+        let mut q = game.world.query::<(&Body, &Player)>();
+        q.iter(&game.world).next().map(|(b, p)| (b.feet, p.yaw))
+    }?;
+    let ahead = DVec3::new(f64::from(yaw.sin()), 0.0, f64::from(yaw.cos()));
+    let side = side_of(ahead);
+    for i in 0..5u64 {
+        let a = i as f64 - 2.0;
+        let spot = feet + ahead * (6.0 + 0.6 * a.abs()) + side * (a * 1.6);
+        let voxels = &game.world.resource::<mc2_game::Voxels>().0;
+        let Some(g) = ground(voxels, spot.x, feet.y, spot.z) else {
+            continue;
+        };
+        let mut c = Character::new(Look::from_seed(100 + i));
+        // Facing back toward the player, turned a little each.
+        c.facing = yaw + std::f32::consts::PI + 0.25 * a as f32;
+        game.world
+            .spawn((Body::at(DVec3::new(spot.x, g, spot.z)), c));
+    }
+    Some((feet, ahead))
 }
 
 /// Makes `output` from what is carried, if it can, and says so.
@@ -667,6 +708,25 @@ pub fn run(game: &mut Game, demo: Demo) {
         Demo::Craft => {
             workshop(game);
             hold(game, Item::Tool(ToolKind::Pickaxe, Tier::Stone));
+        }
+        Demo::People => {
+            villagers(game);
+            game.input().key_down(Key::ToggleView);
+            tick(game, 1);
+            game.input().key_up(Key::ToggleView);
+            game.input().key_down(Key::Forward);
+            tick(game, 45);
+        }
+        Demo::Ragdoll => {
+            if let Some((feet, ahead)) = villagers(game) {
+                let mut physics = game.world.resource_mut::<mc2_game::physics::Physics>();
+                physics.blasts.push(mc2_game::physics::Blast {
+                    // Off the left end of the arc, so they fly across the view.
+                    centre: feet + ahead * 7.0 + side_of(ahead) * 4.5 + glam::DVec3::Y * 0.5,
+                    radius: mc2_game::physics::TNT_RADIUS_M,
+                });
+            }
+            tick(game, 20);
         }
         Demo::Workshop => {
             workshop(game);

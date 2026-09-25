@@ -229,6 +229,15 @@ pub fn pose_bodies(game: &Game, renderer: &mut mc2_render::Renderer) {
             grid_rotation,
         }
     }));
+    let people = game.world.resource::<mc2_game::character::Drawn>();
+    renderer
+        .bodies
+        .extend(people.0.iter().map(|p| mc2_render::bodies::BodyInstance {
+            key: p.key,
+            shape: p.shape.clone(),
+            grid_origin: p.corner,
+            grid_rotation: p.rotation,
+        }));
 }
 
 /// One HUD line on structural integrity.

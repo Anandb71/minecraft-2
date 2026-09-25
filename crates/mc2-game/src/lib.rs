@@ -99,6 +99,7 @@ impl Game {
                 ..Default::default()
             },
             player::Body::at(feet),
+            character::Character::new(character::Look::from_seed(7)),
         ));
     }
 
