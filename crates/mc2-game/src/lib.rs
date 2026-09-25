@@ -10,6 +10,7 @@ pub mod input;
 pub mod interact;
 pub mod inventory;
 pub mod items;
+pub mod nav;
 pub mod physics;
 pub mod physics_host;
 pub mod player;
