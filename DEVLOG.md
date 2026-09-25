@@ -1126,3 +1126,48 @@ engine's own stills.
   (10296, 7392); the flood demo carries the water chapter.
 - A 2560x1440 capture on the top tier spends about three minutes
   streaming before its frames on the RTX 3050 Laptop GPU.
+
+## Step 15: People, trade, vehicles, in progress
+
+**Built.**
+
+- Homes: a village records each house's door (on the ground a stride past
+  its step) and a spot on its floor.
+- Walking: A* over half-metre columns of the voxels themselves. A column
+  is standable with a solid top and 1.9 m of head room; a neighbour is
+  reachable within 0.55 m up or 1.1 m down and with nothing between at
+  knee, waist or head height, because a house wall (a quarter metre) is
+  thinner than a column. Searches run 300 columns a tick across everyone,
+  so a long one spreads over several ticks.
+- Villagers: up to eight a village, peopled from its homes as the player
+  comes near and emptied when it leaves. By day they go to the square, to
+  one another's doors and back; at dusk they walk home and go in. They
+  keep to the ground as it is now and think again when the way has gone,
+  and turn their heads to anyone close.
+- Trade: each villager is a woodcutter, mason, smith or miner. Trades are
+  recipes made at a villager of the right trade, gold ingots the money.
+  E on a villager in reach opens its trades; it stands and faces you until
+  you are done.
+- Cars: a body on raycast wheels (`mc2-physics::vehicle`). Each wheel's
+  ray finds the ground each substep; a spring and damper hold the body up
+  there and the tyre stops the sideways slide, drives and brakes within
+  its grip, all as velocity impulses before integration. The car is one
+  4 m voxel body (1215 kg): painted shell, glass cabin, seats, chrome,
+  headlights and tail lights that light the road, and wheels held 3 cm
+  clear of the ground by the springs. Every village keeps one by its
+  square. E gets in and out; a chase camera follows.
+
+**Measured** (i5-13450HX):
+
+| | |
+|---|---|
+| worst `game.update`, trade demo, before searches were sliced | 99.5 ms |
+| the same after | 6.7 ms |
+| village demo, twenty seconds of villagers, worst `game.update` | 0.9 ms |
+| drive demo, `game.update` mean / worst | 1.25 / 5.2 ms |
+
+**Rejected.** See D50 and D51.
+
+**Known.** Towns have no homes, so nobody lives in them yet, and nothing
+parks on their streets. A car's wheels do not turn. Villagers walk
+through one another.

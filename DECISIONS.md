@@ -315,3 +315,15 @@ Both were built behind one output with the same hit shading and denoiser, and me
 - **A live WebGL scene.** The previous page raymarched a toy world in the browser. It could never look like the engine, and it ran a phone's processor hot before showing anything real.
 - **Video.** The truest trailer, but there is no recording path yet, and a few megabytes of video would sit in front of every visitor.
 - **The engine's own stills (chosen).** Headless captures at 2560x1440 on the top tier, as WebP at two sizes, told as chapters that change still with scroll and as a full-screen trailer. What the page shows is exactly what the renderer makes.
+
+## D50. How a villager finds its way
+
+- **A navigation mesh.** Built once from the terrain and walked cheaply. But the world here changes under the villagers' feet: a crater, a wall, a flood, a felled tree. Every edit would rebuild part of the mesh.
+- **Straight lines and steering.** Cheap and lifelike in the open, and useless the moment a house stands between the square and a door.
+- **A* over the voxels themselves (chosen).** Half-metre columns read straight from the world when a search needs them, so the path is right for the world as it is; the crossing between columns is sampled at knee, waist and head so thin walls count. A search runs a few hundred columns a tick, and a walker that finds its way gone stops and searches again.
+
+## D51. How a car rides
+
+- **Wheels as jointed bodies.** Each wheel a rigid body on a hinge, rolling on the voxels through ordinary contacts: faithful, but contacts on a 6.25 cm staircase make a wheel judder, and four more bodies per car in the coupled solve.
+- **A kinematic car.** Moved where the keys say, snapped to the ground: no weight, no roll, no crash.
+- **Raycast wheels (chosen).** One body, and per wheel one ray, a spring and a tyre model applied as impulses inside the physics substeps. The voxel staircase is felt through the springs rather than as hits, the car keeps its mass and momentum, and its body still collides, tips and sleeps like any other.
