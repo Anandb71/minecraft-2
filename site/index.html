@@ -3,25 +3,25 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Minecraft 2</title>
+    <title>Minecraft 2 — a voxel world, ray traced</title>
     <meta
       name="description"
-      content="A 16 km continent of 6.25 cm voxels. The GPU marches them. Rust, wgpu. By Anand B."
+      content="A 16 km continent of 6.25 cm voxels, ray traced on your GPU. Rain that soaks in, fire that spreads, water that floods, towers that fall. Rust and wgpu, by Anand B."
     />
     <link rel="canonical" href="https://mc2.anandb71.in/" />
-    <meta name="theme-color" content="#1c242c" />
+    <meta name="theme-color" content="#0e0906" />
     <meta name="color-scheme" content="dark" />
     <meta name="author" content="Anand B" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://mc2.anandb71.in/" />
     <meta property="og:title" content="Minecraft 2" />
-    <meta property="og:description" content="Look through the glass. The GPU walks empty cells." />
+    <meta property="og:description" content="A whole continent of voxels, ray traced. Rain soaks it, fire takes it, water floods it, TNT breaks it." />
     <meta property="og:image" content="https://mc2.anandb71.in/og.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Minecraft 2" />
-    <meta name="twitter:description" content="Look through the glass. The GPU walks empty cells." />
+    <meta name="twitter:description" content="A whole continent of voxels, ray traced. Rain soaks it, fire takes it, water floods it, TNT breaks it." />
     <meta name="twitter:image" content="https://mc2.anandb71.in/og.png" />
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
@@ -30,129 +30,346 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Kalnia:wght@400;500;600&family=Red+Hat+Mono:wght@400;500&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Big+Shoulders+Display:wght@700;800;900&family=Silkscreen&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/css/site.css" />
+    <link rel="preload" as="image" href="/media/town-dusk-1280.webp" imagesrcset="/media/town-dusk-1280.webp 1280w, /media/town-dusk-2560.webp 2560w" imagesizes="100vw" />
+    <link rel="stylesheet" href="/css/site.css?v=trailer1" />
   </head>
   <body>
-    <a class="skip" href="#clone-open">Skip to clone</a>
+    <a class="skip" href="#play">Skip to getting it</a>
+    <div class="progress" aria-hidden="true"></div>
 
-    <canvas id="world" role="img" aria-label="Live voxel field. Drag to look, click to carve, scroll to zoom.">
-    </canvas>
-    <img
-      id="fallback"
-      class="fallback"
-      hidden
-      src="/media/glass.png"
-      alt="A glass cube on terraced grass, a wooden pickaxe behind it"
-      width="1920"
-      height="991"
-    />
-
-    <header class="hud">
-      <div class="brand">
-        <p class="who">Anand B · Tamil Nadu</p>
-        <h1>Minecraft 2</h1>
-        <p class="lede" id="lede">
-          Look through the cube. The pick is behind the glass. This page marches voxels in your GPU,
-          the same idea as the game, just a tiny field.
-        </p>
-      </div>
-      <div class="tools">
-        <button type="button" class="quiet" id="photos-open">Photo mode</button>
-        <button type="button" class="quiet" id="debug-btn" aria-pressed="false">Ray heat</button>
-        <button type="button" class="go" id="clone-open">Clone</button>
-      </div>
+    <header class="bar" id="bar">
+      <a class="mark" href="#top" aria-label="Minecraft 2, back to the top">MC<span>2</span></a>
+      <nav class="chapters-nav" aria-label="Chapters">
+        <a href="#world">World</a>
+        <a href="#light">Light</a>
+        <a href="#weather">Weather</a>
+        <a href="#fire">Fire</a>
+        <a href="#water">Water</a>
+        <a href="#break">Destruction</a>
+        <a href="#survive">Survival</a>
+        <a href="#engine">Engine</a>
+      </nav>
+      <a class="btn btn-amber btn-small" href="#play">Play it</a>
     </header>
 
-    <div class="meter">
-      <div class="meter-row">
-        <label class="tod">
-          <span>Sun</span>
-          <input id="tod" type="range" min="0" max="100" value="72" />
-        </label>
-        <div class="zoom">
-          <button type="button" class="quiet" id="zoom-out" aria-label="Zoom out">−</button>
-          <button type="button" class="quiet" id="zoom-in" aria-label="Zoom in">+</button>
+    <main id="top">
+      <!-- Hero -->
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-shot">
+          <img
+            src="/media/town-dusk-1280.webp"
+            srcset="/media/town-dusk-1280.webp 1280w, /media/town-dusk-2560.webp 2560w"
+            sizes="100vw"
+            alt="A town of glass towers and brick streets at dusk, forest to the horizon"
+            fetchpriority="high"
+            decoding="async"
+          />
         </div>
-      </div>
-      <p class="hint">
-        Drag to look · click a hole · pinch or scroll zooms · WASD walks
-        <span id="scale"></span>
-      </p>
-    </div>
+        <div class="hero-copy">
+          <p class="kicker"><span class="pixel">A voxel world, ray traced</span></p>
+          <h1 id="hero-title" class="title">
+            <span class="title-line">Minecraft</span>
+            <span class="title-two">2</span>
+          </h1>
+          <p class="lede">
+            Sixteen kilometres of land built from blocks six centimetres across, every one of them lit by
+            the sun, soaked by the rain, and yours to burn, flood or blow apart.
+          </p>
+          <div class="cta">
+            <a class="btn btn-amber" href="#play">Play it</a>
+            <a class="btn btn-ghost" href="#world">Watch the world</a>
+          </div>
+          <p class="credits">Rust · wgpu · open source · MIT</p>
+        </div>
+        <a class="scroll-cue" href="#manifesto" aria-label="Scroll down"><span></span></a>
+      </section>
 
-    <dialog id="photos" aria-labelledby="photos-title">
-      <div class="sheet-head">
-        <div>
-          <p class="k">From the real engine</p>
-          <h2 id="photos-title">Photo mode</h2>
-        </div>
-        <button type="button" class="quiet" data-close>Close</button>
-      </div>
-      <p class="sheet-lede">These are stills from the game, not this toy field.</p>
-      <div class="sheet">
-        <figure>
-          <img src="/media/glass.png" alt="Glass cube and pickaxe" width="1920" height="991" />
-          <figcaption>Cube</figcaption>
-        </figure>
-        <figure>
-          <img src="/media/street.png" alt="Street between towers" width="1280" height="720" />
-          <figcaption>Street</figcaption>
-        </figure>
-        <figure>
-          <img src="/media/village.png" alt="Village well" width="1280" height="720" />
-          <figcaption>Well</figcaption>
-        </figure>
-        <figure>
-          <img src="/media/village-night.png" alt="Village at night" width="1280" height="720" />
-          <figcaption>Night</figcaption>
-        </figure>
-        <figure>
-          <img src="/media/hero-town.png" alt="Coastal towers" width="1280" height="720" />
-          <figcaption>Town</figcaption>
-        </figure>
-        <figure>
-          <img src="/media/canopy.png" alt="Forest canopy" width="1280" height="720" />
-          <figcaption>Canopy</figcaption>
-        </figure>
-        <figure>
-          <img src="/media/meadow.png" alt="Meadow" width="1280" height="720" />
-          <figcaption>Meadow</figcaption>
-        </figure>
-        <figure>
-          <img src="/media/sunset.png" alt="Sunset terraces" width="1920" height="991" />
-          <figcaption>Dusk</figcaption>
-        </figure>
-      </div>
-    </dialog>
+      <!-- Manifesto -->
+      <section class="manifesto" id="manifesto">
+        <p class="reveal">
+          No meshes. No baked light. The GPU marches rays through
+          <em>every voxel of the world</em>, so the sunset, the storm, the flood and the fire are all
+          the same thing: light, finding its way.
+        </p>
+      </section>
 
-    <dialog id="clone" aria-labelledby="clone-title">
-      <div class="sheet-head">
-        <div>
-          <p class="k">Load</p>
-          <h2 id="clone-title">Run it on your machine</h2>
+      <!-- 01 World -->
+      <section class="chapter" id="world" data-shots="4" aria-labelledby="world-title">
+        <div class="stage">
+          <figure class="shot is-on" data-caption="Strata on a mountain range, cut by rivers and weather">
+            <img loading="lazy" decoding="async" src="/media/range-1280.webp" srcset="/media/range-1280.webp 1280w, /media/range-2560.webp 2560w" sizes="100vw" alt="Bands of rock across a mountainside, pines above the snowline" />
+          </figure>
+          <figure class="shot" data-caption="A town on the coast, forest all the way to its streets">
+            <img loading="lazy" decoding="async" src="/media/aerial-1280.webp" srcset="/media/aerial-1280.webp 1280w, /media/aerial-2560.webp 2560w" sizes="100vw" alt="A town of towers seen from the air, forest all round and the sea beyond" />
+          </figure>
+          <figure class="shot" data-caption="Snow lies longer on the north faces">
+            <img loading="lazy" decoding="async" src="/media/north-face-1280.webp" srcset="/media/north-face-1280.webp 1280w, /media/north-face-2560.webp 2560w" sizes="100vw" alt="A striped rock peak with snow on its northern side" />
+          </figure>
+          <figure class="shot" data-caption="A village, built where the ground allowed one">
+            <img loading="lazy" decoding="async" src="/media/village-gold-1280.webp" srcset="/media/village-gold-1280.webp 1280w, /media/village-gold-2560.webp 2560w" sizes="100vw" alt="Houses and a well round a cobbled square in the late afternoon" />
+          </figure>
         </div>
-        <button type="button" class="quiet" data-close>Close</button>
-      </div>
-      <p class="sheet-lede">
-        Rust, edition 2024, a GPU. First launch spends about 30 seconds growing the world, then
-        caches it.
-      </p>
-      <pre id="cmd">git clone https://github.com/Anandb71/minecraft-2.git
+        <div class="card">
+          <p class="chapter-no"><span class="pixel">01</span> The world</p>
+          <h2 id="world-title">A continent, grown from rock.</h2>
+          <p>
+            Ranges pushed up where plates meet, then eroded by rain into valleys. Strata you can dig
+            through, caves that follow the rock, ten biomes of forest, meadow, desert and snow, and
+            villages and towns built where the ground lets them.
+          </p>
+          <p class="caption"></p>
+        </div>
+      </section>
+
+      <!-- 02 Light -->
+      <section class="chapter chapter-right" id="light" data-shots="3" aria-labelledby="light-title">
+        <div class="stage">
+          <figure class="shot is-on" data-caption="Blue hour on a town street, the windows coming on">
+            <img loading="lazy" decoding="async" src="/media/street-blue-1280.webp" srcset="/media/street-blue-1280.webp 1280w, /media/street-blue-2560.webp 2560w" sizes="100vw" alt="A street between towers at dusk, windows lit" />
+          </figure>
+          <figure class="shot" data-caption="Glass bends and tints what lies behind it">
+            <img loading="lazy" decoding="async" src="/media/glass-1280.webp" srcset="/media/glass-1280.webp 1280w, /media/glass-2560.webp 2560w" sizes="100vw" alt="A glass structure built in the village" />
+          </figure>
+          <figure class="shot" data-caption="Night in the village, lit by its own lamps">
+            <img loading="lazy" decoding="async" src="/media/village-night-1280.webp" srcset="/media/village-night-1280.webp 1280w, /media/village-night-2560.webp 2560w" sizes="100vw" alt="The village square at night under lamplight" />
+          </figure>
+        </div>
+        <div class="card">
+          <p class="chapter-no"><span class="pixel">02</span> Light</p>
+          <h2 id="light-title">Every ray, traced.</h2>
+          <p>
+            Sunlight, skylight, torches and lava are traced through the same voxels you walk on:
+            soft shadows, light that bounces, reflections in polished stone, and glass and water that
+            refract the world behind them.
+          </p>
+          <p class="caption"></p>
+        </div>
+      </section>
+
+      <!-- 03 Weather -->
+      <section class="chapter" id="weather" data-shots="3" aria-labelledby="weather-title">
+        <div class="stage">
+          <figure class="shot is-on" data-caption="Rain darkens the stone and fills the hollows">
+            <img loading="lazy" decoding="async" src="/media/rain-plaza-1280.webp" srcset="/media/rain-plaza-1280.webp 1280w, /media/rain-plaza-2560.webp 2560w" sizes="100vw" alt="A village square in the rain, puddles reflecting the well" />
+          </figure>
+          <figure class="shot" data-caption="A storm's bolt, lighting everything it passes">
+            <img loading="lazy" decoding="async" src="/media/storm-bolt-1280.webp" srcset="/media/storm-bolt-1280.webp 1280w, /media/storm-bolt-2560.webp 2560w" sizes="100vw" alt="Lightning striking beyond a village well in heavy rain" />
+          </figure>
+          <figure class="shot" data-caption="Snow where it is cold enough, on the pines and in the air">
+            <img loading="lazy" decoding="async" src="/media/snow-1280.webp" srcset="/media/snow-1280.webp 1280w, /media/snow-2560.webp 2560w" sizes="100vw" alt="Snow falling through a pine forest" />
+          </figure>
+        </div>
+        <div class="card">
+          <p class="chapter-no"><span class="pixel">03</span> Weather</p>
+          <h2 id="weather-title">Rain that soaks in.</h2>
+          <p>
+            Clouds roll in and the wind picks up. Stone darkens, puddles hold the sky, and storms throw
+            real bolts of light that can set a tree burning. Where it is cold, it snows.
+          </p>
+          <p class="caption"></p>
+        </div>
+      </section>
+
+      <!-- 04 Fire -->
+      <section class="chapter chapter-right chapter-short" id="fire" data-shots="1" aria-labelledby="fire-title">
+        <div class="stage">
+          <figure class="shot is-on" data-caption="One strike of flint and steel, at dusk">
+            <img loading="lazy" decoding="async" src="/media/wildfire-1280.webp" srcset="/media/wildfire-1280.webp 1280w, /media/wildfire-2560.webp 2560w" sizes="100vw" alt="A tree burning at dusk beside a village well" />
+          </figure>
+        </div>
+        <div class="card">
+          <p class="chapter-no"><span class="pixel">04</span> Fire</p>
+          <h2 id="fire-title">Fire that spreads.</h2>
+          <p>
+            Strike flint and steel and it climbs the trunk, takes the canopy and moves downwind, charring
+            wood to charcoal and lighting the night around it. Water puts it out. So does rain, eventually.
+          </p>
+          <p class="caption"></p>
+        </div>
+      </section>
+
+      <!-- 05 Water -->
+      <section class="chapter" id="water" data-shots="2" aria-labelledby="water-title">
+        <div class="stage">
+          <figure class="shot is-on" data-caption="A tank opened toward the square">
+            <img loading="lazy" decoding="async" src="/media/flood-1280.webp" srcset="/media/flood-1280.webp 1280w, /media/flood-2560.webp 2560w" sizes="100vw" alt="Water pouring out of a stone tank across a village square" />
+          </figure>
+          <figure class="shot" data-caption="Moments later it has found every low place">
+            <img loading="lazy" decoding="async" src="/media/flood-late-1280.webp" srcset="/media/flood-late-1280.webp 1280w, /media/flood-late-2560.webp 2560w" sizes="100vw" alt="Water spread across the village square" />
+          </figure>
+        </div>
+        <div class="card">
+          <p class="chapter-no"><span class="pixel">05</span> Water</p>
+          <h2 id="water-title">Water that flows.</h2>
+          <p>
+            A lattice of half-metre cells simulated on the GPU 240 times a second. Break a dam and it
+            floods the square; dig down to the sea and the sea comes in after you. Buckets carry it.
+          </p>
+          <p class="caption"></p>
+        </div>
+      </section>
+
+      <!-- 06 Destruction -->
+      <section class="chapter chapter-right" id="break" data-shots="2" aria-labelledby="break-title">
+        <div class="stage">
+          <figure class="shot is-on" data-caption="Two charges, one chain reaction, debris still in the air">
+            <img loading="lazy" decoding="async" src="/media/blast-1280.webp" srcset="/media/blast-1280.webp 1280w, /media/blast-2560.webp 2560w" sizes="100vw" alt="A TNT blast throwing debris over a village" />
+          </figure>
+          <figure class="shot" data-caption="Its base blown out, a tower comes down in pieces">
+            <img loading="lazy" decoding="async" src="/media/collapse-1280.webp" srcset="/media/collapse-1280.webp 1280w, /media/collapse-2560.webp 2560w" sizes="100vw" alt="A stone tower collapsing into rigid pieces" />
+          </figure>
+        </div>
+        <div class="card">
+          <p class="chapter-no"><span class="pixel">06</span> Destruction</p>
+          <h2 id="break-title">Everything breaks.</h2>
+          <p>
+            TNT carves real craters and throws real debris that tumbles and stacks where it lands.
+            Weight flows down through every block, so cut the column a tower stands on and the tower comes down.
+          </p>
+          <p class="caption"></p>
+        </div>
+      </section>
+
+      <!-- 07 Survival -->
+      <section class="chapter" id="survive" data-shots="2" aria-labelledby="survive-title">
+        <div class="stage">
+          <figure class="shot is-on" data-caption="A crafting table and a lit furnace on the village square">
+            <img loading="lazy" decoding="async" src="/media/workshop-1280.webp" srcset="/media/workshop-1280.webp 1280w, /media/workshop-2560.webp 2560w" sizes="100vw" alt="A crafting table and furnace set down on a cobbled square" />
+          </figure>
+          <figure class="shot" data-caption="The pack and the recipe book">
+            <img loading="lazy" decoding="async" src="/media/craft-ui-1280.webp" srcset="/media/craft-ui-1280.webp 1280w, /media/craft-ui-1920.webp 1920w" sizes="100vw" alt="The inventory screen with its recipe book open at a crafting table" />
+          </figure>
+        </div>
+        <div class="card">
+          <p class="chapter-no"><span class="pixel">07</span> Survival</p>
+          <h2 id="survive-title">From one tree to steel.</h2>
+          <p>
+            Punch a log. Planks, sticks, a crafting table, a pickaxe. Forty-four recipes by hand, at a
+            table and in a furnace, tools that wear out, and flint and steel for when you want to watch it burn.
+          </p>
+          <p class="caption"></p>
+        </div>
+      </section>
+
+      <!-- Stills -->
+      <section class="stills" id="stills" aria-labelledby="stills-title">
+        <div class="section-head">
+          <p class="chapter-no"><span class="pixel">▣</span> Stills</p>
+          <h2 id="stills-title">Straight out of the engine.</h2>
+          <p>No paint-overs. Every frame is the game's own renderer, captured at its highest setting.</p>
+        </div>
+        <ul class="strip" id="strip"></ul>
+      </section>
+
+      <!-- Engine -->
+      <section class="engine" id="engine" aria-labelledby="engine-title">
+        <div class="section-head">
+          <p class="chapter-no"><span class="pixel">08</span> The engine</p>
+          <h2 id="engine-title">Built from the voxel up.</h2>
+          <p>
+            Everything is written for this game in Rust: the renderer, the physics, the water, the
+            world. Here is what it is made of.
+          </p>
+        </div>
+        <dl class="spec">
+          <div><dt>Voxels</dt><dd>6.25 cm each, in 4-bit palette bricks under sparse 64-trees. Nothing is ever turned into a mesh.</dd></div>
+          <div><dt>World</dt><dd>16 by 16 km, eroded once by a hydraulic model, streamed around you in four levels of detail.</dd></div>
+          <div><dt>Light</dt><dd>GPU ray marching, ReSTIR direct light from every glowing block, radiance cascades for bounce light, refraction, SVGF denoising, volumetric clouds and fog.</dd></div>
+          <div><dt>Water</dt><dd>Free-surface lattice Boltzmann, D3Q19, stepped at 240 Hz on the GPU and written back into the world.</dd></div>
+          <div><dt>Physics</dt><dd>XPBD rigid bodies at 120 Hz on their own thread, and a load graph that decides what stands.</dd></div>
+          <div><dt>Fire &amp; sky</dt><dd>Block fire at 10 Hz, drifting weather, rain and snow, lightning drawn as voxels of light.</dd></div>
+          <div><dt>Quality</dt><dd>Four tiers, from Realistic up to <strong>Super Ultra Crazy Duper Realistic</strong>.</dd></div>
+          <div><dt>Stack</dt><dd>Rust 2024, wgpu, WGSL with hot reload, bevy_ecs, its own frame graph. Ten crates and a binary.</dd></div>
+        </dl>
+        <p class="read-more">
+          <a href="https://github.com/Anandb71/minecraft-2/blob/main/docs/architecture.md">Architecture</a>
+          <a href="https://github.com/Anandb71/minecraft-2/blob/main/DEVLOG.md">Devlog</a>
+          <a href="https://github.com/Anandb71/minecraft-2/blob/main/DECISIONS.md">Why it went this way</a>
+        </p>
+      </section>
+
+      <!-- Road -->
+      <section class="road" id="road" aria-labelledby="road-title">
+        <div class="section-head">
+          <p class="chapter-no"><span class="pixel">09</span> The road</p>
+          <h2 id="road-title">Built in the open, one step at a time.</h2>
+          <ul class="road-key" aria-label="Key">
+            <li><i class="key-done"></i>Done</li>
+            <li><i class="key-now"></i>Being built now</li>
+            <li><i class="key-next"></i>Still to come</li>
+          </ul>
+        </div>
+        <ol class="steps" id="steps">
+          <li class="done">Harness, frame graph, golden tests</li>
+          <li class="done">Bricks, 64-trees, a CPU marcher</li>
+          <li class="done">GPU marcher and brick streaming</li>
+          <li class="done">A world, streamed in levels of detail</li>
+          <li class="done">Player, collision, carve and place</li>
+          <li class="done">Sky, traced shadows, ReSTIR</li>
+          <li class="done">Bounce light, denoising, upsampling</li>
+          <li class="done">Reflections, clouds, photo mode</li>
+          <li class="done">Rigid bodies and destruction</li>
+          <li class="done">Structural integrity</li>
+          <li class="done">Water on the GPU</li>
+          <li class="done">Fire, wind and weather</li>
+          <li class="now">Tectonics, caves, ecology</li>
+          <li class="now">Animation, IK, ragdolls</li>
+          <li class="next">People, trade, vehicles</li>
+          <li class="next">Traced sound</li>
+          <li class="next">Saves and settings</li>
+          <li class="next">Speed, and a first release</li>
+        </ol>
+      </section>
+
+      <!-- Play -->
+      <section class="play" id="play" aria-labelledby="play-title">
+        <div class="play-shot" aria-hidden="true">
+          <img loading="lazy" decoding="async" src="/media/town-gold-1280.webp" srcset="/media/town-gold-1280.webp 1280w, /media/town-gold-2560.webp 2560w" sizes="100vw" alt="" />
+        </div>
+        <div class="play-copy">
+          <p class="chapter-no"><span class="pixel">▶</span> Play it</p>
+          <h2 id="play-title">Tonight, on your own GPU.</h2>
+          <p>
+            You need Rust (stable, 2024 edition) and a graphics card with Vulkan, DirectX 12 or Metal. The
+            first launch grows the world, about thirty seconds; after that it starts at once.
+          </p>
+          <div class="code">
+            <div class="code-head">
+              <span class="pixel">Terminal</span>
+              <button type="button" class="btn btn-amber btn-small" id="copy">Copy</button>
+            </div>
+            <pre id="cmd"><code>git clone https://github.com/Anandb71/minecraft-2.git
 cd minecraft-2
-cargo run --release</pre>
-      <div class="actions">
-        <button type="button" class="go" id="copy">Copy</button>
-        <a class="quiet" href="https://github.com/Anandb71/minecraft-2">Repo</a>
-        <a class="quiet" href="https://github.com/Anandb71/minecraft-2/blob/main/docs/getting-started.md">Setup</a>
-        <a class="quiet" href="https://github.com/sponsors/Anandb71">Sponsor</a>
-      </div>
-      <p class="who foot">Anand B · Tamil Nadu · MIT 2026 · If a pass is over budget the HUD goes red.</p>
+cargo run --release</code></pre>
+          </div>
+          <div class="cta">
+            <a class="btn btn-ghost" href="https://github.com/Anandb71/minecraft-2">GitHub</a>
+            <a class="btn btn-ghost" href="https://github.com/Anandb71/minecraft-2/blob/main/docs/getting-started.md">Getting started</a>
+            <a class="btn btn-ghost" href="https://github.com/Anandb71/minecraft-2/blob/main/docs/controls.md">Controls</a>
+            <a class="btn btn-ghost" href="https://github.com/sponsors/Anandb71">Sponsor</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p><span class="mark-small">MC<span>2</span></span> Made by Anand B in Tamil Nadu. Code under the MIT licence.</p>
+      <p class="fine">A fan-made engine. Not an official Minecraft product; not approved by or associated with Mojang or Microsoft.</p>
+    </footer>
+
+    <dialog class="lightbox" id="lightbox" aria-label="Still">
+      <figure>
+        <img alt="" />
+        <figcaption></figcaption>
+      </figure>
+      <button type="button" class="lb-close" data-close aria-label="Close">×</button>
+      <button type="button" class="lb-prev" aria-label="Previous still">‹</button>
+      <button type="button" class="lb-next" aria-label="Next still">›</button>
     </dialog>
 
-    <script src="js/march.js?v=live8"></script>
-    <script src="js/site.js?v=live8"></script>
+    <script src="/js/site.js?v=trailer1" defer></script>
   </body>
 </html>
