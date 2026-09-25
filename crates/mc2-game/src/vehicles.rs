@@ -236,6 +236,7 @@ pub struct Garage {
     pub looks: Vec<CarLook>,
     pub driving: Option<usize>,
     pub steer: f32,
+    pub throttle: f32,
     pub parked: mc2_core::FxHashSet<(i32, i32)>,
 }
 
@@ -422,6 +423,7 @@ pub fn drive_cars(
     };
     physics.host.drive(car.body, throttle, steer, brake);
     garage.steer = steer;
+    garage.throttle = throttle;
     let Some(seat) = physics.host.body(car.body).map(|b| grid_point(b, car.seat)) else {
         return;
     };

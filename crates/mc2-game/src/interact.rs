@@ -139,6 +139,8 @@ pub struct Interaction {
     pub edited: Vec<(IVec3, IVec3)>,
     /// Voxel boxes where the player placed material: structure, not rock.
     pub built: Vec<(IVec3, IVec3)>,
+    /// Sounds the player's hands made this frame, for `sounds` to gather.
+    pub noises: Vec<(mc2_audio::Sound, glam::DVec3)>,
 }
 
 impl Default for Interaction {
@@ -161,6 +163,7 @@ impl Interaction {
             }
         }
         Self {
+            noises: Vec::new(),
             mode: Mode::Block,
             slot: 0,
             radius_voxels: 5.0,
@@ -499,6 +502,9 @@ pub fn interact(
                 layer.set(t.block, None);
                 state.edits += 1;
                 state.edited.push((o, o + 15));
+                let hard = crate::sounds::hardness_of(t.hit.material);
+                let at = o.as_dvec3() / 16.0 + 0.5;
+                state.noises.push((mc2_audio::Sound::Break { hard }, at));
             } else if input.button_pressed(Button::Secondary)
                 && let Some(station) = match kind {
                     Some(BlockKind::CraftingTable) => Some(Station::Table),
@@ -536,6 +542,9 @@ pub fn interact(
                     state.edits += 1;
                     state.edited.push((o, o + 15));
                     state.built.push((o, o + 15));
+                    state
+                        .noises
+                        .push((mc2_audio::Sound::Place, o.as_dvec3() / 16.0 + 0.5));
                 }
             }
         }

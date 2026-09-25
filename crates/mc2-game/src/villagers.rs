@@ -208,7 +208,12 @@ pub fn people_villages(
             let mut c = Character::new(Look::from_seed(seed));
             c.facing = (villager.roll() * std::f64::consts::TAU) as f32;
             let e = commands
-                .spawn((Body::at(DVec3::new(at.x, y, at.z)), c, villager))
+                .spawn((
+                    Body::at(DVec3::new(at.x, y, at.z)),
+                    c,
+                    villager,
+                    crate::sounds::Stride::default(),
+                ))
                 .id();
             people.push(e);
         }

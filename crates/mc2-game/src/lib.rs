@@ -14,6 +14,7 @@ pub mod nav;
 pub mod physics;
 pub mod physics_host;
 pub mod player;
+pub mod sounds;
 pub mod structure;
 pub mod vehicles;
 pub mod view;
@@ -69,6 +70,7 @@ impl Game {
         world.insert_resource(villagers::Trading::default());
         world.insert_resource(vehicles::Garage::default());
         world.insert_resource(vehicles::Drawn::default());
+        world.insert_resource(sounds::Sounds::default());
 
         let mut frame = Schedule::default();
         frame.add_systems((clock::advance_clock, player::look, player::toggles).chain());
@@ -78,6 +80,7 @@ impl Game {
                 player::movement,
                 vehicles::drive_cars,
                 villagers::walk_villagers,
+                sounds::footsteps,
                 physics::step_physics,
             )
                 .chain(),
@@ -95,6 +98,7 @@ impl Game {
                 structure::update_structure,
                 weather::update_weather,
                 character::blast_people,
+                sounds::listen,
                 fire::update_fire,
                 water::take_edits,
                 villagers::people_villages,
@@ -119,6 +123,7 @@ impl Game {
             },
             player::Body::at(feet),
             character::Character::new(character::Look::from_seed(7)),
+            sounds::Stride::default(),
         ));
     }
 

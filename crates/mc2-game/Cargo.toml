@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 mc2-anim.workspace = true
+mc2-audio.workspace = true
 mc2-core.workspace = true
 mc2-fluid.workspace = true
 mc2-physics.workspace = true

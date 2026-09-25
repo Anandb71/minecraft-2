@@ -251,6 +251,14 @@ impl Fire {
         self.burning.len()
     }
 
+    /// How many blocks are burning within `r` metres of `at`.
+    pub fn burning_near(&self, at: glam::DVec3, r: f64) -> usize {
+        self.burning
+            .keys()
+            .filter(|b| (b.0.as_dvec3() + 0.5).distance(at) <= r)
+            .count()
+    }
+
     pub fn is_burning(&self, b: BlockPos) -> bool {
         self.burning.contains_key(&b)
     }
