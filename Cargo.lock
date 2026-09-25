@@ -1260,6 +1260,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc2-audio"
+version = "0.1.0"
+dependencies = [
+ "glam 0.33.7",
+ "mc2-voxel",
+]
+
+[[package]]
 name = "mc2-core"
 version = "0.1.0"
 dependencies = [

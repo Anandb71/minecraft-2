@@ -35,6 +35,7 @@ mc2-physics = { path = "crates/mc2-physics" }
 mc2-fluid = { path = "crates/mc2-fluid" }
 mc2-render = { path = "crates/mc2-render" }
 mc2-anim = { path = "crates/mc2-anim" }
+mc2-audio = { path = "crates/mc2-audio" }
 mc2-structure = { path = "crates/mc2-structure" }
 mc2-voxel = { path = "crates/mc2-voxel" }
 mc2-worldgen = { path = "crates/mc2-worldgen" }

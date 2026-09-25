@@ -1,0 +1,9 @@
+[package]
+name = "mc2-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mc2-voxel.workspace = true
+glam.workspace = true
