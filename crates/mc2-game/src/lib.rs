@@ -16,6 +16,7 @@ pub mod physics_host;
 pub mod player;
 pub mod structure;
 pub mod view;
+pub mod villagers;
 pub mod water;
 pub mod weather;
 
@@ -63,11 +64,19 @@ impl Game {
         world.insert_resource(fire::Fire::default());
         world.insert_resource(weather::Weather::default());
         world.insert_resource(character::Drawn::default());
+        world.insert_resource(villagers::Population::default());
 
         let mut frame = Schedule::default();
         frame.add_systems((clock::advance_clock, player::look, player::toggles).chain());
         let mut fixed = Schedule::default();
-        fixed.add_systems((player::movement, physics::step_physics).chain());
+        fixed.add_systems(
+            (
+                player::movement,
+                villagers::walk_villagers,
+                physics::step_physics,
+            )
+                .chain(),
+        );
         let mut late = Schedule::default();
         late.add_systems(
             (
@@ -80,6 +89,7 @@ impl Game {
                 character::blast_people,
                 fire::update_fire,
                 water::take_edits,
+                villagers::people_villages,
             )
                 .chain(),
         );
