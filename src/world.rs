@@ -220,15 +220,31 @@ pub fn pose_bodies(game: &Game, renderer: &mut mc2_render::Renderer) {
     let alpha = game.world.resource::<mc2_game::input::Time>().alpha;
     let physics = game.world.resource::<mc2_game::physics::Physics>();
     renderer.bodies.clear();
-    renderer.bodies.extend(physics.host.bodies().map(|b| {
-        let (grid_origin, grid_rotation) = b.grid_pose_at(alpha);
-        mc2_render::bodies::BodyInstance {
-            key: b.id.0,
-            shape: b.shape.clone(),
-            grid_origin,
-            grid_rotation,
-        }
-    }));
+    // Cars are drawn from their parts, wheels apart from the body.
+    let cars = game.world.resource::<mc2_game::vehicles::Drawn>();
+    renderer.bodies.extend(
+        physics
+            .host
+            .bodies()
+            .filter(|b| !cars.bodies.contains(&b.id))
+            .map(|b| {
+                let (grid_origin, grid_rotation) = b.grid_pose_at(alpha);
+                mc2_render::bodies::BodyInstance {
+                    key: b.id.0,
+                    shape: b.shape.clone(),
+                    grid_origin,
+                    grid_rotation,
+                }
+            }),
+    );
+    renderer
+        .bodies
+        .extend(cars.parts.iter().map(|p| mc2_render::bodies::BodyInstance {
+            key: p.key,
+            shape: p.shape.clone(),
+            grid_origin: p.corner,
+            grid_rotation: p.rotation,
+        }));
     let people = game.world.resource::<mc2_game::character::Drawn>();
     renderer
         .bodies

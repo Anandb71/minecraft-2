@@ -2,7 +2,8 @@
 //!
 //! A car is one rigid body: a painted shell with glass above the waist,
 //! seats inside, chrome bumpers, lamps that light the road, and wheels in
-//! their arches. It rides on four raycast wheels (see `mc2_physics::
+//! their arches. It is drawn as its body without the wheels and the four
+//! wheels on their own, turning with the road and the steering. It rides on four raycast wheels (see `mc2_physics::
 //! vehicle`); the player gets in and out with E, drives with the movement
 //! keys and brakes with jump, watched from a camera behind.
 
@@ -33,9 +34,17 @@ pub const ENTER_M: f64 = 3.2;
 pub const CHASE_BACK: f64 = 7.5;
 pub const CHASE_UP: f64 = 2.6;
 
+/// Draw keys of car bodies and wheels start here, clear of physics
+/// bodies and characters.
+pub const KEY_BASE: u64 = 1 << 41;
+
 /// A car's shape and where things are on it (grid voxels).
 pub struct CarModel {
+    /// The whole car, wheels and all, for the physics.
     pub shape: Arc<BodyShape>,
+    /// The car without its wheels, and one wheel, for drawing.
+    pub chassis: Arc<BodyShape>,
+    pub wheel: Arc<BodyShape>,
     pub wheels: [WheelAt; 4],
     /// The driver's eyes.
     pub seat: Vec3,
@@ -45,18 +54,22 @@ pub struct CarModel {
 
 /// The material of voxel `v` of a car painted `paint` (air where there is
 /// none).
-fn car_voxel(paint: MaterialId, v: IVec3) -> MaterialId {
+fn car_voxel(paint: MaterialId, v: IVec3, wheels: bool) -> MaterialId {
     let (x, y, z) = (v.x, v.y, v.z);
     let c = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
-    // Wheels: a tyre round a chrome hub, in the outer four voxels each side.
+    // Wheels, in the outer four voxels each side.
     let side = !(4..SIZE.x - 4).contains(&x);
     for axle in AXLES {
         let r = ((c.y - WHEEL_R).powi(2) + (c.z - axle).powi(2)).sqrt();
         if side && r <= WHEEL_R {
-            return if r < 2.2 && (x == 0 || x == SIZE.x - 1) {
-                ids::CHROME
+            return if wheels {
+                wheel_voxel(
+                    y as f32 + 0.5 - WHEEL_R,
+                    z as f32 + 0.5 - axle,
+                    x == 0 || x == SIZE.x - 1,
+                )
             } else {
-                ids::RUBBER
+                MaterialId(0)
             };
         }
         // The arch round it is open.
@@ -105,6 +118,39 @@ fn car_voxel(paint: MaterialId, v: IVec3) -> MaterialId {
     MaterialId(0)
 }
 
+/// A wheel's voxel at (`dy`, `dz`) from its centre: a tyre round a hub,
+/// with four chrome spokes on its `outer` face to see it turn.
+fn wheel_voxel(dy: f32, dz: f32, outer: bool) -> MaterialId {
+    let r = (dy * dy + dz * dz).sqrt();
+    if r > WHEEL_R {
+        return MaterialId(0);
+    }
+    let spoke = r < WHEEL_R - 1.5 && (dy.abs() < 0.6 || dz.abs() < 0.6);
+    if outer && (r < 2.2 || spoke) {
+        ids::CHROME
+    } else {
+        ids::RUBBER
+    }
+}
+
+/// One wheel on its own: four voxels thick along x, its centre at the
+/// middle of the grid.
+fn wheel_shape() -> BodyShape {
+    let d = (WHEEL_R * 2.0).ceil() as i32 + 1;
+    let size = IVec3::new(4, d, d);
+    let mid = d as f32 * 0.5;
+    let mut voxels = Vec::with_capacity((size.x * size.y * size.z) as usize);
+    for z in 0..size.z {
+        for y in 0..size.y {
+            for x in 0..size.x {
+                let (dy, dz) = (y as f32 + 0.5 - mid, z as f32 + 0.5 - mid);
+                voxels.push(wheel_voxel(dy, dz, x == 0 || x == size.x - 1));
+            }
+        }
+    }
+    BodyShape::from_voxels(size, voxels).expect("a wheel has voxels")
+}
+
 /// Seats inside: two in front, a bench behind, each with its back at its
 /// rear edge.
 fn seat(x: i32, y: i32, z: i32) -> MaterialId {
@@ -123,16 +169,18 @@ fn seat(x: i32, y: i32, z: i32) -> MaterialId {
 
 /// A car painted `paint`.
 pub fn car(paint: MaterialId) -> CarModel {
-    let mut voxels = Vec::with_capacity((SIZE.x * SIZE.y * SIZE.z) as usize);
-    for z in 0..SIZE.z {
-        for y in 0..SIZE.y {
-            for x in 0..SIZE.x {
-                voxels.push(car_voxel(paint, IVec3::new(x, y, z)));
+    let build = |wheels: bool| {
+        let mut voxels = Vec::with_capacity((SIZE.x * SIZE.y * SIZE.z) as usize);
+        for z in 0..SIZE.z {
+            for y in 0..SIZE.y {
+                for x in 0..SIZE.x {
+                    voxels.push(car_voxel(paint, IVec3::new(x, y, z), wheels));
+                }
             }
         }
-    }
-    // `from_voxels` wants x fastest, then y, then z: as built.
-    let shape = BodyShape::from_voxels(SIZE, voxels).expect("a car has voxels");
+        // `from_voxels` wants x fastest, then y, then z: as built.
+        BodyShape::from_voxels(SIZE, voxels).expect("a car has voxels")
+    };
     let wheel = |x: f32, z: f32, front: bool| WheelAt {
         mount: Vec3::new(x, WHEEL_R, z),
         steered: front,
@@ -140,7 +188,9 @@ pub fn car(paint: MaterialId) -> CarModel {
     };
     let (l, r) = (2.0, SIZE.x as f32 - 2.0);
     CarModel {
-        shape: Arc::new(shape),
+        shape: Arc::new(build(true)),
+        chassis: Arc::new(build(false)),
+        wheel: Arc::new(wheel_shape()),
         wheels: [
             wheel(l, AXLES[0], true),
             wheel(r, AXLES[0], true),
@@ -168,12 +218,24 @@ pub struct Car {
     pub door: Vec3,
 }
 
-/// Every car, which one the player is driving, and the villages that
-/// have had theirs parked.
+/// How a car is drawn: its body without wheels, a wheel, where the
+/// wheels' centres are (grid voxels) and how far each has turned.
+pub struct CarLook {
+    pub chassis: Arc<BodyShape>,
+    pub wheel: Arc<BodyShape>,
+    pub hubs: [Vec3; 4],
+    pub steered: [bool; 4],
+    pub spin: [f32; 4],
+}
+
+/// Every car, which one the player is driving and how it is steering, and
+/// the villages that have had theirs parked.
 #[derive(Resource, Default)]
 pub struct Garage {
     pub cars: Vec<Car>,
+    pub looks: Vec<CarLook>,
     pub driving: Option<usize>,
+    pub steer: f32,
     pub parked: mc2_core::FxHashSet<(i32, i32)>,
 }
 
@@ -200,6 +262,13 @@ impl Garage {
             body,
             seat: model.seat,
             door: model.door,
+        });
+        self.looks.push(CarLook {
+            chassis: model.chassis.clone(),
+            wheel: model.wheel.clone(),
+            hubs: model.wheels.map(|w| w.mount),
+            steered: model.wheels.map(|w| w.steered),
+            spin: [0.0; 4],
         });
         body
     }
@@ -316,13 +385,14 @@ pub fn enter_cars(
 /// seat.
 pub fn drive_cars(
     input: Res<Input>,
-    garage: Res<Garage>,
+    garage: ResMut<Garage>,
     mut physics: ResMut<Physics>,
     mut players: Query<(&Player, &mut Body)>,
 ) {
     let Some(car) = garage.driven() else {
         return;
     };
+    let garage = garage.into_inner();
     let key = |k: Key| if input.held(k) { 1.0 } else { 0.0 };
     // Keys or the left stick (x right, y forward).
     let stick = input.move_axis;
@@ -336,6 +406,7 @@ pub fn drive_cars(
         (0.0, 0.0, 1.0)
     };
     physics.host.drive(car.body, throttle, steer, brake);
+    garage.steer = steer;
     let Some(seat) = physics.host.body(car.body).map(|b| grid_point(b, car.seat)) else {
         return;
     };
@@ -344,6 +415,74 @@ pub fn drive_cars(
             b.prev_feet = b.feet;
             b.feet = seat - DVec3::Y * EYE;
             b.velocity = DVec3::ZERO;
+        }
+    }
+}
+
+/// One part of a car to draw.
+#[derive(Clone)]
+pub struct DrawnPart {
+    pub key: u64,
+    pub shape: Arc<BodyShape>,
+    pub corner: DVec3,
+    pub rotation: Quat,
+}
+
+/// Cars' bodies and wheels to draw this frame, and the physics bodies they
+/// stand in for.
+#[derive(Resource, Default)]
+pub struct Drawn {
+    pub parts: Vec<DrawnPart>,
+    pub bodies: mc2_core::FxHashSet<BodyId>,
+}
+
+/// Every frame: each car's body without wheels where the physics has it,
+/// and its wheels turned by how far it has rolled and, at the front, by
+/// the steering.
+pub fn pose_cars(
+    time: Res<crate::input::Time>,
+    physics: Res<Physics>,
+    mut garage: ResMut<Garage>,
+    mut drawn: ResMut<Drawn>,
+) {
+    drawn.parts.clear();
+    drawn.bodies.clear();
+    let garage = &mut *garage;
+    let steer_angle = garage.steer * 0.55;
+    for (i, (car, look)) in garage.cars.iter().zip(garage.looks.iter_mut()).enumerate() {
+        let Some(body) = physics.host.body(car.body) else {
+            continue;
+        };
+        let (origin, rot) = body.grid_pose_at(time.alpha);
+        let key = KEY_BASE + i as u64 * 8;
+        drawn.bodies.insert(car.body);
+        drawn.parts.push(DrawnPart {
+            key,
+            shape: look.chassis.clone(),
+            corner: origin,
+            rotation: rot,
+        });
+        // Rolling: the wheels turn by the distance covered over their rim.
+        let rolling = f64::from(body.vel.dot(rot * Vec3::Z)) * f64::from(time.dt);
+        let turn = (rolling / f64::from(WHEEL_R * VOXEL_M)) as f32;
+        let steering = garage.driving == Some(i);
+        let wheel_mid = look.wheel.size.as_vec3() * 0.5;
+        for w in 0..4 {
+            look.spin[w] = (look.spin[w] + turn) % std::f32::consts::TAU;
+            let yaw = if look.steered[w] && steering {
+                steer_angle
+            } else {
+                0.0
+            };
+            let wrot = rot * Quat::from_rotation_y(yaw) * Quat::from_rotation_x(look.spin[w]);
+            // A wheel's mount is its centre.
+            let centre = origin + (rot * (look.hubs[w] * VOXEL_M)).as_dvec3();
+            drawn.parts.push(DrawnPart {
+                key: key + 1 + w as u64,
+                shape: look.wheel.clone(),
+                corner: centre - (wrot * (wheel_mid * VOXEL_M)).as_dvec3(),
+                rotation: wrot,
+            });
         }
     }
 }
@@ -428,6 +567,12 @@ mod tests {
             .unwrap()
             .pos;
         assert!(end.z - start.z > 3.0, "{start} -> {end}");
+        // It is drawn as its body and four wheels, which have turned.
+        let drawn = game.world.resource::<Drawn>();
+        assert_eq!(drawn.parts.len(), 5);
+        assert!(drawn.bodies.contains(&body));
+        let spin = game.world.resource::<Garage>().looks[0].spin;
+        assert!(spin.iter().all(|a| a.abs() > 0.1), "{spin:?}");
         // The driver went along, in the seat.
         let mut q = game.world.query::<(&Player, &Body)>();
         let (p, b) = q.iter(&game.world).next().unwrap();

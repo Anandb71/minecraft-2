@@ -68,6 +68,7 @@ impl Game {
         world.insert_resource(villagers::Population::default());
         world.insert_resource(villagers::Trading::default());
         world.insert_resource(vehicles::Garage::default());
+        world.insert_resource(vehicles::Drawn::default());
 
         let mut frame = Schedule::default();
         frame.add_systems((clock::advance_clock, player::look, player::toggles).chain());
@@ -86,6 +87,7 @@ impl Game {
             (
                 view::update_view,
                 character::pose_characters,
+                vehicles::pose_cars,
                 interact::interact,
                 villagers::aim_at_villagers,
                 vehicles::enter_cars,
