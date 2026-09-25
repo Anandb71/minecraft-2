@@ -48,29 +48,40 @@ pub enum Command {
         min: DVec3,
         max: DVec3,
     },
-    /// Joins two bodies at world point `at` as they lie then; `b`'s `axis`
-    /// may swing `swing` radians from `cone`. Both join `group`.
+    /// Joins two bodies as they lie then, the way `hang` says (its parent
+    /// index unused). Both join `group`.
     Joint {
         a: BodyId,
         b: BodyId,
-        at: DVec3,
-        cone: Vec3,
-        axis: Vec3,
-        swing: f32,
+        hang: Hang,
         group: u32,
     },
 }
 
 /// One part of a ragdoll: its shape and pose (centre of mass and principal
-/// frame), and the joint that hangs it from an earlier part.
+/// frame), and how it hangs from an earlier part.
 #[derive(Clone)]
 pub struct RagdollPart {
     pub shape: Arc<BodyShape>,
     pub pos: DVec3,
     pub rot: Quat,
-    /// The earlier part it hangs from, the joint's world point, the cone's
-    /// axis and this part's axis (world), and how far it may swing.
-    pub parent: Option<(usize, DVec3, Vec3, Vec3, f32)>,
+    /// Metres a second.
+    pub vel: Vec3,
+    pub hang: Option<Hang>,
+}
+
+/// How a part hangs from an earlier one: the joint's world point, the
+/// parent's axis and this part's (world), and either how far this part's
+/// may swing from the parent's, or a hinge (its world axis and the bend
+/// allowed about it, radians).
+#[derive(Clone, Copy, Debug)]
+pub struct Hang {
+    pub parent: usize,
+    pub at: DVec3,
+    pub cone: Vec3,
+    pub axis: Vec3,
+    pub swing: f32,
+    pub hinge: Option<(Vec3, f32, f32)>,
 }
 
 pub struct Job {
@@ -135,17 +146,15 @@ impl Sim {
                     self.world.blast_impulse(centre, radius);
                 }
                 Command::Wake { min, max } => self.world.wake_region(min, max),
-                Command::Joint {
-                    a,
-                    b,
-                    at,
-                    cone,
-                    axis,
-                    swing,
-                    group,
-                } => {
+                Command::Joint { a, b, hang, group } => {
                     if let (Some(ba), Some(bb)) = (self.world.body(a), self.world.body(b)) {
-                        let j = mc2_physics::Joint::new(ba, bb, at, cone, axis, swing);
+                        let h = hang;
+                        let j = match h.hinge {
+                            Some((axis, min, max)) => mc2_physics::Joint::hinged(
+                                ba, bb, h.at, h.cone, h.axis, axis, min, max,
+                            ),
+                            None => mc2_physics::Joint::new(ba, bb, h.at, h.cone, h.axis, h.swing),
+                        };
                         self.world.add_joint(j, group);
                     }
                 }
@@ -321,9 +330,9 @@ impl PhysicsHost {
         id
     }
 
-    /// Spawns jointed parts moving at `vel`, none colliding with another;
-    /// returns their ids in order.
-    pub fn spawn_ragdoll(&mut self, parts: &[RagdollPart], vel: Vec3) -> Vec<BodyId> {
+    /// Spawns jointed parts, none colliding with another; returns their
+    /// ids in order.
+    pub fn spawn_ragdoll(&mut self, parts: &[RagdollPart]) -> Vec<BodyId> {
         let group = self.next_group;
         self.next_group += 1;
         let ids: Vec<BodyId> = parts
@@ -333,20 +342,17 @@ impl PhysicsHost {
                     shape: p.shape.clone(),
                     pos: p.pos,
                     rot: p.rot,
-                    vel,
+                    vel: p.vel,
                     ang_vel: Vec3::ZERO,
                 })
             })
             .collect();
         for (i, p) in parts.iter().enumerate() {
-            if let Some((parent, at, cone, axis, swing)) = p.parent {
+            if let Some(hang) = p.hang {
                 self.commands.push(Command::Joint {
-                    a: ids[parent],
+                    a: ids[hang.parent],
                     b: ids[i],
-                    at,
-                    cone,
-                    axis,
-                    swing,
+                    hang,
                     group,
                 });
             }
