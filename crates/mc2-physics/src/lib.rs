@@ -16,6 +16,6 @@ pub mod world;
 mod world_contact;
 
 pub use body::{Body, BodyId};
-pub use joint::Joint;
+pub use joint::{Hinge, Joint};
 pub use shape::BodyShape;
 pub use world::{Obstacle, PhysicsStats, PhysicsWorld};

@@ -3,9 +3,10 @@
 //!
 //! A joint pins a point of one body to a point of another, and keeps an
 //! axis fixed in the second within a cone around an axis fixed in the
-//! first. Both are hard position constraints solved every substep; the
-//! bodies' relative spin is damped at the velocity stage so limbs settle
-//! instead of ringing.
+//! first, or, for a hinge, holds the two bodies' hinge axes together and
+//! lets the second turn about them only between two angles. All are hard
+//! position constraints solved every substep; the bodies' relative spin
+//! is damped at the velocity stage so limbs settle instead of ringing.
 
 use crate::body::{Body, BodyId};
 use glam::{DVec3, Vec3};
@@ -25,6 +26,18 @@ pub struct Joint {
     pub axis_a: Vec3,
     pub axis_b: Vec3,
     pub swing: f32,
+    /// A knee or an elbow: turning only about one axis, within limits.
+    pub hinge: Option<Hinge>,
+}
+
+/// A hinge's axis in each body's frame, and how far `b`'s axis may turn
+/// about it from `a`'s, radians (signed, right-handed about the axis).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hinge {
+    pub axis_a: Vec3,
+    pub axis_b: Vec3,
+    pub min: f32,
+    pub max: f32,
 }
 
 impl Joint {
@@ -40,7 +53,40 @@ impl Joint {
             axis_a: (a.rot.inverse() * cone).normalize(),
             axis_b: (b.rot.inverse() * axis).normalize(),
             swing,
+            hinge: None,
         }
+    }
+
+    /// A hinge at `at` turning about `hinge` (world, now), letting `b`'s
+    /// `axis` turn from `min` to `max` radians about it away from `cone`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn hinged(
+        a: &Body,
+        b: &Body,
+        at: DVec3,
+        cone: Vec3,
+        axis: Vec3,
+        hinge: Vec3,
+        min: f32,
+        max: f32,
+    ) -> Self {
+        let mut j = Self::new(a, b, at, cone, axis, std::f32::consts::PI);
+        j.hinge = Some(Hinge {
+            axis_a: (a.rot.inverse() * hinge).normalize(),
+            axis_b: (b.rot.inverse() * hinge).normalize(),
+            min,
+            max,
+        });
+        j
+    }
+
+    /// How far `b`'s axis has turned about the hinge from `a`'s, radians.
+    pub fn bend(&self, a: &Body, b: &Body) -> Option<f32> {
+        let h = self.hinge?;
+        let axis = a.rot * h.axis_a;
+        let ca = a.rot * self.axis_a;
+        let cb = b.rot * self.axis_b;
+        Some(ca.cross(cb).dot(axis).atan2(ca.dot(cb)))
     }
 
     /// How far apart the two pinned points are, metres.
@@ -88,19 +134,39 @@ pub(crate) fn solve_joint_positions(bodies: &mut [Body], joints: &[(Joint, usize
             a.apply_position_correction(ra, p, 1.0);
             b.apply_position_correction(rb, p, -1.0);
         }
-        // The cone: turn the two axes toward each other by what exceeds it.
-        let ca = a.rot * j.axis_a;
-        let cb = b.rot * j.axis_b;
-        let cross = ca.cross(cb);
-        let s = cross.length();
-        let angle = s.atan2(ca.dot(cb));
-        if angle > j.swing && s > 1e-6 {
-            let n = cross / s;
-            let w = a.angular_inverse_mass(n) + b.angular_inverse_mass(n);
-            let p = n * ((angle - j.swing) / w);
-            a.apply_rotation_correction(p, 1.0);
-            b.apply_rotation_correction(p, -1.0);
+        if let Some(h) = j.hinge {
+            // Hold the hinge axes together, then keep the bend in range.
+            turn_together(a, b, a.rot * h.axis_a, b.rot * h.axis_b, 0.0);
+            let axis = a.rot * h.axis_a;
+            let ca = a.rot * j.axis_a;
+            let cb = b.rot * j.axis_b;
+            let bend = ca.cross(cb).dot(axis).atan2(ca.dot(cb));
+            let over = bend - bend.clamp(h.min, h.max);
+            if over != 0.0 {
+                let w = a.angular_inverse_mass(axis) + b.angular_inverse_mass(axis);
+                let p = axis * (over / w);
+                a.apply_rotation_correction(p, 1.0);
+                b.apply_rotation_correction(p, -1.0);
+            }
+            continue;
         }
+        // The cone: turn the two axes toward each other by what exceeds it.
+        turn_together(a, b, a.rot * j.axis_a, b.rot * j.axis_b, j.swing);
+    }
+}
+
+/// Turns `a` and `b` so the angle between their axes `ca` and `cb` (world)
+/// comes down to `limit`, each by its share.
+fn turn_together(a: &mut Body, b: &mut Body, ca: Vec3, cb: Vec3, limit: f32) {
+    let cross = ca.cross(cb);
+    let s = cross.length();
+    let angle = s.atan2(ca.dot(cb));
+    if angle > limit && s > 1e-6 {
+        let n = cross / s;
+        let w = a.angular_inverse_mass(n) + b.angular_inverse_mass(n);
+        let p = n * ((angle - limit) / w);
+        a.apply_rotation_correction(p, 1.0);
+        b.apply_rotation_correction(p, -1.0);
     }
 }
 
@@ -199,6 +265,41 @@ mod tests {
             let j = p.joints[0];
             let (a, b) = (p.body(lower).unwrap(), p.body(upper).unwrap());
             assert!(j.angle(a, b) < 0.3, "{}", j.angle(a, b));
+        }
+    }
+
+    #[test]
+    fn a_hinge_bends_one_way_only() {
+        let w = ground();
+        let mut p = PhysicsWorld::new();
+        let base = DVec3::new(8.0, 5.0, 8.0);
+        let upper = p.spawn(rod(8), base + DVec3::Y * 0.75, Quat::IDENTITY);
+        let lower = p.spawn(rod(8), base + DVec3::Y * 0.25, Quat::IDENTITY);
+        let (a, b) = (p.body(upper).unwrap(), p.body(lower).unwrap());
+        // A knee: the lower rod hangs down and may fold back about +x only.
+        let j = Joint::hinged(
+            a,
+            b,
+            base + DVec3::Y * 0.5,
+            -Vec3::Y,
+            -Vec3::Y,
+            Vec3::X,
+            0.0,
+            2.0,
+        );
+        p.add_joint(j, 1);
+        // Kick the lower rod forward and sideways: it must not bend
+        // forward past straight, nor twist off the hinge.
+        p.body_mut(lower).unwrap().ang_vel = Vec3::new(-15.0, 6.0, 8.0);
+        for _ in 0..240 {
+            p.step(1.0 / 120.0, &w);
+            let j = p.joints[0];
+            let (a, b) = (p.body(upper).unwrap(), p.body(lower).unwrap());
+            let bend = j.bend(a, b).unwrap();
+            assert!(bend > -0.08 && bend < 2.08, "bend {bend}");
+            let h = j.hinge.unwrap();
+            let off = (a.rot * h.axis_a).angle_between(b.rot * h.axis_b);
+            assert!(off < 0.08, "twisted {off}");
         }
     }
 
