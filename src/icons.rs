@@ -91,6 +91,8 @@ pub fn holdable(m: MaterialId) -> bool {
             m,
             ids::LEAVES | ids::PINE_NEEDLES | ids::BIRCH_LEAVES | ids::MOSS
         ),
+        // People are made of these; nobody builds with them.
+        _ if is_body(m) => false,
         _ => {
             mat.hardness.is_finite()
                 && !matches!(
@@ -99,6 +101,22 @@ pub fn holdable(m: MaterialId) -> bool {
                 )
         }
     }
+}
+
+/// Skin, hair and eyes.
+fn is_body(m: MaterialId) -> bool {
+    matches!(
+        m,
+        ids::SKIN_PALE
+            | ids::SKIN_TAN
+            | ids::SKIN_BROWN
+            | ids::SKIN_DARK
+            | ids::HAIR_BLACK
+            | ids::HAIR_BROWN
+            | ids::HAIR_BLOND
+            | ids::HAIR_RED
+            | ids::EYE
+    )
 }
 
 /// Slab materials (as the recipes make them).
@@ -1122,6 +1140,7 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         assert!(items.iter().all(|i| seen.insert(*i)));
         assert!(items.len() as u32 <= (ATLAS / CELL).pow(2));
+        assert!(!holdable(ids::SKIN_TAN) && !holdable(ids::EYE) && holdable(ids::DENIM));
         // Everything a recipe makes has an icon.
         for r in mc2_game::crafting::recipes() {
             assert!(seen.contains(&r.output), "{}", r.output.name());
