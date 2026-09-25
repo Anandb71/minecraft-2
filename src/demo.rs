@@ -58,6 +58,9 @@ pub enum Demo {
     /// Walk up to the nearest villager with gold in hand and deal: stop
     /// with the pack open at its trades.
     Trade,
+    /// A red car parked ahead: get in and drive off, bearing left, and stop
+    /// three seconds on, seen from behind.
+    Drive,
 }
 
 impl Demo {
@@ -79,6 +82,7 @@ impl Demo {
             "ragdoll" => Some(Self::Ragdoll),
             "village" => Some(Self::Village),
             "trade" => Some(Self::Trade),
+            "drive" => Some(Self::Drive),
             _ => None,
         }
     }
@@ -199,6 +203,47 @@ fn trade(game: &mut Game) {
     game.world.resource_mut::<Trading>().with = Some((e, trade));
     eprintln!("trade demo: dealing with a {}", trade.name());
     tick(game, 45);
+}
+
+/// Parks a red car a few metres ahead, gets in, and drives off bearing
+/// left for three seconds.
+fn drive(game: &mut Game) {
+    use glam::DVec3;
+    use mc2_game::player::{Body, Player};
+    use mc2_game::vehicles::{Garage, car};
+    let Some((feet, yaw)) = ({
+        let mut q = game.world.query::<(&Body, &Player)>();
+        q.iter(&game.world).next().map(|(b, p)| (b.feet, p.yaw))
+    }) else {
+        return;
+    };
+    let ahead = DVec3::new(f64::from(yaw.sin()), 0.0, f64::from(yaw.cos()));
+    let side = DVec3::new(ahead.z, 0.0, -ahead.x);
+    // Its left side toward the player, a stride away, pointing the way the
+    // player faces.
+    let corner = feet + ahead * 2.0 - side * 3.4 + DVec3::Y * 0.1;
+    let body = {
+        let mut garage = game.world.remove_resource::<Garage>().expect("garage");
+        let mut physics = game.world.resource_mut::<mc2_game::physics::Physics>();
+        let id = garage.park(
+            &mut physics,
+            &car(mc2_voxel::material::ids::PAINT_RED),
+            corner,
+            yaw,
+        );
+        game.world.insert_resource(garage);
+        id
+    };
+    tick(game, 60);
+    game.input().key_down(Key::Interact);
+    tick(game, 1);
+    game.input().key_up(Key::Interact);
+    let driving = game.world.resource::<Garage>().driving.is_some();
+    eprintln!("drive demo: car {body:?}, in it: {driving}");
+    game.input().key_down(Key::Forward);
+    tick(game, 100);
+    game.input().key_down(Key::Left);
+    tick(game, 80);
 }
 
 /// Makes `output` from what is carried, if it can, and says so.
@@ -786,6 +831,7 @@ pub fn run(game: &mut Game, demo: Demo) {
         }
         Demo::Village => tick(game, 1200),
         Demo::Trade => trade(game),
+        Demo::Drive => drive(game),
         Demo::Ragdoll => {
             if let Some((feet, ahead)) = villagers(game) {
                 let mut physics = game.world.resource_mut::<mc2_game::physics::Physics>();
