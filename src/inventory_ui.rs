@@ -121,6 +121,11 @@ fn near(game: &Game) -> Near {
             _ => {}
         }
     }
+    n.trader = game
+        .world
+        .resource::<mc2_game::villagers::Trading>()
+        .with
+        .map(|(_, p)| p);
     n
 }
 
@@ -135,6 +140,9 @@ impl Screen {
     /// Closes; whatever the cursor carries goes back into the pack.
     pub fn close(&mut self, game: &mut Game) {
         self.open = false;
+        game.world
+            .resource_mut::<mc2_game::villagers::Trading>()
+            .with = None;
         if let Some(s) = self.carried.take() {
             let mut state = game.world.resource_mut::<Interaction>();
             if !state.inventory.creative {

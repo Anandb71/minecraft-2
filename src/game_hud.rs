@@ -81,7 +81,19 @@ pub fn draw(
             )
         })
         .unwrap_or_default();
-    if let Some(t) = target {
+    let aimed = game.world.resource::<mc2_game::villagers::Trading>().aimed;
+    if let Some((_, trade, d)) = aimed {
+        let key = if gamepad { "X" } else { "E" };
+        let line = format!("a {}  {d:.1} m  ({key}: trade)", trade.name());
+        let tw = HudCanvas::text_width(&line, 2.0);
+        hud.text(
+            (w - tw) * 0.5,
+            y0 - 30.0,
+            2.0,
+            rgba(255, 222, 140, 255),
+            &line,
+        );
+    } else if let Some(t) = target {
         let voxels = &game.world.resource::<Voxels>().0;
         let block = game
             .world
