@@ -9,3 +9,7 @@
 
 pub mod acoustics;
 pub mod dsp;
+pub mod synth;
+
+pub use acoustics::{Acoustics, Occlusion, audible, measure, occlusion};
+pub use synth::{Beds, Ground, Sound};
