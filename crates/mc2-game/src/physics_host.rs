@@ -48,6 +48,29 @@ pub enum Command {
         min: DVec3,
         max: DVec3,
     },
+    /// Joins two bodies at world point `at` as they lie then; `b`'s `axis`
+    /// may swing `swing` radians from `cone`. Both join `group`.
+    Joint {
+        a: BodyId,
+        b: BodyId,
+        at: DVec3,
+        cone: Vec3,
+        axis: Vec3,
+        swing: f32,
+        group: u32,
+    },
+}
+
+/// One part of a ragdoll: its shape and pose (centre of mass and principal
+/// frame), and the joint that hangs it from an earlier part.
+#[derive(Clone)]
+pub struct RagdollPart {
+    pub shape: Arc<BodyShape>,
+    pub pos: DVec3,
+    pub rot: Quat,
+    /// The earlier part it hangs from, the joint's world point, the cone's
+    /// axis and this part's axis (world), and how far it may swing.
+    pub parent: Option<(usize, DVec3, Vec3, Vec3, f32)>,
 }
 
 pub struct Job {
@@ -112,6 +135,20 @@ impl Sim {
                     self.world.blast_impulse(centre, radius);
                 }
                 Command::Wake { min, max } => self.world.wake_region(min, max),
+                Command::Joint {
+                    a,
+                    b,
+                    at,
+                    cone,
+                    axis,
+                    swing,
+                    group,
+                } => {
+                    if let (Some(ba), Some(bb)) = (self.world.body(a), self.world.body(b)) {
+                        let j = mc2_physics::Joint::new(ba, bb, at, cone, axis, swing);
+                        self.world.add_joint(j, group);
+                    }
+                }
             }
         }
         for (cell, occ) in job.cells {
@@ -175,6 +212,7 @@ enum Mode {
 pub struct PhysicsHost {
     mode: Mode,
     next_id: u64,
+    next_group: u32,
     commands: Vec<Command>,
     pending_steps: u32,
     obstacles: Vec<Obstacle>,
@@ -202,6 +240,7 @@ impl PhysicsHost {
         Self {
             mode,
             next_id: 1,
+            next_group: 1,
             commands: Vec::new(),
             pending_steps: 0,
             obstacles: Vec::new(),
@@ -280,6 +319,39 @@ impl PhysicsHost {
             ang_vel: d.ang_vel,
         });
         id
+    }
+
+    /// Spawns jointed parts moving at `vel`, none colliding with another;
+    /// returns their ids in order.
+    pub fn spawn_ragdoll(&mut self, parts: &[RagdollPart], vel: Vec3) -> Vec<BodyId> {
+        let group = self.next_group;
+        self.next_group += 1;
+        let ids: Vec<BodyId> = parts
+            .iter()
+            .map(|p| {
+                self.spawn_debris(&Debris {
+                    shape: p.shape.clone(),
+                    pos: p.pos,
+                    rot: p.rot,
+                    vel,
+                    ang_vel: Vec3::ZERO,
+                })
+            })
+            .collect();
+        for (i, p) in parts.iter().enumerate() {
+            if let Some((parent, at, cone, axis, swing)) = p.parent {
+                self.commands.push(Command::Joint {
+                    a: ids[parent],
+                    b: ids[i],
+                    at,
+                    cone,
+                    axis,
+                    swing,
+                    group,
+                });
+            }
+        }
+        ids
     }
 
     /// Removes a body; returns its last known state.
