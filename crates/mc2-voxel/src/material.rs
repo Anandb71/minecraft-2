@@ -158,6 +158,17 @@ materials! {
     DENIM = 80 => Material { name: "denim", albedo: [0.09, 0.13, 0.24], roughness: 0.85, density: 380.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, flammability: 0.4, ignition_c: 260.0, ..BASE },
     LEATHER = 81 => Material { name: "leather", albedo: [0.22, 0.12, 0.06], roughness: 0.6, density: 450.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, flammability: 0.3, ignition_c: 280.0, ..BASE },
     EYE = 82 => Material { name: "eye", albedo: [0.02, 0.02, 0.03], roughness: 0.1, density: 400.0, compressive: 1.0, tensile: 2.0, hardness: 0.3, conductivity: 0.2, specific_heat: 3000.0, ..BASE },
+    // Vehicles: glossy paint over thin panels (a voxel weighs a panel's
+    // share of the space, not solid steel), tyres, trim and lamps.
+    PAINT_RED = 83 => Material { name: "red paint", albedo: [0.50, 0.04, 0.03], roughness: 0.12, density: 300.0, compressive: 250.0, tensile: 300.0, hardness: 5.0, conductivity: 40.0, specific_heat: 490.0, melt_c: 1450.0, ..BASE },
+    PAINT_BLUE = 84 => Material { name: "blue paint", albedo: [0.04, 0.12, 0.40], roughness: 0.12, density: 300.0, compressive: 250.0, tensile: 300.0, hardness: 5.0, conductivity: 40.0, specific_heat: 490.0, melt_c: 1450.0, ..BASE },
+    PAINT_CREAM = 85 => Material { name: "cream paint", albedo: [0.78, 0.72, 0.58], roughness: 0.12, density: 300.0, compressive: 250.0, tensile: 300.0, hardness: 5.0, conductivity: 40.0, specific_heat: 490.0, melt_c: 1450.0, ..BASE },
+    PAINT_GREEN = 86 => Material { name: "green paint", albedo: [0.06, 0.24, 0.12], roughness: 0.12, density: 300.0, compressive: 250.0, tensile: 300.0, hardness: 5.0, conductivity: 40.0, specific_heat: 490.0, melt_c: 1450.0, ..BASE },
+    PAINT_BLACK = 87 => Material { name: "black paint", albedo: [0.02, 0.02, 0.02], roughness: 0.12, density: 300.0, compressive: 250.0, tensile: 300.0, hardness: 5.0, conductivity: 40.0, specific_heat: 490.0, melt_c: 1450.0, ..BASE },
+    RUBBER = 88 => Material { name: "rubber", albedo: [0.03, 0.03, 0.03], roughness: 0.9, density: 600.0, compressive: 10.0, tensile: 15.0, hardness: 0.8, conductivity: 0.2, specific_heat: 2000.0, flammability: 0.5, ignition_c: 350.0, ..BASE },
+    CHROME = 89 => Material { name: "chrome", albedo: [0.80, 0.80, 0.82], roughness: 0.08, metallic: 1.0, density: 300.0, compressive: 250.0, tensile: 300.0, hardness: 5.0, conductivity: 40.0, specific_heat: 490.0, melt_c: 1450.0, ..BASE },
+    HEADLIGHT = 90 => Material { name: "headlight", albedo: [1.0, 0.97, 0.9], roughness: 0.05, emission: [1800.0, 1700.0, 1400.0], density: 2500.0, compressive: 20.0, tensile: 1.0, hardness: 1.0, ..BASE },
+    TAILLIGHT = 91 => Material { name: "tail light", albedo: [0.8, 0.1, 0.08], roughness: 0.1, emission: [300.0, 20.0, 12.0], density: 2500.0, compressive: 20.0, tensile: 1.0, hardness: 1.0, ..BASE },
 }
 
 impl MaterialId {
@@ -191,7 +202,7 @@ mod tests {
         assert_eq!(ids::AIR.get().name, "air");
         assert_eq!(ids::GRANITE.get().name, "granite");
         assert_eq!(ids::GLOWING_ROCK.get().name, "cooling rock");
-        assert_eq!(count(), ids::EYE.0 as usize + 1);
+        assert_eq!(count(), ids::TAILLIGHT.0 as usize + 1);
         assert!(ids::LAVA.is_emissive());
         assert!(!ids::AIR.is_solid());
     }

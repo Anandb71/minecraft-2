@@ -91,8 +91,8 @@ pub fn holdable(m: MaterialId) -> bool {
             m,
             ids::LEAVES | ids::PINE_NEEDLES | ids::BIRCH_LEAVES | ids::MOSS
         ),
-        // People are made of these; nobody builds with them.
-        _ if is_body(m) => false,
+        // People and cars are made of these; nobody builds with them.
+        _ if is_body(m) || is_vehicle(m) => false,
         _ => {
             mat.hardness.is_finite()
                 && !matches!(
@@ -117,6 +117,11 @@ fn is_body(m: MaterialId) -> bool {
             | ids::HAIR_RED
             | ids::EYE
     )
+}
+
+/// Paint, tyres, trim and lamps.
+fn is_vehicle(m: MaterialId) -> bool {
+    (ids::PAINT_RED.0..=ids::TAILLIGHT.0).contains(&m.0)
 }
 
 /// Slab materials (as the recipes make them).
@@ -1141,6 +1146,7 @@ mod tests {
         assert!(items.iter().all(|i| seen.insert(*i)));
         assert!(items.len() as u32 <= (ATLAS / CELL).pow(2));
         assert!(!holdable(ids::SKIN_TAN) && !holdable(ids::EYE) && holdable(ids::DENIM));
+        assert!(!holdable(ids::HEADLIGHT) && !holdable(ids::PAINT_RED));
         // Everything a recipe makes has an icon.
         for r in mc2_game::crafting::recipes() {
             assert!(seen.contains(&r.output), "{}", r.output.name());
