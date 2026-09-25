@@ -413,7 +413,6 @@ a {
 
 .title-line {
   display: block;
-  clip-path: inset(0 0 -0.1em 0);
   animation: title-in 1.4s var(--ease-out) 1.2s both;
 }
 
@@ -437,13 +436,15 @@ a {
   animation: block-in 0.9s var(--ease-out) 1.9s both;
 }
 
+/* Rises out of a mask that ends wider than the words, so it never clips
+   their shadow into a box. */
 @keyframes title-in {
   from {
-    clip-path: inset(0 0 100% 0);
+    clip-path: inset(0 -0.5em 100% -0.5em);
     transform: translateY(0.3em);
   }
   to {
-    clip-path: inset(0 0 -0.1em 0);
+    clip-path: inset(-0.5em -0.5em -0.5em -0.5em);
     transform: none;
   }
 }
