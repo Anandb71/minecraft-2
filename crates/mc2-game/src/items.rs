@@ -79,6 +79,9 @@ pub enum Item {
     /// Strikes sparks: sets what it is used on alight.
     FlintAndSteel,
     Tool(ToolKind, Tier),
+    /// Food: from oak leaves, and from the baker.
+    Apple,
+    Bread,
 }
 
 impl Item {
@@ -104,6 +107,8 @@ impl Item {
             Item::Bucket => "bucket".into(),
             Item::WaterBucket => "water bucket".into(),
             Item::FlintAndSteel => "flint and steel".into(),
+            Item::Apple => "apple".into(),
+            Item::Bread => "bread".into(),
             Item::Tool(kind, tier) => format!(
                 "{} {}",
                 tier.name(),
@@ -130,6 +135,15 @@ impl Item {
         match *self {
             Item::Tool(_, tier) => Some(tier.durability()),
             Item::FlintAndSteel => Some(64),
+            _ => None,
+        }
+    }
+
+    /// How much hunger eating one satisfies, if it is food.
+    pub fn food(&self) -> Option<f32> {
+        match self {
+            Item::Apple => Some(4.0),
+            Item::Bread => Some(6.0),
             _ => None,
         }
     }

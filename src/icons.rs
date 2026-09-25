@@ -169,6 +169,8 @@ pub fn all_items() -> Vec<Item> {
         Item::Bucket,
         Item::WaterBucket,
         Item::FlintAndSteel,
+        Item::Apple,
+        Item::Bread,
     ]);
     for tier in Tier::ALL {
         for kind in [ToolKind::Pickaxe, ToolKind::Axe, ToolKind::Shovel] {
@@ -679,6 +681,48 @@ fn ingot_model(metal: Vec3) -> Model {
     })
 }
 
+/// A red apple with a stalk and a leaf.
+fn apple_model() -> Model {
+    Model::new(32, View::Iso, false, |v| {
+        let p = v.as_vec3() + 0.5;
+        let d = (p - Vec3::new(16.0, 12.0, 16.0)) * Vec3::new(1.0, 1.15, 1.0);
+        // A dimple at the top where the stalk goes in.
+        let dimple = (1.0 - Vec2::new(d.x, d.z).length() / 4.0).max(0.0) * 2.0;
+        if d.length() < 9.0 - dimple.min(if d.y > 0.0 { 2.0 } else { 0.0 }) {
+            let blush = 0.8 + 0.3 * hash(v / 2, 40) + 0.15 * (d.x / 9.0);
+            let c = Vec3::new(0.55, 0.05, 0.03) * blush;
+            return Some(Cell::Tint(c, Look::Matte));
+        }
+        let stalk = Vec2::new(p.x - 16.0, p.z - 16.0).length() < 1.0 && (19.0..24.0).contains(&p.y);
+        if stalk {
+            return Some(Cell::Tint(Vec3::new(0.12, 0.07, 0.03), Look::Matte));
+        }
+        let leaf = (p - Vec3::new(19.0, 23.0, 16.0)) * Vec3::new(0.5, 1.6, 1.4);
+        (leaf.length() < 1.6).then_some(Cell::Tint(Vec3::new(0.06, 0.25, 0.04), Look::Matte))
+    })
+}
+
+/// A loaf: a long rounded crust, golden on top, scored across.
+fn bread_model() -> Model {
+    Model::new(32, View::Iso, false, |v| {
+        let p = v.as_vec3() + 0.5;
+        let d = (p - Vec3::new(16.0, 9.0, 16.0)) / Vec3::new(12.0, 7.0, 7.0);
+        if d.length() >= 1.0 || p.y < 6.0 {
+            return None;
+        }
+        let top = d.y > 0.35;
+        let score = top && ((p.x - 8.0).rem_euclid(5.5) < 1.0);
+        let c = if score {
+            Vec3::new(0.62, 0.45, 0.22)
+        } else if top {
+            Vec3::new(0.42, 0.2, 0.06)
+        } else {
+            Vec3::new(0.52, 0.3, 0.1)
+        };
+        Some(Cell::Tint(c * (0.92 + 0.12 * hash(v, 41)), Look::Matte))
+    })
+}
+
 fn powder_model() -> Model {
     Model::new(32, View::Iso, false, |v| {
         let r = Vec2::new(v.x as f32 + 0.5 - 16.0, v.z as f32 + 0.5 - 16.0).length();
@@ -857,6 +901,8 @@ fn item_model(item: Item) -> Model {
         Item::WaterBucket => bucket_model(true),
         Item::FlintAndSteel => flint_and_steel_model(),
         Item::Gunpowder => powder_model(),
+        Item::Apple => apple_model(),
+        Item::Bread => bread_model(),
     }
 }
 

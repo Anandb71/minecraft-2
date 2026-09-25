@@ -39,14 +39,16 @@ pub enum Profession {
     Mason,
     Smith,
     Miner,
+    Baker,
 }
 
 impl Profession {
-    pub const ALL: [Profession; 4] = [
+    pub const ALL: [Profession; 5] = [
         Profession::Woodcutter,
         Profession::Mason,
         Profession::Smith,
         Profession::Miner,
+        Profession::Baker,
     ];
 
     pub fn name(self) -> &'static str {
@@ -55,6 +57,7 @@ impl Profession {
             Profession::Mason => "mason",
             Profession::Smith => "smith",
             Profession::Miner => "miner",
+            Profession::Baker => "baker",
         }
     }
 }
@@ -339,7 +342,7 @@ fn build() -> Vec<Recipe> {
 
 /// What villagers sell and buy, for gold ingots: a woodcutter's timber and
 /// axes, a mason's cut stone and glass, a smith's metal and picks, a
-/// miner's coal and charges.
+/// miner's coal and charges, a baker's bread and apples.
 fn trades() -> Vec<Recipe> {
     use Ingredient::{AnyLog, AnyStone};
     use Profession::*;
@@ -370,6 +373,9 @@ fn trades() -> Vec<Recipe> {
         recipe(Item::Coal, 10, at(Miner), &[gold(1)]),
         recipe(Item::solid(ids::TNT), 2, at(Miner), &[gold(3)]),
         recipe(Item::GoldIngot, 1, at(Miner), &[(it(Item::RawCopper), 8)]),
+        recipe(Item::Bread, 6, at(Baker), &[gold(1)]),
+        recipe(Item::Apple, 8, at(Baker), &[gold(1)]),
+        recipe(Item::GoldIngot, 1, at(Baker), &[(it(Item::Apple), 16)]),
     ]
 }
 
@@ -556,5 +562,28 @@ mod tests {
         {
             assert!(r.output == Item::GoldIngot || r.inputs.iter().any(|(i, _)| *i == gold));
         }
+    }
+
+    #[test]
+    fn the_baker_sells_bread_and_buys_apples() {
+        let near = Near {
+            trader: Some(Profession::Baker),
+            ..Near::default()
+        };
+        let mut inv = Inventory::default();
+        inv.add(Item::Apple, 16);
+        let sell = recipes()
+            .iter()
+            .find(|r| r.station == Station::Trade(Profession::Baker) && r.output == Item::GoldIngot)
+            .unwrap();
+        craft(&mut inv, sell, near).unwrap();
+        let buy = recipes()
+            .iter()
+            .find(|r| r.station == Station::Trade(Profession::Baker) && r.output == Item::Bread)
+            .unwrap();
+        craft(&mut inv, buy, near).unwrap();
+        assert_eq!(inv.count(|i| i == Item::Bread), 6);
+        assert_eq!(inv.count(|i| i == Item::Apple), 0);
+        assert_eq!(Item::Bread.food(), Some(6.0));
     }
 }

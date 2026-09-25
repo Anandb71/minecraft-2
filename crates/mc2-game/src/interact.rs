@@ -674,6 +674,11 @@ fn use_bucket(
 /// A block of `kind` broke with `tool` in the selected slot: take what it
 /// drops, say so, and wear the tool.
 fn collect(state: &mut Interaction, kind: BlockKind, tool: Option<(ToolKind, Tier)>, now: f64) {
+    // Oak leaves sometimes hold an apple.
+    if kind == BlockKind::Solid(ids::LEAVES) && state.roll() < 0.1 {
+        state.inventory.add(Item::Apple, 1);
+        state.say(now, "+1 apple");
+    }
     let roll = state.roll();
     match block_drop(kind, tool, roll) {
         Some((item, n)) => {
