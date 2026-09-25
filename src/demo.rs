@@ -55,6 +55,9 @@ pub enum Demo {
     /// Arrive and stand still for twenty seconds while the village goes
     /// about its day.
     Village,
+    /// Walk up to the nearest villager with gold in hand and deal: stop
+    /// with the pack open at its trades.
+    Trade,
 }
 
 impl Demo {
@@ -75,6 +78,7 @@ impl Demo {
             "people" => Some(Self::People),
             "ragdoll" => Some(Self::Ragdoll),
             "village" => Some(Self::Village),
+            "trade" => Some(Self::Trade),
             _ => None,
         }
     }
@@ -146,6 +150,55 @@ fn villagers(game: &mut Game) -> Option<(glam::DVec3, glam::DVec3)> {
             .spawn((Body::at(DVec3::new(spot.x, g, spot.z)), c));
     }
     Some((feet, ahead))
+}
+
+/// Stands the player a stride from the nearest villager, facing it, with
+/// gold and goods to deal in, and starts a deal.
+fn trade(game: &mut Game) {
+    use glam::DVec3;
+    use mc2_game::player::{Body, Player};
+    use mc2_game::villagers::{Trading, Villager};
+    let Some(feet) = ({
+        let mut q = game.world.query::<(&Body, &Player)>();
+        q.iter(&game.world).next().map(|(b, _)| b.feet)
+    }) else {
+        return;
+    };
+    let nearest = {
+        let mut q = game
+            .world
+            .query::<(bevy_ecs::entity::Entity, &Body, &Villager)>();
+        q.iter(&game.world)
+            .map(|(e, b, v)| (e, b.feet, v.profession))
+            .min_by(|a, b| a.1.distance(feet).total_cmp(&b.1.distance(feet)))
+    };
+    let Some((e, at, trade)) = nearest else {
+        eprintln!("trade demo: nobody about");
+        return;
+    };
+    let away = DVec3::new(feet.x - at.x, 0.0, feet.z - at.z).normalize_or(DVec3::Z);
+    let stand = at + away * 1.8;
+    {
+        let mut q = game.world.query::<(&mut Body, &mut Player)>();
+        if let Some((mut b, mut p)) = q.iter_mut(&mut game.world).next() {
+            b.feet = stand;
+            b.prev_feet = stand;
+            b.velocity = DVec3::ZERO;
+            p.yaw = (-away.x).atan2(-away.z) as f32;
+            p.pitch = -0.12;
+        }
+    }
+    {
+        let mut state = game.world.resource_mut::<Interaction>();
+        state.inventory.add(Item::GoldIngot, 7);
+        state.inventory.add(Item::IronIngot, 12);
+        state
+            .inventory
+            .add(Item::solid(mc2_voxel::material::ids::OAK_LOG), 30);
+    }
+    game.world.resource_mut::<Trading>().with = Some((e, trade));
+    eprintln!("trade demo: dealing with a {}", trade.name());
+    tick(game, 45);
 }
 
 /// Makes `output` from what is carried, if it can, and says so.
@@ -234,13 +287,22 @@ fn workshop(game: &mut Game) {
 }
 
 /// Screens a demo shows over its capture: the craft demo's inventory, open
-/// at the crafting table with the cursor over a recipe.
+/// at the crafting table with the cursor over a recipe, and the trade
+/// demo's, open at the villager's trades.
 pub fn overlay(game: &mut Game, hud: &mut HudCanvas, screen: (u32, u32), demo: Option<Demo>) {
-    if demo != Some(Demo::Craft) {
-        return;
-    }
+    let station = match demo {
+        Some(Demo::Craft) => crafting::Station::Table,
+        Some(Demo::Trade) => {
+            let trading = game.world.resource::<mc2_game::villagers::Trading>();
+            match trading.with {
+                Some((_, p)) => crafting::Station::Trade(p),
+                None => return,
+            }
+        }
+        _ => return,
+    };
     let mut inv = crate::inventory_ui::Screen::default();
-    inv.open_at(Some(crafting::Station::Table));
+    inv.open_at(Some(station));
     let (w, h) = (screen.0 as f32, screen.1 as f32);
     inv.mouse_move(w * 0.72, h * 0.5 - 150.0);
     // Once aside to lay out, then for real with the cursor's hover.
@@ -723,6 +785,7 @@ pub fn run(game: &mut Game, demo: Demo) {
             tick(game, 45);
         }
         Demo::Village => tick(game, 1200),
+        Demo::Trade => trade(game),
         Demo::Ragdoll => {
             if let Some((feet, ahead)) = villagers(game) {
                 let mut physics = game.world.resource_mut::<mc2_game::physics::Physics>();
