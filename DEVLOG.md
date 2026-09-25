@@ -1101,3 +1101,28 @@ grids at 6.25 cm, 29 voxels (1.81 m) tall.
 
 **Known.** Villagers stand where a demo puts them; step 15 gives them
 somewhere to go. A ragdoll never gets up again.
+
+## Interlude: the site
+
+The landing page was a CPU raymarcher drawing a toy scene into a canvas. It
+could never look like the engine, so it is now a trailer told in the
+engine's own stills.
+
+- Every still is a headless capture at 2560x1440 on the top quality tier
+  (`--clean` keeps the HUD out), saved as WebP at 1280 and 2560 wide.
+- Chapters pin a full-screen stage and crossfade between their stills as
+  you scroll; a trailer button plays all of them full screen with the
+  chapters' titles. Reduced motion gets the same page, still.
+- Every claim on the page was checked against the code; three captions
+  were cut back to what their pictures show.
+
+**Found while shooting.**
+- Worldgen v2 moved the settlements: the spawn village is at (9855, 6871)
+  and the largest town at (6411, 10673), a five by five street grid.
+- Distant glass towers turn into floating floor slabs at coarse LOD: the
+  thin glass drops out of the downsample and only the slabs survive.
+  Visible on the horizon at dusk; a step 18 item.
+- The shore demo's trench did not fill within 240 frames at the new beach
+  (10296, 7392); the flood demo carries the water chapter.
+- A 2560x1440 capture on the top tier spends about three minutes
+  streaming before its frames on the RTX 3050 Laptop GPU.

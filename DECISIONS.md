@@ -309,3 +309,9 @@ Both were built behind one output with the same hit shading and denoiser, and me
 - **Skinned meshes with authored clips.** The usual game character: smooth, but the one thing in the world not made of voxels, lit by a different path, and a clip keyed to time slides its feet at any speed but the authored one.
 - **Physics-driven characters.** Muscles as joint motors balancing a ragdoll every step: lifelike falls, but an unstable gait and a solver cost per villager that a town of them cannot pay.
 - **Voxel parts on a procedural skeleton (chosen).** Eleven parts, each a voxel grid a rigid body can take over as it is. A gait cycle driven by distance travelled, feet planted on the voxels by analytic IK, a head that turns to look. When something knocks a character down, the same parts become a ragdoll: XPBD ball joints with cone limits, one collision group so the parts do not fight where they overlap.
+
+## D49. The site
+
+- **A live WebGL scene.** The previous page raymarched a toy world in the browser. It could never look like the engine, and it ran a phone's processor hot before showing anything real.
+- **Video.** The truest trailer, but there is no recording path yet, and a few megabytes of video would sit in front of every visitor.
+- **The engine's own stills (chosen).** Headless captures at 2560x1440 on the top tier, as WebP at two sizes, told as chapters that change still with scroll and as a full-screen trailer. What the page shows is exactly what the renderer makes.
