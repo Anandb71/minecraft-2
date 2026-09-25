@@ -19,6 +19,7 @@ license = "MIT"
 wgpu = "30.0.1"
 winit = "0.30.13"
 gilrs = "0.11"
+cpal = "0.16"
 glam = { version = "0.33.7", features = ["bytemuck"] }
 bytemuck = { version = "1.25.2", features = ["derive"] }
 rayon = "1.12.0"
@@ -41,6 +42,7 @@ mc2-voxel = { path = "crates/mc2-voxel" }
 mc2-worldgen = { path = "crates/mc2-worldgen" }
 
 [dependencies]
+mc2-audio.workspace = true
 mc2-core.workspace = true
 mc2-game.workspace = true
 bevy_ecs.workspace = true
@@ -51,6 +53,7 @@ mc2-worldgen.workspace = true
 wgpu.workspace = true
 winit.workspace = true
 gilrs.workspace = true
+cpal.workspace = true
 glam.workspace = true
 pollster.workspace = true
 log.workspace = true

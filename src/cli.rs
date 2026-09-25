@@ -47,6 +47,8 @@ pub struct Args {
     pub weather: Option<mc2_game::weather::Sky>,
     /// Captures without the game's HUD (hotbar, crosshair, target box).
     pub clean: bool,
+    /// Headless: write what the demo sounded like to this WAV file.
+    pub wav: Option<PathBuf>,
 }
 
 /// Quality settings from the preset plus command line overrides.
@@ -82,6 +84,7 @@ impl Default for Args {
             creative: false,
             weather: None,
             clean: false,
+            wav: None,
         }
     }
 }
@@ -100,6 +103,7 @@ usage: minecraft-2 [options]
   --creative             creative play: nothing runs out (default survival)
   --weather <sky>        clear, cloudy, rain or storm (headless: held)
   --clean                captures without the hotbar, crosshair or target box
+  --wav <file>           headless: write what the demo sounded like
   --seed <n>             world seed (default 42)
   --world <dir>          world directory (default worlds/default)
   --camera x,y,z,lx,ly,lz  headless camera position and look-at target (m)
@@ -143,6 +147,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             "--physics-thread" => out.physics_thread = true,
             "--creative" => out.creative = true,
             "--clean" => out.clean = true,
+            "--wav" => out.wav = Some(PathBuf::from(value("--wav")?)),
             "--weather" => {
                 let v = value("--weather")?;
                 out.weather = Some(

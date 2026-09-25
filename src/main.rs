@@ -1,6 +1,7 @@
 //! MINECRAFT 2: a voxel sandbox ray marched on the GPU.
 
 mod app;
+mod audio;
 mod cli;
 mod demo;
 mod game_hud;

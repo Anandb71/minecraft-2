@@ -116,7 +116,24 @@ pub fn run(args: &Args) -> Result<(), String> {
     if let Some(demo) = args.demo {
         let feet = camera.position - glam::DVec3::Y * mc2_game::player::EYE;
         game.spawn_player(feet, camera.yaw, camera.pitch);
+        let start = game.world.resource::<mc2_game::input::Time>().elapsed;
         crate::demo::run(&mut game, demo);
+        if let Some(path) = &args.wav {
+            // What the demo sounded like, heard from where it ends.
+            let heard = game
+                .world
+                .resource::<mc2_game::sounds::Sounds>()
+                .events
+                .len();
+            let mut audio = crate::audio::Audio::offline();
+            let view = game.view();
+            audio.update(&mut game, view.position, view.yaw, Some(start));
+            let end = game.world.resource::<mc2_game::input::Time>().elapsed;
+            let seconds = (end - start) as f32 + 5.0;
+            let samples = audio.render(seconds);
+            crate::audio::write_wav(path, &samples).map_err(|e| e.to_string())?;
+            eprintln!("wrote {} ({seconds:.1} s, {heard} sounds)", path.display());
+        }
         let view = game.view();
         camera.position = view.position;
         camera.yaw = view.yaw;

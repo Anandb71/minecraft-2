@@ -48,6 +48,7 @@ pub struct App {
     gi: Option<mc2_render::indirect::GiMethod>,
     photo: crate::photo::PhotoMode,
     inventory: crate::inventory_ui::Screen,
+    audio: crate::audio::Audio,
     water: Option<crate::water_sim::WaterSim>,
     modifiers: winit::keyboard::ModifiersState,
     screenshot_requested: bool,
@@ -115,6 +116,7 @@ impl App {
             gi: args.gi,
             photo: crate::photo::PhotoMode::default(),
             inventory: Default::default(),
+            audio: crate::audio::Audio::start(),
             water: None,
             modifiers: Default::default(),
             screenshot_requested: false,
@@ -413,6 +415,8 @@ impl App {
             self.camera.yaw = view.yaw;
             self.camera.pitch = view.pitch;
             self.camera.fov_y = Camera::default().fov_y;
+            self.audio
+                .update(&mut self.game, view.position, view.yaw, None);
         }
         stream(&mut self.game, self.camera.position);
         if let (Some(w), Some(r)) = (&mut self.water, &self.running)
