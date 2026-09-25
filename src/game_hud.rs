@@ -82,8 +82,17 @@ pub fn draw(
         })
         .unwrap_or_default();
     let aimed = game.world.resource::<mc2_game::villagers::Trading>().aimed;
-    if let Some((_, trade, d)) = aimed {
-        let key = if gamepad { "X" } else { "E" };
+    let key = if gamepad { "X" } else { "E" };
+    if let Some(line) = car_hint(game, key, gamepad) {
+        let tw = HudCanvas::text_width(&line, 2.0);
+        hud.text(
+            (w - tw) * 0.5,
+            y0 - 30.0,
+            2.0,
+            rgba(255, 222, 140, 255),
+            &line,
+        );
+    } else if let Some((_, trade, d)) = aimed {
         let line = format!("a {}  {d:.1} m  ({key}: trade)", trade.name());
         let tw = HudCanvas::text_width(&line, 2.0);
         hud.text(
@@ -116,4 +125,33 @@ pub fn draw(
             &line,
         );
     }
+}
+
+/// What to say about cars: the speed and keys while driving, or that one
+/// is near enough to get into.
+fn car_hint(game: &mut Game, key: &str, gamepad: bool) -> Option<String> {
+    use mc2_game::vehicles::{ENTER_M, Garage};
+    let feet = game
+        .world
+        .query::<(&Player, &mc2_game::player::Body)>()
+        .iter(&game.world)
+        .next()
+        .map(|(_, b)| b.feet)?;
+    let garage = game.world.resource::<Garage>();
+    let host = &game.world.resource::<mc2_game::physics::Physics>().host;
+    if let Some(car) = garage.driven() {
+        let speed = host.body(car.body).map_or(0.0, |b| b.vel.length() * 3.6);
+        let keys = if gamepad {
+            "A: brake"
+        } else {
+            "WASD: drive  space: brake"
+        };
+        return Some(format!("{speed:.0} km/h   {keys}   {key}: get out"));
+    }
+    garage
+        .cars
+        .iter()
+        .filter_map(|c| host.body(c.body))
+        .any(|b| b.pos.distance(feet + glam::DVec3::Y) < ENTER_M + f64::from(b.shape.radius) * 0.5)
+        .then(|| format!("a car  ({key}: get in)"))
 }
