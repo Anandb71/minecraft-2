@@ -10,7 +10,7 @@
 
 use crate::collide::SolidField;
 use glam::{DVec3, IVec2, IVec3};
-use mc2_core::FxHashMap;
+use mc2_core::{FxHashMap, FxHashSet};
 use mc2_voxel::world::VoxelWorld;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -23,7 +23,7 @@ pub const DROP: f64 = 1.1;
 /// Room a walker needs above the ground, metres.
 pub const HEAD: f64 = 1.9;
 /// Columns a search may open before it gives up.
-const BUDGET: usize = 6000;
+const BUDGET: usize = 2500;
 
 /// The ground a walker would stand on in the column at (x, z) coming from
 /// height `y`: the highest solid top with head room, from a step above `y`
@@ -67,7 +67,7 @@ fn centre(c: IVec2) -> (f64, f64) {
     ((f64::from(c.x) + 0.5) * CELL, (f64::from(c.y) + 0.5) * CELL)
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 struct Open {
     f: f64,
     cell: IVec2,
@@ -88,55 +88,111 @@ impl PartialOrd for Open {
     }
 }
 
-/// A walkable path from `from` (feet) to near `to`, as column centres at
-/// their ground heights ending on `to`'s column, or None if there is none
-/// within the search budget.
-pub fn find(world: &VoxelWorld, from: DVec3, to: DVec3) -> Option<Vec<DVec3>> {
-    let start = cell_of(from);
-    let goal = cell_of(to);
-    let (sx, sz) = centre(start);
-    let start_y = stand(world, sx, sz, from.y).unwrap_or(from.y);
-    let h = |c: IVec2| {
+/// How a search is getting on.
+#[derive(Debug)]
+pub enum Progress {
+    Found(Vec<DVec3>),
+    NoWay,
+    Searching,
+}
+
+/// An A* search for a way on foot, run a few columns at a time so a long
+/// one never holds up a frame.
+#[derive(Debug)]
+pub struct Search {
+    start: IVec2,
+    goal: IVec2,
+    to: DVec3,
+    /// Per column: its ground, cost so far, and where it was reached from.
+    seen: FxHashMap<IVec2, (f64, f64, IVec2)>,
+    open: BinaryHeap<Open>,
+    done: FxHashSet<IVec2>,
+    /// A column is reached from several neighbours at much the same
+    /// height: its ground is read once per height.
+    ground: FxHashMap<(IVec2, i32), Option<f64>>,
+}
+
+impl Search {
+    /// A search from `from` (feet) to `to`, or None if there is nowhere to
+    /// stand at `to`, so no way there.
+    pub fn new(world: &VoxelWorld, from: DVec3, to: DVec3) -> Option<Search> {
+        let start = cell_of(from);
+        let goal = cell_of(to);
+        let (gx, gz) = centre(goal);
+        stand(world, gx, gz, to.y)?;
+        let (sx, sz) = centre(start);
+        let start_y = stand(world, sx, sz, from.y).unwrap_or(from.y);
+        let mut search = Search {
+            start,
+            goal,
+            to,
+            seen: FxHashMap::default(),
+            open: BinaryHeap::new(),
+            done: FxHashSet::default(),
+            ground: FxHashMap::default(),
+        };
+        search.seen.insert(start, (start_y, 0.0, start));
+        let f = search.estimate(start);
+        search.open.push(Open { f, cell: start });
+        Some(search)
+    }
+
+    fn estimate(&self, c: IVec2) -> f64 {
         let (x, z) = centre(c);
-        (x - to.x).hypot(z - to.z)
-    };
-    // Per column: its ground, cost so far, and where it was reached from.
-    let mut seen: FxHashMap<IVec2, (f64, f64, IVec2)> = FxHashMap::default();
-    seen.insert(start, (start_y, 0.0, start));
-    let mut open = BinaryHeap::new();
-    open.push(Open {
-        f: h(start),
-        cell: start,
-    });
-    let mut done = FxHashMap::default();
-    while let Some(Open { cell, .. }) = open.pop() {
-        if done.insert(cell, ()).is_some() {
-            continue;
-        }
-        if cell == goal {
-            let mut path = Vec::new();
-            let mut c = cell;
-            loop {
-                let (y, _, from) = seen[&c];
-                let (x, z) = centre(c);
-                path.push(DVec3::new(x, y, z));
-                if c == start {
-                    break;
-                }
-                c = from;
+        (x - self.to.x).hypot(z - self.to.z)
+    }
+
+    /// Opens up to `columns` more columns; returns how it is getting on and
+    /// how many it opened.
+    pub fn advance(&mut self, world: &VoxelWorld, columns: usize) -> (Progress, usize) {
+        mc2_core::scope!("nav.search");
+        let mut opened = 0;
+        while opened < columns {
+            let Some(Open { cell, .. }) = self.open.pop() else {
+                return (Progress::NoWay, opened);
+            };
+            if !self.done.insert(cell) {
+                continue;
             }
-            path.reverse();
-            return Some(path);
+            opened += 1;
+            if cell == self.goal {
+                return (Progress::Found(self.path_to(cell)), opened);
+            }
+            if self.done.len() > BUDGET {
+                return (Progress::NoWay, opened);
+            }
+            self.expand(world, cell);
         }
-        if done.len() > BUDGET {
-            return None;
+        (Progress::Searching, opened)
+    }
+
+    fn path_to(&self, cell: IVec2) -> Vec<DVec3> {
+        let mut path = Vec::new();
+        let mut c = cell;
+        loop {
+            let (y, _, from) = self.seen[&c];
+            let (x, z) = centre(c);
+            path.push(DVec3::new(x, y, z));
+            if c == self.start {
+                break;
+            }
+            c = from;
         }
-        let (y, g, _) = seen[&cell];
+        path.reverse();
+        path
+    }
+
+    fn expand(&mut self, world: &VoxelWorld, cell: IVec2) {
+        let (y, g, _) = self.seen[&cell];
         let (cx, cz) = centre(cell);
         let here = DVec3::new(cx, y, cz);
-        let step = |d: IVec2| -> Option<f64> {
+        let ground = &mut self.ground;
+        let mut step = |d: IVec2| -> Option<f64> {
             let (x, z) = centre(cell + d);
-            let y2 = stand(world, x, z, y)?;
+            let y2 = *ground
+                .entry((cell + d, (y * 16.0).round() as i32))
+                .or_insert_with(|| stand(world, x, z, y));
+            let y2 = y2?;
             clear(world, here, DVec3::new(x, y2, z)).then_some(y2)
         };
         let straight = [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y];
@@ -162,16 +218,23 @@ pub fn find(world: &VoxelWorld, from: DVec3, to: DVec3) -> Option<Vec<DVec3>> {
             let n = cell + d;
             // Climbing costs a little more than walking.
             let cost = g + len + (y2 - y).max(0.0) * 2.0;
-            if seen.get(&n).is_none_or(|&(_, old, _)| cost < old) {
-                seen.insert(n, (y2, cost, cell));
-                open.push(Open {
-                    f: cost + h(n),
-                    cell: n,
-                });
+            if self.seen.get(&n).is_none_or(|&(_, old, _)| cost < old) {
+                self.seen.insert(n, (y2, cost, cell));
+                let f = cost + self.estimate(n);
+                self.open.push(Open { f, cell: n });
             }
         }
     }
-    None
+}
+
+/// A walkable path from `from` (feet) to near `to`, as column centres at
+/// their ground heights ending on `to`'s column, or None if there is none
+/// within the search budget: the whole search at once.
+pub fn find(world: &VoxelWorld, from: DVec3, to: DVec3) -> Option<Vec<DVec3>> {
+    match Search::new(world, from, to)?.advance(world, usize::MAX).0 {
+        Progress::Found(path) => Some(path),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -254,6 +317,35 @@ mod tests {
             .unwrap();
         let z = (through[0].z + through[1].z) * 0.5;
         assert!(z > 4.0 && z < 5.0, "crossed at z = {z}");
+    }
+
+    #[test]
+    fn a_search_in_slices_finds_the_same_way() {
+        let mut w = floor();
+        w.fill_box(
+            IVec3::new(128, 32, 32),
+            IVec3::new(131, 63, 191),
+            ids::GRANITE,
+        );
+        let (from, to) = (DVec3::new(4.0, 2.0, 7.0), DVec3::new(12.0, 2.0, 7.0));
+        let whole = find(&w, from, to).unwrap();
+        let mut search = Search::new(&w, from, to).unwrap();
+        let mut slices = 0;
+        let sliced = loop {
+            slices += 1;
+            match search.advance(&w, 10) {
+                (Progress::Found(p), n) => {
+                    assert!(n <= 10);
+                    break p;
+                }
+                (Progress::Searching, n) => assert_eq!(n, 10),
+                (Progress::NoWay, _) => panic!("lost the way"),
+            }
+        };
+        assert!(slices > 3, "{slices}");
+        assert_eq!(sliced, whole);
+        // Nowhere to stand at the goal: no search at all.
+        assert!(Search::new(&w, from, DVec3::new(20.0, 2.0, 7.0)).is_none());
     }
 
     #[test]

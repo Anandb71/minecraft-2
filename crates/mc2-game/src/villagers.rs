@@ -37,18 +37,25 @@ const RISE: f64 = 6.5;
 const DUSK: f64 = 20.25;
 /// A villager turns its head to someone this near, metres.
 const NOTICE_M: f64 = 5.0;
-/// Path searches a tick, across every villager.
-const SEARCHES: usize = 2;
+/// Columns of path search a tick, across every villager: a long search
+/// runs over several ticks rather than holding one up.
+const COLUMNS_PER_TICK: usize = 300;
 /// How near a villager must be to trade with, metres.
 pub const TRADE_REACH_M: f64 = 4.0;
 /// A standing person, for aiming at: an upright cylinder on its feet.
 const PERSON_RADIUS: f64 = 0.35;
 const PERSON_HEIGHT: f64 = 1.85;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub enum Doing {
     /// Standing where it is until the game has run to `until` seconds.
     Idle { until: f64 },
+    /// Working out the way, a little every tick; going in at the end if
+    /// `inside`.
+    Planning {
+        search: Box<nav::Search>,
+        inside: bool,
+    },
     /// Walking a path, going in at the end if `inside`.
     Walking {
         path: Vec<DVec3>,
@@ -130,6 +137,7 @@ pub fn people_villages(
     if population.wait > 0.0 {
         return;
     }
+    mc2_core::scope!("villagers.people");
     population.wait = 0.5;
     let Some(feet) = players.iter().next().map(|b| b.feet) else {
         return;
@@ -302,18 +310,20 @@ pub fn walk_villagers(
     players: Query<&Body, (With<Player>, Without<Villager>)>,
     mut villagers: Query<(Entity, &mut Villager, &mut Body, &mut Character), Without<Player>>,
 ) {
+    mc2_core::scope!("villagers.walk");
     let dt = time.fixed_dt;
     let now = time.elapsed;
     let day = is_day(clock.hour());
     let eye = players.iter().next().map(|b| b.feet + DVec3::Y * EYE);
     let world = &voxels.0;
-    let mut searches = SEARCHES;
-    let mut search = |from: DVec3, to: DVec3| {
-        if searches == 0 {
-            return None;
-        }
-        searches -= 1;
-        nav::find(world, from, to)
+    let mut columns = COLUMNS_PER_TICK;
+    // Start working out a way somewhere, or wait a little if there is none.
+    let plan = |from: DVec3, to: DVec3, inside: bool| match nav::Search::new(world, from, to) {
+        Some(search) => Doing::Planning {
+            search: Box::new(search),
+            inside,
+        },
+        None => Doing::Idle { until: now + 2.0 },
     };
     for (e, mut v, mut body, mut c) in &mut villagers {
         body.prev_feet = body.feet;
@@ -322,7 +332,7 @@ pub fn walk_villagers(
         if trading.with.is_some_and(|(t, _)| t == e)
             && let Some(eye) = eye
         {
-            if v.doing != Doing::Indoors {
+            if !matches!(v.doing, Doing::Indoors) {
                 v.doing = Doing::Idle { until: now + 2.0 };
             }
             body.velocity = DVec3::ZERO;
@@ -332,38 +342,42 @@ pub fn walk_villagers(
             continue;
         }
         // Decide.
-        let going_home = matches!(v.doing, Doing::Walking { inside: true, .. });
+        let going_home = matches!(
+            v.doing,
+            Doing::Walking { inside: true, .. } | Doing::Planning { inside: true, .. }
+        );
         match v.doing {
-            Doing::Indoors if day => {
-                if let Some(path) = search(body.feet, v.home.door.as_dvec3()) {
-                    v.doing = Doing::Walking {
-                        path,
-                        next: 0,
-                        inside: false,
-                    };
-                }
-            }
-            Doing::Idle { .. } | Doing::Walking { .. } if !day && !going_home => {
-                if let Some(path) = search(body.feet, v.home.inside.as_dvec3()) {
-                    v.doing = Doing::Walking {
-                        path,
-                        next: 0,
-                        inside: true,
-                    };
-                }
+            Doing::Indoors if day => v.doing = plan(body.feet, v.home.door.as_dvec3(), false),
+            Doing::Idle { .. } | Doing::Walking { .. } | Doing::Planning { .. }
+                if !day && !going_home =>
+            {
+                v.doing = plan(body.feet, v.home.inside.as_dvec3(), true);
             }
             Doing::Idle { until } if day && now >= until => {
                 let goal = v.errand();
-                v.doing = match search(body.feet, goal) {
-                    Some(path) => Doing::Walking {
-                        path,
-                        next: 0,
-                        inside: false,
-                    },
-                    None => Doing::Idle { until: now + 2.0 },
-                };
+                v.doing = plan(body.feet, goal, false);
             }
             _ => {}
+        }
+        // Think: a share of this tick's search.
+        let found = match &mut v.doing {
+            Doing::Planning { search, inside } if columns > 0 => {
+                let (progress, used) = search.advance(world, columns);
+                columns -= used;
+                match progress {
+                    nav::Progress::Found(path) => Some(Doing::Walking {
+                        path,
+                        next: 0,
+                        inside: *inside,
+                    }),
+                    nav::Progress::NoWay => Some(Doing::Idle { until: now + 2.0 }),
+                    nav::Progress::Searching => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(doing) = found {
+            v.doing = doing;
         }
         // Walk.
         if let Doing::Walking { path, next, inside } = &mut v.doing {
@@ -482,7 +496,7 @@ mod tests {
         // Evening: back through the door and in.
         run(&mut game, 21.0, 40.0);
         let v = game.world.get::<Villager>(e).unwrap();
-        assert_eq!(v.doing, Doing::Indoors);
+        assert!(matches!(v.doing, Doing::Indoors), "{:?}", v.doing);
         let back = game.world.get::<Body>(e).unwrap().feet;
         assert!(in_hut(back), "not home: {back}");
         assert!((back.y - 2.0).abs() < 0.01, "{back}");
