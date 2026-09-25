@@ -591,3 +591,227 @@ a {
 .manifesto em .w.lit {
   color: var(--amber);
 }
+
+/* ---------- Chapters ---------- */
+
+.chapter {
+  --shots: 1;
+  position: relative;
+  display: grid;
+  grid-template: 1fr / 1fr;
+  height: calc(100svh + (var(--shots) - 1) * 85svh + 30svh);
+  background: var(--shade);
+}
+
+.chapter[data-shots="2"] {
+  --shots: 2;
+}
+.chapter[data-shots="3"] {
+  --shots: 3;
+}
+.chapter[data-shots="4"] {
+  --shots: 4;
+}
+
+.stage,
+.card {
+  grid-area: 1 / 1;
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100svh;
+}
+
+.stage {
+  margin: 0;
+  overflow: clip;
+  isolation: isolate;
+}
+
+.shot {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  transition: opacity 1.3s var(--ease-film);
+}
+
+.shot.is-on {
+  opacity: 1;
+}
+
+.shot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.08);
+  transition: transform 9s var(--ease-out);
+}
+
+.shot.is-on img {
+  transform: scale(1.0);
+}
+
+.stage::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(to top, oklch(0.1 0.012 58 / 0.92) 0%, oklch(0.1 0.012 58 / 0.4) 38%, transparent 64%),
+    linear-gradient(to right, oklch(0.1 0.012 58 / 0.5), transparent 50%);
+}
+
+.chapter-right .stage::after {
+  background:
+    linear-gradient(to top, oklch(0.1 0.012 58 / 0.92) 0%, oklch(0.1 0.012 58 / 0.4) 38%, transparent 64%),
+    linear-gradient(to left, oklch(0.1 0.012 58 / 0.5), transparent 50%);
+}
+
+/* Fine grain over the stills, like film stock. */
+.stage::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0.07;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.9 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  mix-blend-mode: overlay;
+}
+
+.card {
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: calc(var(--bar-h) + var(--space-lg)) var(--gutter) clamp(48px, 9svh, 104px);
+  pointer-events: none;
+}
+
+.card > * {
+  pointer-events: auto;
+}
+
+.chapter-right .card {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.chapter-no {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin: 0 0 var(--space-sm);
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 1.15rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.chapter-no .pixel {
+  display: inline-grid;
+  place-items: center;
+  min-width: 2.1em;
+  height: 2.1em;
+  padding: 0 0.35em;
+  background: var(--amber);
+  color: var(--shade);
+  font-size: 0.85rem;
+  letter-spacing: 0;
+  box-shadow: inset 0 -3px 0 var(--amber-deep);
+}
+
+.chapter-right .chapter-no {
+  flex-direction: row-reverse;
+}
+
+.card h2 {
+  margin: 0;
+  max-width: 11ch;
+  font-family: var(--display);
+  font-weight: 900;
+  font-size: var(--t-1);
+  line-height: 0.88;
+  text-transform: uppercase;
+  text-wrap: balance;
+  text-shadow: 0 0.05em 0.4em oklch(0.08 0.01 58 / 0.55);
+}
+
+.card h2 + p {
+  max-width: 44ch;
+  margin: var(--space-md) 0 0;
+  font-size: var(--t-lede);
+  line-height: 1.55;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+/* What you are looking at, and which of the chapter's stills it is. */
+.caption {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 1.5em;
+  margin: var(--space-lg) 0 0;
+  font-size: var(--t-small);
+  color: var(--ink-3);
+}
+
+.chapter-right .caption {
+  flex-direction: row-reverse;
+}
+
+.pips {
+  display: inline-flex;
+  gap: 4px;
+  flex: none;
+}
+
+.pips i {
+  width: 10px;
+  height: 10px;
+  background: oklch(0.955 0.012 80 / 0.25);
+  transition: background-color 0.4s;
+}
+
+.pips i.on {
+  background: var(--amber);
+}
+
+.caption-text {
+  transition: opacity 0.4s;
+}
+
+/* The chapter's words arrive once, as it comes into view. */
+.js .card .chapter-no,
+.js .card h2,
+.js .card h2 + p,
+.js .card .caption {
+  opacity: 0;
+  transform: translateY(28px);
+  transition:
+    opacity 1s var(--ease-out),
+    transform 1.2s var(--ease-out);
+}
+
+.js .card h2 {
+  transition-delay: 0.08s;
+}
+.js .card h2 + p {
+  transition-delay: 0.2s;
+}
+.js .card .caption {
+  transition-delay: 0.32s;
+}
+
+.js .chapter.in-view .card .chapter-no,
+.js .chapter.in-view .card h2,
+.js .chapter.in-view .card h2 + p,
+.js .chapter.in-view .card .caption {
+  opacity: 1;
+  transform: none;
+}
