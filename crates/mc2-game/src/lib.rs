@@ -98,6 +98,7 @@ impl Game {
                 structure::update_structure,
                 weather::update_weather,
                 character::blast_people,
+                villagers::flee_blasts,
                 sounds::listen,
                 fire::update_fire,
                 water::take_edits,

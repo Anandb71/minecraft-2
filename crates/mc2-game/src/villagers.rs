@@ -5,7 +5,9 @@
 //! at each; at dusk they walk home and go in. Villages near the player are
 //! peopled as it comes and emptied again once it has gone. Each has a
 //! trade; press E on one to see what it buys and sells, and it stops to
-//! face you while you deal.
+//! face you while you deal. A villager that hears a blast (through the same
+//! traced acoustics as the player's ears, so not through a sealed wall)
+//! runs from it.
 
 use crate::character::{Character, Look};
 use crate::clock::WorldClock;
@@ -43,6 +45,11 @@ const NOTICE_M: f64 = 5.0;
 /// after waiting this long for them, go somewhere else, seconds.
 const PERSONAL_M: f64 = 0.8;
 const GIVE_WAY_S: f32 = 3.0;
+/// Fleeing: how far past the blast's reach to run, how much faster, and
+/// how long to stay afraid, seconds.
+const FLEE_M: f64 = 25.0;
+const FLEE_PACE: f64 = 2.2;
+const AFRAID_S: f64 = 12.0;
 /// Columns of path search a tick, across every villager: a long search
 /// runs over several ticks rather than holding one up.
 const COLUMNS_PER_TICK: usize = 300;
@@ -84,6 +91,8 @@ pub struct Villager {
     rng: u64,
     /// Seconds spent waiting for someone in the way.
     blocked: f32,
+    /// Running from a blast until the game has run this long, seconds.
+    pub fleeing_until: f64,
 }
 
 impl Villager {
@@ -204,6 +213,7 @@ pub fn people_villages(
                 },
                 rng: seed | 1,
                 blocked: 0.0,
+                fleeing_until: 0.0,
             };
             let mut c = Character::new(Look::from_seed(seed));
             c.facing = (villager.roll() * std::f64::consts::TAU) as f32;
@@ -230,6 +240,46 @@ pub fn people_villages(
                 }
             }
         }
+    }
+}
+
+/// Every frame: villagers who hear a blast run from it, away from where
+/// it went off and past its reach, then stay a while where they stop.
+pub fn flee_blasts(
+    time: Res<Time>,
+    voxels: Res<Voxels>,
+    physics: Res<Physics>,
+    mut villagers: Query<(&Body, &mut Villager)>,
+) {
+    if physics.blasts_out.is_empty() {
+        return;
+    }
+    let now = time.elapsed;
+    for (body, mut v) in &mut villagers {
+        let ear = body.feet + DVec3::Y * EYE;
+        let heard = physics
+            .blasts_out
+            .iter()
+            .find(|&&(centre, radius)| mc2_audio::audible(&voxels.0, centre, ear, radius * 30.0));
+        let Some(&(centre, radius)) = heard else {
+            continue;
+        };
+        let away =
+            DVec3::new(body.feet.x - centre.x, 0.0, body.feet.z - centre.z).normalize_or(DVec3::X);
+        let goal = centre + away * (f64::from(radius) * 2.5 + FLEE_M);
+        v.fleeing_until = now + AFRAID_S;
+        v.doing = match nav::Search::new(
+            &voxels.0,
+            body.feet,
+            DVec3::new(goal.x, body.feet.y, goal.z),
+        ) {
+            Some(search) => Doing::Planning {
+                search: Box::new(search),
+                inside: false,
+            },
+            // Nowhere to stand there: just stand, afraid, a moment.
+            None => Doing::Idle { until: now + 1.0 },
+        };
     }
 }
 
@@ -381,7 +431,7 @@ pub fn walk_villagers(
             {
                 v.doing = plan(body.feet, v.home.inside.as_dvec3(), true);
             }
-            Doing::Idle { until } if day && now >= until => {
+            Doing::Idle { until } if (day || now < v.fleeing_until) && now >= until => {
                 let goal = v.errand();
                 v.doing = plan(body.feet, goal, false);
             }
@@ -433,7 +483,12 @@ pub fn walk_villagers(
         }
         // Walk.
         if let Doing::Walking { path, next, inside } = &mut v.doing {
-            let mut left = PACE * dt;
+            let pace = if now < v.fleeing_until {
+                PACE * FLEE_PACE
+            } else {
+                PACE
+            };
+            let mut left = pace * dt;
             while left > 0.0 && *next < path.len() {
                 let target = path[*next];
                 let d = DVec3::new(target.x - body.feet.x, 0.0, target.z - body.feet.z);
@@ -510,6 +565,7 @@ mod tests {
             doing: Doing::Idle { until: 0.0 },
             rng: 7,
             blocked: 0.0,
+            fleeing_until: 0.0,
         }
     }
 
@@ -619,5 +675,71 @@ mod tests {
             closest = closest.min(level_distance(pa, pb));
         }
         assert!(closest > 0.5, "walked into each other: {closest}");
+    }
+
+    #[test]
+    fn a_villager_runs_from_a_blast_it_hears_but_not_one_sealed_off() {
+        let mut game = crate::Game::new();
+        let mut w = VoxelWorld::new();
+        w.fill_box(IVec3::ZERO, IVec3::new(1023, 31, 1023), ids::GRANITE);
+        // A sealed stone cell a metre thick all round, 40 m from the blast.
+        w.fill_box(
+            IVec3::new(448, 16, 160),
+            IVec3::new(527, 111, 239),
+            ids::GRANITE,
+        );
+        w.fill_box(IVec3::new(464, 32, 176), IVec3::new(511, 79, 223), ids::AIR);
+        game.world.resource_mut::<Voxels>().0 = w;
+        game.clock().set_hour(12.0);
+        game.clock().paused = true;
+        let home = Home {
+            door: Vec3::new(40.0, 2.0, 40.0),
+            inside: Vec3::new(40.0, 2.0, 40.0),
+        };
+        let idle = || Villager {
+            doing: Doing::Idle { until: 1e9 },
+            ..villager(home)
+        };
+        let open_at = DVec3::new(30.5, 2.0, 32.5);
+        let sealed_at = DVec3::new(30.5, 2.0, 12.5);
+        let open = game
+            .world
+            .spawn((
+                Body::at(open_at),
+                Character::new(Look::from_seed(1)),
+                idle(),
+            ))
+            .id();
+        let sealed = game
+            .world
+            .spawn((
+                Body::at(sealed_at),
+                Character::new(Look::from_seed(2)),
+                idle(),
+            ))
+            .id();
+        game.update(1.0 / 60.0);
+        // A charge goes off 20 m from the one in the open.
+        game.world
+            .resource_mut::<Physics>()
+            .blasts_out
+            .push((DVec3::new(30.5, 2.5, 52.5), 3.0));
+        for _ in 0..240 {
+            game.update(1.0 / 60.0);
+        }
+        let ran = game.world.get::<Body>(open).unwrap().feet.distance(open_at);
+        let stayed = game
+            .world
+            .get::<Body>(sealed)
+            .unwrap()
+            .feet
+            .distance(sealed_at);
+        assert!(ran > 5.0, "the one in the open only moved {ran} m");
+        assert!(stayed < 0.01, "the sealed one moved {stayed} m");
+        assert!(game.world.get::<Villager>(open).unwrap().fleeing_until > 0.0);
+        assert_eq!(
+            game.world.get::<Villager>(sealed).unwrap().fleeing_until,
+            0.0
+        );
     }
 }
