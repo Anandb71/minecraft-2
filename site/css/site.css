@@ -311,3 +311,283 @@ a {
     margin-left: auto;
   }
 }
+
+/* ---------- Hero ---------- */
+
+.hero {
+  position: relative;
+  min-height: 100svh;
+  display: grid;
+  align-items: end;
+  overflow: clip;
+  isolation: isolate;
+  background: var(--shade);
+}
+
+.hero-shot {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+}
+
+.hero-shot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 45%;
+  animation: hero-in 3.2s var(--ease-out) both;
+}
+
+@keyframes hero-in {
+  from {
+    opacity: 0;
+    transform: scale(1.14);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+/* Scrims so type reads over any sky: heavy at the foot, a little on the left. */
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    linear-gradient(to top, oklch(0.1 0.012 58 / 0.95) 0%, oklch(0.1 0.012 58 / 0.55) 32%, transparent 62%),
+    linear-gradient(to right, oklch(0.1 0.012 58 / 0.55), transparent 55%);
+}
+
+/* Letterbox bars that open as the page loads, like a film starting. */
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  border-block: 0 solid var(--shade);
+  animation: letterbox 2.6s var(--ease-film) both;
+}
+
+@keyframes letterbox {
+  0% {
+    border-block-width: 50svh;
+  }
+  35% {
+    border-block-width: 50svh;
+  }
+  100% {
+    border-block-width: 0;
+  }
+}
+
+.hero-copy {
+  position: relative;
+  padding: calc(var(--bar-h) + var(--space-2xl)) var(--gutter) clamp(72px, 12svh, 140px);
+  max-width: 1600px;
+}
+
+.kicker {
+  margin: 0 0 var(--space-xs);
+  color: var(--amber);
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  animation: rise 1s var(--ease-out) 1.4s both;
+}
+
+.title {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.04em;
+  font-family: var(--display);
+  font-weight: 900;
+  font-size: var(--t-hero);
+  line-height: 0.8;
+  letter-spacing: -0.005em;
+  text-transform: uppercase;
+  text-shadow: 0 0.04em 0.3em oklch(0.08 0.01 58 / 0.5);
+}
+
+.title-line {
+  display: block;
+  clip-path: inset(0 0 -0.1em 0);
+  animation: title-in 1.4s var(--ease-out) 1.2s both;
+}
+
+/* The "2" is a block of amber, set into the word like a slot in the hotbar. */
+.title-two {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 1.2em;
+  height: 1.2em;
+  margin-left: 0.06em;
+  background: var(--amber);
+  color: var(--shade);
+  font-size: 0.64em;
+  line-height: 1;
+  padding-top: 0.04em;
+  text-shadow: none;
+  box-shadow:
+    inset 0 -0.06em 0 var(--amber-deep),
+    inset 0.06em 0.06em 0 var(--amber-hot);
+  animation: block-in 0.9s var(--ease-out) 1.9s both;
+}
+
+@keyframes title-in {
+  from {
+    clip-path: inset(0 0 100% 0);
+    transform: translateY(0.3em);
+  }
+  to {
+    clip-path: inset(0 0 -0.1em 0);
+    transform: none;
+  }
+}
+
+@keyframes block-in {
+  from {
+    opacity: 0;
+    transform: translateY(-0.6em) rotate(-8deg);
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.lede {
+  max-width: 38ch;
+  margin: var(--space-lg) 0 0;
+  font-size: var(--t-lede);
+  line-height: 1.5;
+  color: var(--ink);
+  text-wrap: pretty;
+  animation: rise 1s var(--ease-out) 2.1s both;
+}
+
+.cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-top: var(--space-lg);
+}
+
+.hero .cta {
+  animation: rise 1s var(--ease-out) 2.3s both;
+}
+
+.credits {
+  margin: var(--space-lg) 0 0;
+  font-size: var(--t-small);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  animation: rise 1s var(--ease-out) 2.5s both;
+}
+
+.scroll-cue {
+  position: absolute;
+  right: var(--gutter);
+  bottom: clamp(72px, 12svh, 140px);
+  width: 2px;
+  height: 72px;
+  background: oklch(0.955 0.012 80 / 0.25);
+  animation: rise 1s var(--ease-out) 2.8s both;
+}
+
+.scroll-cue span {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  width: 8px;
+  height: 8px;
+  background: var(--amber);
+  animation: drop 2.4s var(--ease-film) infinite;
+}
+
+@keyframes drop {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(64px);
+    opacity: 0;
+  }
+}
+
+@supports (animation-timeline: view()) {
+  .hero-copy {
+    animation: drift linear both;
+    animation-timeline: view();
+    animation-range: exit 0% exit 100%;
+  }
+  @keyframes drift {
+    to {
+      transform: translateY(-18svh);
+      opacity: 0;
+    }
+  }
+}
+
+/* ---------- Manifesto ---------- */
+
+.manifesto {
+  padding: clamp(96px, 22svh, 240px) var(--gutter);
+  background: var(--bg);
+}
+
+.manifesto p {
+  margin: 0 auto;
+  max-width: 24ch;
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: var(--t-2);
+  line-height: 1.02;
+  text-transform: uppercase;
+  letter-spacing: 0.005em;
+  color: var(--ink-3);
+  text-wrap: balance;
+}
+
+.manifesto em {
+  font-style: normal;
+  color: var(--amber);
+}
+
+/* Words light up as they scroll past. */
+.manifesto .w {
+  transition: color 0.5s var(--ease-out);
+}
+
+.manifesto .w.lit {
+  color: var(--ink);
+}
+
+.manifesto em .w.lit {
+  color: var(--amber);
+}
