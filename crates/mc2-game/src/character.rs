@@ -9,11 +9,13 @@
 use crate::Voxels;
 use crate::collide::SolidField;
 use crate::input::Time;
+use crate::physics::Physics;
+use crate::physics_host::RagdollPart;
 use crate::player::{Body, Player, View};
 use bevy_ecs::prelude::*;
 use glam::{DVec3, IVec3, Quat};
 pub use mc2_anim::Look;
-use mc2_anim::{BONES, Gait, Motion, Part, Placed, Pose, Root};
+use mc2_anim::{BONES, Bone, Gait, Motion, Part, Placed, Pose, Root, VOXEL_M};
 use mc2_voxel::world::VoxelWorld;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,6 +28,10 @@ const GROUND_UP: f64 = 0.5;
 const GROUND_DOWN: f64 = 0.75;
 /// Eye height above the feet, metres.
 const EYES: f64 = 1.62;
+/// A blast throws a character within this many of its radii.
+const BLAST_REACH: f64 = 2.5;
+/// Speed a character is thrown at from the heart of a blast, m/s.
+const BLAST_SPEED: f64 = 12.0;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -98,9 +104,61 @@ impl Character {
         mc2_anim::part_grids(&self.placed, &self.parts)
     }
 
+    /// The character as it stands, as ragdoll parts: each part a body at
+    /// its posed place, hung from its parent at the joint between them,
+    /// free to swing about as far as that joint can.
+    pub fn ragdoll(&self) -> Vec<RagdollPart> {
+        let grids = self.grids();
+        Bone::ALL
+            .iter()
+            .map(|&bone| {
+                let i = bone.index();
+                let shape = self.parts[i].shape.clone();
+                let (corner, grid_rot) = grids[i];
+                let parent = bone.parent().map(|p| {
+                    let dir = along(bone);
+                    (
+                        p.index(),
+                        self.placed[i].joint,
+                        self.placed[p.index()].rot * dir,
+                        self.placed[i].rot * dir,
+                        swing(bone),
+                    )
+                });
+                RagdollPart {
+                    pos: corner + (grid_rot * (shape.com * VOXEL_M)).as_dvec3(),
+                    rot: grid_rot * shape.principal,
+                    shape,
+                    parent,
+                }
+            })
+            .collect()
+    }
+
     /// The draw key of one of this character's parts.
     pub fn key(&self, bone: usize) -> u64 {
         KEY_BASE + self.id * BONES as u64 + bone as u64
+    }
+}
+
+/// Which way a bone runs from its joint in the rest pose.
+fn along(bone: Bone) -> glam::Vec3 {
+    match bone {
+        Bone::Torso | Bone::Head => glam::Vec3::Y,
+        _ => -glam::Vec3::Y,
+    }
+}
+
+/// How far a bone may swing from its rest direction, radians.
+fn swing(bone: Bone) -> f32 {
+    match bone {
+        Bone::Pelvis => 0.0,
+        Bone::Torso => 0.5,
+        Bone::Head => 0.7,
+        Bone::UpperArmL | Bone::UpperArmR => 2.2,
+        Bone::ForeArmL | Bone::ForeArmR => 1.4,
+        Bone::ThighL | Bone::ThighR => 1.3,
+        Bone::ShinL | Bone::ShinR => 1.4,
     }
 }
 
@@ -176,6 +234,35 @@ pub fn pose_characters(
     }
 }
 
+/// Characters caught in a blast go limp: each becomes a ragdoll of its
+/// parts, thrown away from the blast and upward. Runs before the fire
+/// takes the blasts.
+pub fn blast_people(
+    mut commands: Commands,
+    mut physics: ResMut<Physics>,
+    people: Query<(Entity, &Body, &Character), Without<Player>>,
+) {
+    if physics.blasts_out.is_empty() {
+        return;
+    }
+    let blasts = physics.blasts_out.clone();
+    for (e, body, c) in &people {
+        let chest = body.feet + DVec3::Y * 1.1;
+        let hit = blasts.iter().find_map(|&(centre, radius)| {
+            let d = chest - centre;
+            let reach = f64::from(radius) * BLAST_REACH;
+            (d.length() < reach).then(|| {
+                let dir = (d.normalize_or_zero() + DVec3::Y * 0.7).normalize();
+                dir * (BLAST_SPEED * (1.0 - d.length() / reach).sqrt())
+            })
+        });
+        if let Some(vel) = hit {
+            physics.host.spawn_ragdoll(&c.ragdoll(), vel.as_vec3());
+            commands.entity(e).despawn();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,6 +315,48 @@ mod tests {
         }
         // Parts have distinct keys, clear of physics bodies.
         assert!(c.key(0) >= KEY_BASE && c.key(0) != c.key(1));
+    }
+
+    #[test]
+    fn a_ragdoll_falls_in_one_piece() {
+        let mut world = VoxelWorld::new();
+        // A 16 m floor, its top at 2 m.
+        world.fill_box(IVec3::ZERO, IVec3::new(255, 31, 255), ids::GRANITE);
+        let mut c = Character::new(Look::from_seed(9));
+        c.pose_at(
+            &world,
+            DVec3::new(8.0, 2.0, 8.0),
+            0.3,
+            DVec3::ZERO,
+            true,
+            false,
+            None,
+            0.0,
+        );
+        let parts = c.ragdoll();
+        assert_eq!(parts.len(), BONES);
+        let mut host = crate::physics_host::PhysicsHost::inline();
+        let ids = host.spawn_ragdoll(&parts, glam::Vec3::new(1.5, 2.0, 0.0));
+        for _ in 0..360 {
+            host.tick(&world, 1.0 / 120.0);
+        }
+        let pelvis = host.body(ids[0]).expect("pelvis").pos;
+        for (id, part) in ids.iter().zip(&parts) {
+            let b = host.body(*id).expect("part");
+            // Nothing flew off or sank: every part lies on the slab, near
+            // the pelvis.
+            assert!(
+                b.pos.y > 1.95 && b.pos.y < 2.6,
+                "{:?} at {}",
+                part.parent,
+                b.pos
+            );
+            assert!(
+                b.pos.distance(pelvis) < 1.2,
+                "{} from the pelvis",
+                b.pos.distance(pelvis)
+            );
+        }
     }
 
     #[test]

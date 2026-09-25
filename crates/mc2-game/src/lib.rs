@@ -76,6 +76,7 @@ impl Game {
                 physics::light_fuses,
                 structure::update_structure,
                 weather::update_weather,
+                character::blast_people,
                 fire::update_fire,
                 water::take_edits,
             )
