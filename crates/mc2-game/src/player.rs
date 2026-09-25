@@ -55,6 +55,8 @@ pub struct Player {
     pub crouching: bool,
     /// Camera lag after a step-up, metres, decays to zero.
     pub step_smoothing: f64,
+    /// In a car: it carries the player, who does not walk.
+    pub seated: bool,
 }
 
 impl Default for Player {
@@ -67,6 +69,7 @@ impl Default for Player {
             on_ground: false,
             crouching: false,
             step_smoothing: 0.0,
+            seated: false,
         }
     }
 }
@@ -261,6 +264,9 @@ pub fn movement(
     mut players: Query<(&mut Player, &mut Body)>,
 ) {
     for (mut p, mut b) in &mut players {
+        if p.seated {
+            continue;
+        }
         // Hold still over terrain that has not streamed in yet.
         let feet_voxel = coords::metres_to_voxel(b.feet);
         let below = ChunkPos::of_voxel(feet_voxel - glam::IVec3::Y * 16);

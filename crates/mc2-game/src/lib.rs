@@ -15,6 +15,7 @@ pub mod physics;
 pub mod physics_host;
 pub mod player;
 pub mod structure;
+pub mod vehicles;
 pub mod view;
 pub mod villagers;
 pub mod water;
@@ -66,6 +67,7 @@ impl Game {
         world.insert_resource(character::Drawn::default());
         world.insert_resource(villagers::Population::default());
         world.insert_resource(villagers::Trading::default());
+        world.insert_resource(vehicles::Garage::default());
 
         let mut frame = Schedule::default();
         frame.add_systems((clock::advance_clock, player::look, player::toggles).chain());
@@ -73,6 +75,7 @@ impl Game {
         fixed.add_systems(
             (
                 player::movement,
+                vehicles::drive_cars,
                 villagers::walk_villagers,
                 physics::step_physics,
             )
@@ -85,6 +88,7 @@ impl Game {
                 character::pose_characters,
                 interact::interact,
                 villagers::aim_at_villagers,
+                vehicles::enter_cars,
                 physics::light_fuses,
                 structure::update_structure,
                 weather::update_weather,

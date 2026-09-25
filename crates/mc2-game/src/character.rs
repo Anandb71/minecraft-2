@@ -224,7 +224,7 @@ pub fn pose_characters(
                 p.on_ground,
                 p.crouching,
                 Some(feet + DVec3::Y * EYES + p.forward().as_dvec3() * 8.0),
-                p.view == View::ThirdPerson,
+                p.view == View::ThirdPerson && !p.seated,
             ),
             None => (c.facing, true, false, c.look_at, true),
         };

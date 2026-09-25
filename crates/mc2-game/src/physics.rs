@@ -314,8 +314,10 @@ pub fn step_physics(
     mc2_core::scope!("physics.tick");
     let physics = &mut *physics;
     // The player shoves what it walks into.
+    // A player in a car rides in it rather than pushing it.
     let obstacles = players
         .iter()
+        .filter(|(p, _)| !p.seated)
         .map(|(p, b)| {
             let bounds = Aabb::standing(b.feet, crate::player::WIDTH, p.height());
             mc2_physics::Obstacle {
