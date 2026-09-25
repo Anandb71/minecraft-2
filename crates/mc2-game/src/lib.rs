@@ -19,6 +19,7 @@ pub mod structure;
 pub mod vehicles;
 pub mod view;
 pub mod villagers;
+pub mod vitals;
 pub mod water;
 pub mod weather;
 
@@ -71,6 +72,7 @@ impl Game {
         world.insert_resource(vehicles::Garage::default());
         world.insert_resource(vehicles::Drawn::default());
         world.insert_resource(sounds::Sounds::default());
+        world.insert_resource(vitals::Spawn::default());
 
         let mut frame = Schedule::default();
         frame.add_systems((clock::advance_clock, player::look, player::toggles).chain());
@@ -78,6 +80,7 @@ impl Game {
         fixed.add_systems(
             (
                 player::movement,
+                vitals::live,
                 vehicles::drive_cars,
                 villagers::walk_villagers,
                 sounds::footsteps,
@@ -99,6 +102,7 @@ impl Game {
                 weather::update_weather,
                 character::blast_people,
                 villagers::flee_blasts,
+                vitals::hurt_and_eat,
                 sounds::listen,
                 fire::update_fire,
                 water::take_edits,
@@ -116,6 +120,7 @@ impl Game {
 
     /// Spawns the player standing at `feet`.
     pub fn spawn_player(&mut self, feet: glam::DVec3, yaw: f32, pitch: f32) {
+        self.world.insert_resource(vitals::Spawn(feet));
         self.world.spawn((
             player::Player {
                 yaw,
@@ -125,6 +130,7 @@ impl Game {
             player::Body::at(feet),
             character::Character::new(character::Look::from_seed(7)),
             sounds::Stride::default(),
+            vitals::Vitals::default(),
         ));
     }
 
