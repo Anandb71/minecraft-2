@@ -65,6 +65,7 @@ impl Game {
         world.insert_resource(weather::Weather::default());
         world.insert_resource(character::Drawn::default());
         world.insert_resource(villagers::Population::default());
+        world.insert_resource(villagers::Trading::default());
 
         let mut frame = Schedule::default();
         frame.add_systems((clock::advance_clock, player::look, player::toggles).chain());
@@ -83,6 +84,7 @@ impl Game {
                 view::update_view,
                 character::pose_characters,
                 interact::interact,
+                villagers::aim_at_villagers,
                 physics::light_fuses,
                 structure::update_structure,
                 weather::update_weather,

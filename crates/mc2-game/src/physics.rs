@@ -286,7 +286,8 @@ pub fn light_fuses(
     mut interaction: ResMut<Interaction>,
     input: Res<Input>,
 ) {
-    if !input.captured || !input.pressed(Key::Interact) {
+    // E on a villager is for trading, whatever stands behind it.
+    if !input.captured || !input.pressed(Key::Interact) || interaction.opened.is_some() {
         return;
     }
     let Some(t) = interaction.target else {

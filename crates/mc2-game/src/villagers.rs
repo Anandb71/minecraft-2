@@ -3,13 +3,18 @@
 //! Each lives in one of its village's houses. By day they go out to the
 //! square, to one another's doors and back to their own, standing a while
 //! at each; at dusk they walk home and go in. Villages near the player are
-//! peopled as it comes and emptied again once it has gone.
+//! peopled as it comes and emptied again once it has gone. Each has a
+//! trade; press E on one to see what it buys and sells, and it stops to
+//! face you while you deal.
 
 use crate::character::{Character, Look};
 use crate::clock::WorldClock;
-use crate::input::Time;
+use crate::crafting::{Profession, Station};
+use crate::input::{Input, Key, Time};
+use crate::interact::Interaction;
 use crate::nav;
 use crate::player::{Body, EYE, Player};
+use crate::view::ViewCamera;
 use crate::{Streaming, Voxels};
 use bevy_ecs::prelude::*;
 use glam::{DVec3, Vec3};
@@ -34,6 +39,11 @@ const DUSK: f64 = 20.25;
 const NOTICE_M: f64 = 5.0;
 /// Path searches a tick, across every villager.
 const SEARCHES: usize = 2;
+/// How near a villager must be to trade with, metres.
+pub const TRADE_REACH_M: f64 = 4.0;
+/// A standing person, for aiming at: an upright cylinder on its feet.
+const PERSON_RADIUS: f64 = 0.35;
+const PERSON_HEIGHT: f64 = 1.85;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Doing {
@@ -53,6 +63,7 @@ pub enum Doing {
 pub struct Villager {
     pub village: (i32, i32),
     pub home: Home,
+    pub profession: Profession,
     /// The square, and every home in the village, to walk to.
     plaza: DVec3,
     homes: Arc<[Home]>,
@@ -164,6 +175,7 @@ pub fn people_villages(
             let mut villager = Villager {
                 village: key,
                 home: *home,
+                profession: Profession::ALL[(seed >> 7) as usize % Profession::ALL.len()],
                 plaza: v.centre.as_dvec3(),
                 homes: homes.clone(),
                 doing: if day {
@@ -187,6 +199,91 @@ pub fn people_villages(
     }
 }
 
+/// Who is being traded with, and who the crosshair is on.
+#[derive(Resource, Default)]
+pub struct Trading {
+    /// The villager dealt with now, and its trade.
+    pub with: Option<(Entity, Profession)>,
+    /// The villager in reach under the crosshair, its trade and distance.
+    pub aimed: Option<(Entity, Profession, f64)>,
+}
+
+/// Where a ray from `eye` along unit `dir` first meets a person standing
+/// at `feet`, metres along it.
+pub fn ray_person(eye: DVec3, dir: DVec3, feet: DVec3) -> Option<f64> {
+    // The side of the cylinder, solved in the level plane.
+    let o = eye - feet;
+    let a = dir.x * dir.x + dir.z * dir.z;
+    let b = 2.0 * (o.x * dir.x + o.z * dir.z);
+    let c = o.x * o.x + o.z * o.z - PERSON_RADIUS * PERSON_RADIUS;
+    let inside = |t: f64| (0.0..=PERSON_HEIGHT).contains(&(o.y + dir.y * t));
+    if a > 1e-12 {
+        let disc = b * b - 4.0 * a * c;
+        if disc >= 0.0 {
+            let t = (-b - disc.sqrt()) / (2.0 * a);
+            if t >= 0.0 && inside(t) {
+                return Some(t);
+            }
+        }
+    }
+    // Or its top or foot, looking down or up at it.
+    [PERSON_HEIGHT, 0.0].iter().find_map(|&y| {
+        if dir.y.abs() < 1e-9 {
+            return None;
+        }
+        let t = (y - o.y) / dir.y;
+        let p = o + dir * t;
+        (t >= 0.0 && p.x * p.x + p.z * p.z <= PERSON_RADIUS * PERSON_RADIUS).then_some(t)
+    })
+}
+
+/// Every frame: which villager the crosshair is on, if one is in reach and
+/// nearer than the block behind it. E on it opens its trades. Walking away
+/// ends a deal.
+pub fn aim_at_villagers(
+    input: Res<Input>,
+    view: Res<ViewCamera>,
+    mut interaction: ResMut<Interaction>,
+    mut trading: ResMut<Trading>,
+    players: Query<&Body, With<Player>>,
+    villagers: Query<(Entity, &Body, &Villager), Without<Player>>,
+) {
+    let eye = view.position;
+    let (yaw, pitch) = (f64::from(view.yaw), f64::from(view.pitch));
+    let dir = DVec3::new(
+        yaw.sin() * pitch.cos(),
+        pitch.sin(),
+        yaw.cos() * pitch.cos(),
+    );
+    let wall = interaction.target.map_or(f64::MAX, |t| t.hit.t);
+    trading.aimed = villagers
+        .iter()
+        .filter_map(|(e, b, v)| {
+            ray_person(eye, dir, b.feet)
+                .filter(|&t| t <= TRADE_REACH_M && t < wall)
+                .map(|t| (e, v.profession, t))
+        })
+        .min_by(|a, b| a.2.total_cmp(&b.2));
+    let feet = players.iter().next().map(|b| b.feet);
+    if let Some((e, _)) = trading.with {
+        let near = villagers
+            .get(e)
+            .ok()
+            .zip(feet)
+            .is_some_and(|((_, b, _), f)| level_distance(b.feet, f) <= TRADE_REACH_M + 1.0);
+        if !near {
+            trading.with = None;
+        }
+    }
+    if input.captured
+        && input.pressed(Key::Interact)
+        && let Some((e, p, _)) = trading.aimed
+    {
+        trading.with = Some((e, p));
+        interaction.opened = Some(Station::Trade(p));
+    }
+}
+
 /// Turns `from` toward `to` by at most `step` radians.
 fn turn(from: f32, to: f32, step: f32) -> f32 {
     use std::f32::consts::{PI, TAU};
@@ -201,8 +298,9 @@ pub fn walk_villagers(
     time: Res<Time>,
     clock: Res<WorldClock>,
     voxels: Res<Voxels>,
+    trading: Res<Trading>,
     players: Query<&Body, (With<Player>, Without<Villager>)>,
-    mut villagers: Query<(&mut Villager, &mut Body, &mut Character), Without<Player>>,
+    mut villagers: Query<(Entity, &mut Villager, &mut Body, &mut Character), Without<Player>>,
 ) {
     let dt = time.fixed_dt;
     let now = time.elapsed;
@@ -217,9 +315,22 @@ pub fn walk_villagers(
         searches -= 1;
         nav::find(world, from, to)
     };
-    for (mut v, mut body, mut c) in &mut villagers {
+    for (e, mut v, mut body, mut c) in &mut villagers {
         body.prev_feet = body.feet;
         let v = &mut *v;
+        // Dealing with someone: stand still and face them.
+        if trading.with.is_some_and(|(t, _)| t == e)
+            && let Some(eye) = eye
+        {
+            if v.doing != Doing::Indoors {
+                v.doing = Doing::Idle { until: now + 2.0 };
+            }
+            body.velocity = DVec3::ZERO;
+            let to = eye - body.feet;
+            c.facing = turn(c.facing, to.x.atan2(to.z) as f32, TURN * dt as f32);
+            c.look_at = Some(eye);
+            continue;
+        }
         // Decide.
         let going_home = matches!(v.doing, Doing::Walking { inside: true, .. });
         match v.doing {
@@ -327,6 +438,7 @@ mod tests {
         Villager {
             village: (0, 0),
             home,
+            profession: Profession::Smith,
             plaza: DVec3::new(4.0, 2.0, 4.0),
             homes: vec![home].into(),
             doing: Doing::Idle { until: 0.0 },
@@ -374,6 +486,19 @@ mod tests {
         let back = game.world.get::<Body>(e).unwrap().feet;
         assert!(in_hut(back), "not home: {back}");
         assert!((back.y - 2.0).abs() < 0.01, "{back}");
+    }
+
+    #[test]
+    fn a_ray_finds_a_person_and_misses_beside_them() {
+        let feet = DVec3::new(10.0, 2.0, 10.0);
+        let eye = DVec3::new(10.0, 3.6, 6.0);
+        let t = ray_person(eye, DVec3::Z, feet).expect("hit");
+        assert!((t - (4.0 - PERSON_RADIUS)).abs() < 1e-9, "{t}");
+        assert!(ray_person(eye + DVec3::X * 0.5, DVec3::Z, feet).is_none());
+        // Over their head, and down onto it from above.
+        assert!(ray_person(DVec3::new(10.0, 4.5, 6.0), DVec3::Z, feet).is_none());
+        let down = ray_person(DVec3::new(10.0, 6.0, 10.0), -DVec3::Y, feet).unwrap();
+        assert!((down - (6.0 - 3.85)).abs() < 1e-9, "{down}");
     }
 
     #[test]
