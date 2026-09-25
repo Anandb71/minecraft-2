@@ -52,6 +52,9 @@ pub enum Demo {
     /// The same villagers, and a charge going off beside them: caught a
     /// third of a second later, thrown limp across the square.
     Ragdoll,
+    /// Arrive and stand still for twenty seconds while the village goes
+    /// about its day.
+    Village,
 }
 
 impl Demo {
@@ -71,6 +74,7 @@ impl Demo {
             "lightning" => Some(Self::Lightning),
             "people" => Some(Self::People),
             "ragdoll" => Some(Self::Ragdoll),
+            "village" => Some(Self::Village),
             _ => None,
         }
     }
@@ -717,6 +721,7 @@ pub fn run(game: &mut Game, demo: Demo) {
             game.input().key_down(Key::Forward);
             tick(game, 45);
         }
+        Demo::Village => tick(game, 1200),
         Demo::Ragdoll => {
             if let Some((feet, ahead)) = villagers(game) {
                 let mut physics = game.world.resource_mut::<mc2_game::physics::Physics>();

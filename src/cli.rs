@@ -106,7 +106,7 @@ usage: minecraft-2 [options]
   --demo <name>          scripted play before a capture: build, lights,
                          mirror, blast, collapse, glass, craft, workshop,
                          flood, shore, wildfire, lightning, people,
-                         ragdoll
+                         ragdoll, village
   --time <hours>         time of day, e.g. 6.5 or 22 (headless: frozen)
   --gi restir|cascades   indirect light method (default: preset)
   --dof <focus_m>,<f>    depth of field for captures (35 mm lens)
