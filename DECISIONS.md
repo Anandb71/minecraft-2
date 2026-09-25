@@ -303,3 +303,9 @@ Both were built behind one output with the same hit shading and denoiser, and me
 - **Climate noise alone.** Temperature and moisture are fields of position. The north and south faces of one ridge share a biome, and limestone country has the same soil as granite.
 - **A plant-competition simulation.** Succession and shade would need a stored map, so a chunk could not be generated on its own.
 - **Aspect and the rock under the soil (chosen).** +z is north. A steep north face is colder and a little wetter, so its snow line and tree line sit lower. Carbonate rock keeps a thin soil and the stone shows through. Both are functions of the column, same on every machine.
+
+## D48. How a character moves
+
+- **Skinned meshes with authored clips.** The usual game character: smooth, but the one thing in the world not made of voxels, lit by a different path, and a clip keyed to time slides its feet at any speed but the authored one.
+- **Physics-driven characters.** Muscles as joint motors balancing a ragdoll every step: lifelike falls, but an unstable gait and a solver cost per villager that a town of them cannot pay.
+- **Voxel parts on a procedural skeleton (chosen).** Eleven parts, each a voxel grid a rigid body can take over as it is. A gait cycle driven by distance travelled, feet planted on the voxels by analytic IK, a head that turns to look. When something knocks a character down, the same parts become a ragdoll: XPBD ball joints with cone limits, one collision group so the parts do not fight where they overlap.

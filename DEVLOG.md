@@ -1050,3 +1050,54 @@ the near upload on the floor.
 
 A connected pad walks and looks with the sticks, opens the pack on Back,
 and drives the inventory cursor. Photo mode stays on P.
+
+## Step 14: Animation, IK, ragdolls, in progress
+
+**Built.** `mc2-anim`, a humanoid of eleven bones whose parts are voxel
+grids at 6.25 cm, 29 voxels (1.81 m) tall.
+
+- Forward kinematics from a root (feet, yaw) and per-bone local rotations,
+  with a hip drop for crouching and a stride's bob.
+- Looks from a seed: four skins, four hair colours, six shirts, four
+  trousers, sleeves, long hair, beards and belts, painted voxel by voxel
+  into the parts. Parts are `BodyShape`s, so a part can become a rigid
+  body as it is.
+- A procedural gait driven by distance, not time: the stride lengthens
+  from 1.3 m walking to 2.4 m running, arms counter-swing, the torso leans
+  and breathes, and jumping and crouching blend in.
+- Feet planted by an analytic two-bone solve on the voxel top nearest
+  each foot, the hips dropping as far as the lower foot needs; the head
+  turns toward what the eyes point at within the neck's reach.
+- `mc2-game::character`: every frame each character is posed from its
+  body's interpolated feet and velocity and its parts are handed to the
+  body renderer under keys above 2^40, clear of physics ids. The player
+  has one, drawn in third person.
+- Ball joints with cone limits in `mc2-physics`, and hinges for knees and
+  elbows (axes held together, the bend kept between two angles): all hard
+  XPBD position constraints every substep, with the relative spin damped
+  at the velocity stage. Jointed bodies advance in
+  the coupled group, bodies sharing a group never collide (a ragdoll's
+  parts overlap at every joint), and a still pair falls asleep together.
+- Characters caught in a blast become ragdolls of their own parts, hung
+  at their joints with a swing per joint (a little at the neck and waist,
+  far at the shoulder; knees fold back and elbows forward only), each part
+  thrown away from the blast by how near it stood, so limbs fly first.
+
+**Measured** (i5-13450HX, while a capture held the GPU and a core):
+
+| | |
+|---|---|
+| posing a character (gait, IK, look, placement) | 1.56 us a frame |
+| 10 ragdolls, 110 bodies, one 120 Hz step | 0.85 ms mean, 2.0 ms worst |
+
+**Rejected.**
+- Skinned meshes: the renderer draws voxels, and a skinned character would
+  be the one thing in the world that is not made of them.
+- Keyframed clips: a stride keyed to time slides on slopes and at any
+  speed but the authored one; a distance-driven cycle cannot.
+- Per-pair collision filters for ragdolls: a group id per body is one
+  compare in the broad phase and covers the arm touching the torso as
+  well as the joint itself.
+
+**Known.** Villagers stand where a demo puts them; step 15 gives them
+somewhere to go. A ragdoll never gets up again.
