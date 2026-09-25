@@ -196,7 +196,7 @@ What it cost: [DEVLOG.md](DEVLOG.md).
 | done | Fire, heat, wind, weather | `v0.12-weather` |
 | now | Worldgen v2: tectonics, caves, ecology | |
 | done | Animation, IK, ragdolls | `v0.14-animation` |
-| now | NPCs, economy, vehicles | |
+| done | NPCs, economy, vehicles | `v0.15-people` |
 | next | Traced audio | |
 | next | Persistence, settings, polish | |
 

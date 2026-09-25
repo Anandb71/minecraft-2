@@ -1127,12 +1127,13 @@ engine's own stills.
 - A 2560x1440 capture on the top tier spends about three minutes
   streaming before its frames on the RTX 3050 Laptop GPU.
 
-## Step 15: People, trade, vehicles, in progress
+## Step 15: People, trade, vehicles (`v0.15-people`)
 
 **Built.**
 
 - Homes: a village records each house's door (on the ground a stride past
-  its step) and a spot on its floor.
+  its step) and a spot on its floor; a town, each building's street door
+  and its ground floor.
 - Walking: A* over half-metre columns of the voxels themselves. A column
   is standable with a solid top and 1.9 m of head room; a neighbour is
   reachable within 0.55 m up or 1.1 m down and with nothing between at
@@ -1154,8 +1155,14 @@ engine's own stills.
   its grip, all as velocity impulses before integration. The car is one
   4 m voxel body (1215 kg): painted shell, glass cabin, seats, chrome,
   headlights and tail lights that light the road, and wheels held 3 cm
-  clear of the ground by the springs. Every village keeps one by its
-  square. E gets in and out; a chase camera follows.
+  clear of the ground by the springs, drawn apart from the body so they
+  turn with the road and the steering. A wheel stands only on a voxel
+  with air over it, and a car past sixty degrees gets no push from its
+  wheels. Every village keeps a car by its square, a town three. E gets
+  in and out, or sets an overturned car back on its wheels; a chase
+  camera follows.
+- Villagers give way: one with someone just ahead waits, and after three
+  seconds goes somewhere else.
 
 **Measured** (i5-13450HX):
 
@@ -1168,6 +1175,6 @@ engine's own stills.
 
 **Rejected.** See D50 and D51.
 
-**Known.** Towns have no homes, so nobody lives in them yet, and nothing
-parks on their streets. A car's wheels do not turn. Villagers walk
-through one another.
+**Known.** Villagers do not drive, and nobody lives above a town's ground
+floor. Cars do not collide with villagers, who give way only to each
+other. A capture ended with a car on its side after a crash; E rights it.
