@@ -7,4 +7,5 @@
 //! they swallow, and so the reverb's decay and the early echoes; a ray to
 //! each source gives how much of the world stands between.
 
+pub mod acoustics;
 pub mod dsp;
