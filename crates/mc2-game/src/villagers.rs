@@ -39,6 +39,10 @@ const RISE: f64 = 6.5;
 const DUSK: f64 = 20.25;
 /// A villager turns its head to someone this near, metres.
 const NOTICE_M: f64 = 5.0;
+/// Someone this near the spot half a metre ahead is in the way, metres;
+/// after waiting this long for them, go somewhere else, seconds.
+const PERSONAL_M: f64 = 0.8;
+const GIVE_WAY_S: f32 = 3.0;
 /// Columns of path search a tick, across every villager: a long search
 /// runs over several ticks rather than holding one up.
 const COLUMNS_PER_TICK: usize = 300;
@@ -78,6 +82,8 @@ pub struct Villager {
     homes: Arc<[Home]>,
     pub doing: Doing,
     rng: u64,
+    /// Seconds spent waiting for someone in the way.
+    blocked: f32,
 }
 
 impl Villager {
@@ -197,6 +203,7 @@ pub fn people_villages(
                     Doing::Indoors
                 },
                 rng: seed | 1,
+                blocked: 0.0,
             };
             let mut c = Character::new(Look::from_seed(seed));
             c.facing = (villager.roll() * std::f64::consts::TAU) as f32;
@@ -335,6 +342,8 @@ pub fn walk_villagers(
         },
         None => Doing::Idle { until: now + 2.0 },
     };
+    // Where everyone stands, to give way to one another.
+    let everyone: Vec<(Entity, DVec3)> = villagers.iter().map(|(e, _, b, _)| (e, b.feet)).collect();
     for (e, mut v, mut body, mut c) in &mut villagers {
         body.prev_feet = body.feet;
         let v = &mut *v;
@@ -388,6 +397,30 @@ pub fn walk_villagers(
         };
         if let Some(doing) = found {
             v.doing = doing;
+        }
+        // Give way: someone just ahead, stand until they pass; if they do
+        // not, go somewhere else.
+        if let Doing::Walking { path, next, .. } = &v.doing
+            && let Some(target) = path.get(*next)
+        {
+            let d = DVec3::new(target.x - body.feet.x, 0.0, target.z - body.feet.z);
+            let ahead = body.feet + d.normalize_or_zero() * 0.5;
+            let in_way = everyone.iter().any(|&(o, at)| {
+                o != e && level_distance(at, ahead) < PERSONAL_M && (at.y - ahead.y).abs() < 1.5
+            });
+            if in_way {
+                v.blocked += dt as f32;
+                if v.blocked > GIVE_WAY_S {
+                    v.blocked = 0.0;
+                    v.doing = Doing::Idle {
+                        until: now + 1.0 + v.roll() * 2.0,
+                    };
+                }
+                body.velocity = DVec3::ZERO;
+                c.look_at = eye.filter(|e| e.distance(body.feet) < NOTICE_M);
+                continue;
+            }
+            v.blocked = 0.0;
         }
         // Walk.
         if let Doing::Walking { path, next, inside } = &mut v.doing {
@@ -467,6 +500,7 @@ mod tests {
             homes: vec![home].into(),
             doing: Doing::Idle { until: 0.0 },
             rng: 7,
+            blocked: 0.0,
         }
     }
 
@@ -530,5 +564,51 @@ mod tests {
         let a = turn(3.0, -3.0, 0.1);
         assert!(a > 3.0, "{a}");
         assert!((turn(0.0, 0.05, 0.1) - 0.05).abs() < 1e-6);
+    }
+
+    #[test]
+    fn villagers_give_way_rather_than_walk_through_each_other() {
+        let mut game = crate::Game::new();
+        game.world.resource_mut::<Voxels>().0 = hamlet();
+        game.clock().set_hour(9.0);
+        game.clock().paused = true;
+        let home = Home {
+            door: Vec3::new(11.0, 2.0, 7.5),
+            inside: Vec3::new(11.0, 2.0, 11.0),
+        };
+        // Two walkers on one line, heading for each other's start.
+        let (a, b) = (DVec3::new(2.0, 2.0, 4.0), DVec3::new(7.0, 2.0, 4.0));
+        let walker = |from: DVec3, to: DVec3| Villager {
+            doing: Doing::Walking {
+                path: vec![from, to],
+                next: 1,
+                inside: false,
+            },
+            ..villager(home)
+        };
+        let ea = game
+            .world
+            .spawn((
+                Body::at(a),
+                Character::new(Look::from_seed(1)),
+                walker(a, b),
+            ))
+            .id();
+        let eb = game
+            .world
+            .spawn((
+                Body::at(b),
+                Character::new(Look::from_seed(2)),
+                walker(b, a),
+            ))
+            .id();
+        let mut closest = f64::MAX;
+        for _ in 0..240 {
+            game.update(1.0 / 60.0);
+            let pa = game.world.get::<Body>(ea).unwrap().feet;
+            let pb = game.world.get::<Body>(eb).unwrap().feet;
+            closest = closest.min(level_distance(pa, pb));
+        }
+        assert!(closest > 0.5, "walked into each other: {closest}");
     }
 }
