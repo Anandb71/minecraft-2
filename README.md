@@ -195,7 +195,7 @@ What it cost: [DEVLOG.md](DEVLOG.md).
 | done | Water: lattice Boltzmann on the GPU | `v0.11-fluids` |
 | done | Fire, heat, wind, weather | `v0.12-weather` |
 | now | Worldgen v2: tectonics, caves, ecology | |
-| now | Animation, IK, ragdolls | |
+| done | Animation, IK, ragdolls | `v0.14-animation` |
 | next | NPCs, economy, vehicles | |
 | next | Traced audio | |
 | next | Persistence, settings, polish | |

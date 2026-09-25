@@ -1051,7 +1051,7 @@ the near upload on the floor.
 A connected pad walks and looks with the sticks, opens the pack on Back,
 and drives the inventory cursor. Photo mode stays on P.
 
-## Step 14: Animation, IK, ragdolls, in progress
+## Step 14: Animation, IK, ragdolls (`v0.14-animation`)
 
 **Built.** `mc2-anim`, a humanoid of eleven bones whose parts are voxel
 grids at 6.25 cm, 29 voxels (1.81 m) tall.
