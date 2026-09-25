@@ -324,10 +324,12 @@ pub fn drive_cars(
         return;
     };
     let key = |k: Key| if input.held(k) { 1.0 } else { 0.0 };
+    // Keys or the left stick (x right, y forward).
+    let stick = input.move_axis;
     let (throttle, steer, brake) = if input.captured {
         (
-            key(Key::Forward) - key(Key::Back),
-            key(Key::Left) - key(Key::Right),
+            (key(Key::Forward) - key(Key::Back) + stick.y).clamp(-1.0, 1.0),
+            (key(Key::Left) - key(Key::Right) - stick.x).clamp(-1.0, 1.0),
             key(Key::Jump),
         )
     } else {
