@@ -373,6 +373,21 @@ pub fn enter_cars(
             (d < ENTER_M + f64::from(body.shape.radius) * 0.5).then_some((i, d))
         })
         .min_by(|a, b| a.1.total_cmp(&b.1));
+    // One on its side or its roof is set back on its wheels instead, a
+    // little above where it lay, facing the way it did.
+    if let Some((i, _)) = nearest
+        && let Some(body) = physics.host.body(garage.cars[i].body)
+    {
+        let up = body.grid_rotation() * Vec3::Y;
+        if up.y < 0.5 {
+            let ahead = body.grid_rotation() * Vec3::Z;
+            let yaw = ahead.x.atan2(ahead.z);
+            let upright = Quat::from_rotation_y(yaw) * body.shape.principal;
+            let (id, pos) = (body.id, body.pos + DVec3::Y * 1.0);
+            physics.host.place(id, pos, upright);
+            return;
+        }
+    }
     if let Some((i, _)) = nearest {
         garage.driving = Some(i);
         p.seated = true;
@@ -581,5 +596,163 @@ mod tests {
             "{} vs {end}",
             b.feet
         );
+    }
+
+    #[test]
+    fn a_car_driven_into_a_house_stays_on_its_wheels() {
+        use mc2_voxel::world::VoxelWorld;
+        let mut game = crate::Game::new();
+        let mut w = VoxelWorld::new();
+        w.fill_box(IVec3::ZERO, IVec3::new(1023, 31, 1023), ids::GRANITE);
+        // A house wall across the way ten metres on, on a plinth of
+        // stone standing out from its foot.
+        w.fill_box(
+            IVec3::new(0, 32, 672),
+            IVec3::new(1023, 39, 679),
+            ids::STONE_BRICK,
+        );
+        w.fill_box(
+            IVec3::new(0, 32, 676),
+            IVec3::new(1023, 111, 691),
+            ids::RED_BRICK,
+        );
+        game.world.resource_mut::<Voxels>().0 = w;
+        let body = {
+            let mut garage = game.world.remove_resource::<Garage>().unwrap();
+            let mut physics = game.world.resource_mut::<Physics>();
+            let id = garage.park(
+                &mut physics,
+                &car(ids::PAINT_RED),
+                DVec3::new(30.0, 2.05, 28.0),
+                0.0,
+            );
+            game.world.insert_resource(garage);
+            id
+        };
+        game.spawn_player(DVec3::new(33.0, 2.0, 30.0), 0.0, 0.0);
+        for _ in 0..60 {
+            game.update(1.0 / 60.0);
+        }
+        game.input().captured = true;
+        game.input().key_down(Key::Interact);
+        game.update(1.0 / 60.0);
+        game.input().key_up(Key::Interact);
+        game.input().key_down(Key::Forward);
+        let mut worst = 1.0f32;
+        for _ in 0..360 {
+            game.update(1.0 / 60.0);
+            let b = game
+                .world
+                .resource::<Physics>()
+                .host
+                .body(body)
+                .unwrap()
+                .clone();
+            worst = worst.min((b.grid_rotation() * Vec3::Y).y);
+        }
+        assert!(worst > 0.7, "reared up: up.y fell to {worst}");
+    }
+
+    #[test]
+    fn a_hard_turn_at_speed_does_not_roll_it() {
+        use mc2_voxel::world::VoxelWorld;
+        let mut game = crate::Game::new();
+        let mut w = VoxelWorld::new();
+        w.fill_box(IVec3::ZERO, IVec3::new(1023, 31, 1023), ids::GRANITE);
+        game.world.resource_mut::<Voxels>().0 = w;
+        let body = {
+            let mut garage = game.world.remove_resource::<Garage>().unwrap();
+            let mut physics = game.world.resource_mut::<Physics>();
+            let id = garage.park(
+                &mut physics,
+                &car(ids::PAINT_RED),
+                DVec3::new(30.0, 2.05, 10.0),
+                0.0,
+            );
+            game.world.insert_resource(garage);
+            id
+        };
+        game.spawn_player(DVec3::new(33.0, 2.0, 12.0), 0.0, 0.0);
+        for _ in 0..60 {
+            game.update(1.0 / 60.0);
+        }
+        game.input().captured = true;
+        game.input().key_down(Key::Interact);
+        game.update(1.0 / 60.0);
+        game.input().key_up(Key::Interact);
+        // Flat out, then full lock.
+        game.input().key_down(Key::Forward);
+        for _ in 0..150 {
+            game.update(1.0 / 60.0);
+        }
+        game.input().key_down(Key::Left);
+        let mut worst = 1.0f32;
+        for _ in 0..240 {
+            game.update(1.0 / 60.0);
+            let b = game
+                .world
+                .resource::<Physics>()
+                .host
+                .body(body)
+                .unwrap()
+                .clone();
+            worst = worst.min((b.grid_rotation() * Vec3::Y).y);
+        }
+        assert!(worst > 0.8, "rolled: up.y fell to {worst}");
+    }
+
+    #[test]
+    fn e_beside_an_overturned_car_rights_it() {
+        use mc2_voxel::world::VoxelWorld;
+        let mut game = crate::Game::new();
+        let mut w = VoxelWorld::new();
+        w.fill_box(IVec3::ZERO, IVec3::new(1023, 31, 1023), ids::GRANITE);
+        game.world.resource_mut::<Voxels>().0 = w;
+        let body = {
+            let mut garage = game.world.remove_resource::<Garage>().unwrap();
+            let mut physics = game.world.resource_mut::<Physics>();
+            let id = garage.park(
+                &mut physics,
+                &car(ids::PAINT_RED),
+                DVec3::new(30.0, 2.05, 10.0),
+                0.0,
+            );
+            game.world.insert_resource(garage);
+            id
+        };
+        game.spawn_player(DVec3::new(33.5, 2.0, 12.0), 0.0, 0.0);
+        for _ in 0..30 {
+            game.update(1.0 / 60.0);
+        }
+        // Roll it onto its side.
+        {
+            let host = &mut game.world.resource_mut::<Physics>().host;
+            let b = host.body(body).unwrap().clone();
+            let side = Quat::from_rotation_z(1.5) * b.rot;
+            host.place(body, b.pos + DVec3::Y * 0.4, side);
+        }
+        for _ in 0..120 {
+            game.update(1.0 / 60.0);
+        }
+        let up = |g: &crate::Game| {
+            let b = g
+                .world
+                .resource::<Physics>()
+                .host
+                .body(body)
+                .unwrap()
+                .clone();
+            (b.grid_rotation() * Vec3::Y).y
+        };
+        assert!(up(&game) < 0.5, "did not fall over: {}", up(&game));
+        game.input().captured = true;
+        game.input().key_down(Key::Interact);
+        game.update(1.0 / 60.0);
+        game.input().key_up(Key::Interact);
+        for _ in 0..120 {
+            game.update(1.0 / 60.0);
+        }
+        assert!(up(&game) > 0.95, "still over: {}", up(&game));
+        assert!(game.world.resource::<Garage>().driving.is_none());
     }
 }

@@ -60,6 +60,12 @@ pub enum Command {
     },
     /// Puts a body on wheels.
     Vehicle(Vehicle),
+    /// Puts a body at a pose, still.
+    Place {
+        body: BodyId,
+        pos: DVec3,
+        rot: Quat,
+    },
     /// A vehicle's controls: throttle and steering -1..1, brake 0..1.
     Drive {
         body: BodyId,
@@ -179,6 +185,19 @@ impl Sim {
                     }
                 }
                 Command::Vehicle(v) => self.world.add_vehicle(v),
+                Command::Place { body, pos, rot } => {
+                    if let Some(b) = self.world.body_mut(body) {
+                        b.pos = pos;
+                        b.rot = rot;
+                        b.prev_pos = pos;
+                        b.prev_rot = rot;
+                        b.step_start_pos = pos;
+                        b.step_start_rot = rot;
+                        b.vel = Vec3::ZERO;
+                        b.ang_vel = Vec3::ZERO;
+                        b.wake();
+                    }
+                }
                 Command::Drive {
                     body,
                     throttle,
@@ -440,6 +459,11 @@ impl PhysicsHost {
         };
         self.commands.push(Command::Vehicle(vehicle));
         id
+    }
+
+    /// Puts a body at a pose (centre of mass and principal frame), still.
+    pub fn place(&mut self, body: BodyId, pos: DVec3, rot: Quat) {
+        self.commands.push(Command::Place { body, pos, rot });
     }
 
     /// Sets a vehicle's controls.
