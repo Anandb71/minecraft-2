@@ -3,7 +3,8 @@
 //! Hand recipes work anywhere; table recipes need a crafting table within
 //! reach, furnace recipes a furnace and fuel. The furnace burns one fuel
 //! item at a time into heat (coal smelts eight things, a log three) and
-//! each smelt spends one heat.
+//! each smelt spends one heat. Trades are recipes too, made with a
+//! villager of the right trade, and gold ingots are the money.
 
 use crate::blocks::BlockKind;
 use crate::inventory::Inventory;
@@ -16,6 +17,8 @@ pub enum Station {
     Hand,
     Table,
     Furnace,
+    /// Bought from, or sold to, a villager of this trade.
+    Trade(Profession),
 }
 
 impl Station {
@@ -24,6 +27,34 @@ impl Station {
             Station::Hand => "hand",
             Station::Table => "crafting table",
             Station::Furnace => "furnace",
+            Station::Trade(p) => p.name(),
+        }
+    }
+}
+
+/// What a villager does for a living, and so what it trades in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Profession {
+    Woodcutter,
+    Mason,
+    Smith,
+    Miner,
+}
+
+impl Profession {
+    pub const ALL: [Profession; 4] = [
+        Profession::Woodcutter,
+        Profession::Mason,
+        Profession::Smith,
+        Profession::Miner,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Profession::Woodcutter => "woodcutter",
+            Profession::Mason => "mason",
+            Profession::Smith => "smith",
+            Profession::Miner => "miner",
         }
     }
 }
@@ -33,6 +64,8 @@ impl Station {
 pub struct Near {
     pub table: bool,
     pub furnace: bool,
+    /// The trade of the villager being traded with, if any.
+    pub trader: Option<Profession>,
 }
 
 impl Near {
@@ -41,6 +74,7 @@ impl Near {
             Station::Hand => true,
             Station::Table => self.table,
             Station::Furnace => self.furnace,
+            Station::Trade(p) => self.trader == Some(p),
         }
     }
 }
@@ -299,7 +333,44 @@ fn build() -> Vec<Recipe> {
             &[(it(Item::IronIngot), 1), (AnyCoal, 1)],
         ),
     ]);
+    r.extend(trades());
     r
+}
+
+/// What villagers sell and buy, for gold ingots: a woodcutter's timber and
+/// axes, a mason's cut stone and glass, a smith's metal and picks, a
+/// miner's coal and charges.
+fn trades() -> Vec<Recipe> {
+    use Ingredient::{AnyLog, AnyStone};
+    use Profession::*;
+    let it = Ingredient::Item;
+    let gold = |n: u32| (it(Item::GoldIngot), n);
+    let at = Station::Trade;
+    vec![
+        recipe(Item::solid(ids::OAK_LOG), 12, at(Woodcutter), &[gold(1)]),
+        recipe(Item::GoldIngot, 1, at(Woodcutter), &[(AnyLog, 24)]),
+        recipe(
+            Item::Tool(ToolKind::Axe, Tier::Steel),
+            1,
+            at(Woodcutter),
+            &[gold(3)],
+        ),
+        recipe(Item::solid(ids::STONE_BRICK), 16, at(Mason), &[gold(1)]),
+        recipe(Item::solid(ids::GLASS), 8, at(Mason), &[gold(1)]),
+        recipe(Item::GoldIngot, 1, at(Mason), &[(AnyStone, 48)]),
+        recipe(Item::IronIngot, 3, at(Smith), &[gold(1)]),
+        recipe(Item::SteelIngot, 1, at(Smith), &[gold(2)]),
+        recipe(
+            Item::Tool(ToolKind::Pickaxe, Tier::Steel),
+            1,
+            at(Smith),
+            &[gold(4)],
+        ),
+        recipe(Item::GoldIngot, 1, at(Smith), &[(it(Item::IronIngot), 6)]),
+        recipe(Item::Coal, 10, at(Miner), &[gold(1)]),
+        recipe(Item::solid(ids::TNT), 2, at(Miner), &[gold(3)]),
+        recipe(Item::GoldIngot, 1, at(Miner), &[(it(Item::RawCopper), 8)]),
+    ]
 }
 
 /// Fuel burns in this order: coal first, the wood it would be a shame to
@@ -383,6 +454,7 @@ mod tests {
         let at_table = Near {
             table: true,
             furnace: false,
+            ..Near::default()
         };
         craft(&mut inv, pick, at_table).unwrap();
         assert_eq!(inv.count(|i| i.tool().is_some()), 1);
@@ -399,6 +471,7 @@ mod tests {
         let near = Near {
             table: false,
             furnace: true,
+            ..Near::default()
         };
         assert_eq!(check(&inv, glass, near), Err(CraftError::NoFuel));
         inv.add(Item::Coal, 1);
@@ -423,6 +496,7 @@ mod tests {
         let near = Near {
             table: true,
             furnace: false,
+            ..Near::default()
         };
         assert_eq!(
             craft(&mut inv, tnt, near),
@@ -442,6 +516,45 @@ mod tests {
                 assert!(*n > 0);
                 assert!(ing.matches(ing.example()), "{}", ing.name());
             }
+        }
+    }
+
+    #[test]
+    fn a_trade_needs_its_trader_and_the_gold() {
+        let mut inv = Inventory::default();
+        let buy = recipes()
+            .iter()
+            .find(|r| r.station == Station::Trade(Profession::Smith) && r.output == Item::IronIngot)
+            .expect("a smith sells iron");
+        inv.add(Item::GoldIngot, 1);
+        // Not without a smith to buy from, nor from a mason.
+        assert_eq!(
+            check(&inv, buy, Near::default()),
+            Err(CraftError::Station(buy.station))
+        );
+        let mason = Near {
+            trader: Some(Profession::Mason),
+            ..Near::default()
+        };
+        assert!(check(&inv, buy, mason).is_err());
+        let smith = Near {
+            trader: Some(Profession::Smith),
+            ..Near::default()
+        };
+        craft(&mut inv, buy, smith).expect("bought");
+        assert_eq!(inv.count(|i| i == Item::IronIngot), 3);
+        assert_eq!(inv.count(|i| i == Item::GoldIngot), 0);
+        assert_eq!(
+            craft(&mut inv, buy, smith),
+            Err(CraftError::Missing(Ingredient::Item(Item::GoldIngot)))
+        );
+        // Every trade has gold on one side.
+        let gold = Ingredient::Item(Item::GoldIngot);
+        for r in recipes()
+            .iter()
+            .filter(|r| matches!(r.station, Station::Trade(_)))
+        {
+            assert!(r.output == Item::GoldIngot || r.inputs.iter().any(|(i, _)| *i == gold));
         }
     }
 }

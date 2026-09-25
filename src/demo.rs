@@ -153,6 +153,7 @@ fn make(game: &mut Game, output: Item, times: u32) {
     let near = crafting::Near {
         table: true,
         furnace: true,
+        ..crafting::Near::default()
     };
     let now = game.world.resource::<mc2_game::input::Time>().elapsed;
     let recipe = crafting::recipes()

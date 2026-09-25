@@ -50,6 +50,7 @@ impl Tab {
             Tab::At(Station::Hand) => "hand",
             Tab::At(Station::Table) => "table",
             Tab::At(Station::Furnace) => "furnace",
+            Tab::At(Station::Trade(_)) => "trade",
             Tab::Catalogue => "catalogue",
         }
     }
@@ -333,6 +334,9 @@ impl Screen {
             Tab::At(Station::Table),
             Tab::At(Station::Furnace),
         ];
+        if let Some(p) = near.trader {
+            tabs.push(Tab::At(Station::Trade(p)));
+        }
         if inv.creative {
             tabs.push(Tab::Catalogue);
         }
@@ -440,7 +444,8 @@ impl Screen {
             .enumerate()
             .filter(|(_, r)| match self.tab {
                 Tab::At(s) => r.station == s,
-                _ => true,
+                // Trades belong to their traders, not the book.
+                _ => !matches!(r.station, Station::Trade(_)) || near.has(r.station),
             })
             .map(|(i, r)| (i, r, crafting::check(inv, r, near).is_ok()))
             .collect();
@@ -473,16 +478,17 @@ impl Screen {
             hud.text(r.x + 56.0, y + 8.0, 2.0, ink, &name);
             let station_ok = inv.creative || near.has(recipe.station);
             let where_ = match recipe.station {
-                Station::Hand => "by hand",
-                Station::Table => "at a crafting table",
-                Station::Furnace => "in a furnace, with fuel",
+                Station::Hand => "by hand".to_owned(),
+                Station::Table => "at a crafting table".to_owned(),
+                Station::Furnace => "in a furnace, with fuel".to_owned(),
+                Station::Trade(p) => format!("traded with a {}", p.name()),
             };
             let where_colour = if station_ok {
                 rgba(140, 200, 140, 255)
             } else {
                 rgba(230, 150, 90, 255)
             };
-            hud.text(r.x + 56.0, y + 28.0, 1.0, where_colour, where_);
+            hud.text(r.x + 56.0, y + 28.0, 1.0, where_colour, &where_);
             // Ingredients from the right: icon and have/need.
             let mut ix = r.x + r.w - 8.0;
             for &(ing, need) in recipe.inputs.iter().rev() {
