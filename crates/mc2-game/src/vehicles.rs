@@ -260,6 +260,8 @@ pub fn enter_cars(
     if let Some((i, _)) = nearest {
         garage.driving = Some(i);
         p.seated = true;
+        // Seen from behind to start with; F5 for the driver's seat.
+        p.view = crate::player::View::ThirdPerson;
     }
 }
 

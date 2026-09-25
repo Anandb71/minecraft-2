@@ -1,8 +1,11 @@
-//! The render camera derived from the player each frame.
+//! The render camera derived from the player each frame: at the eyes, over
+//! the shoulder, or behind the car being driven.
 
 use crate::Voxels;
 use crate::input::Time;
+use crate::physics::Physics;
 use crate::player::{Body, Player, View};
+use crate::vehicles::Garage;
 use bevy_ecs::prelude::*;
 use glam::DVec3;
 use mc2_voxel::march::raycast_filtered;
@@ -19,6 +22,8 @@ pub struct ViewCamera {
 pub fn update_view(
     voxels: Res<Voxels>,
     time: Res<Time>,
+    garage: Res<Garage>,
+    physics: Res<Physics>,
     players: Query<(&Player, &Body)>,
     mut view: ResMut<ViewCamera>,
 ) {
@@ -29,6 +34,23 @@ pub fn update_view(
     let eye = feet + DVec3::Y * (p.eye() - p.step_smoothing);
     view.yaw = p.yaw;
     view.pitch = p.pitch;
+    // Driving, seen from behind: follow the car, pulled in front of
+    // anything between.
+    let car = garage.driven().and_then(|c| physics.host.body(c.body));
+    if let (true, View::ThirdPerson, Some(car)) = (p.seated, p.view, car) {
+        let (eye, at) = crate::vehicles::chase(car, time.alpha);
+        let to = eye - at;
+        let far = to.length();
+        let dir = to / far;
+        let reach = raycast_filtered(&voxels.0, at, dir, far, crate::collide::blocks_movement)
+            .map_or(far, |h| (h.t - 0.3).max(1.0));
+        let pos = at + dir * reach;
+        let look = (at - pos).normalize();
+        view.position = pos;
+        view.yaw = look.x.atan2(look.z) as f32;
+        view.pitch = look.y.asin() as f32;
+        return;
+    }
     view.position = match p.view {
         View::FirstPerson => eye,
         View::ThirdPerson => {
