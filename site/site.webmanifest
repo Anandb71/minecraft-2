@@ -1,11 +1,11 @@
 {
   "name": "Minecraft 2",
   "short_name": "MC2",
-  "description": "A 16 km continent of 6.25 cm voxels. The GPU marches them.",
+  "description": "A voxel world, ray traced. Rain soaks it, fire takes it, water floods it, TNT breaks it.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#141820",
-  "theme_color": "#141820",
+  "background_color": "#0e0906",
+  "theme_color": "#0e0906",
   "icons": [
     { "src": "/android-chrome-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "/android-chrome-512.png", "sizes": "512x512", "type": "image/png" }
