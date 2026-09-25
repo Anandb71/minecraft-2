@@ -427,6 +427,14 @@ struct Tile {
     hi_y: f32,
 }
 
+/// Where someone lives: the ground outside a house's door, and the floor
+/// inside it (metres).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Home {
+    pub door: Vec3,
+    pub inside: Vec3,
+}
+
 pub struct Village {
     pub centre: Vec3,
     /// A town of streets and tall buildings rather than a village.
@@ -438,6 +446,8 @@ pub struct Village {
     /// Footprints (x, z min and max) of everything built, where no tree
     /// may grow.
     pub claimed: Vec<(Vec2, Vec2)>,
+    /// Its houses, for the people who live in them.
+    pub homes: Vec<Home>,
 }
 
 struct Rand(u64);
@@ -574,6 +584,7 @@ struct Builder<'a> {
     surface: &'a Surface,
     ops: Vec<Op>,
     claimed: Vec<(Vec2, Vec2)>,
+    homes: Vec<Home>,
 }
 
 impl Builder<'_> {
@@ -839,6 +850,20 @@ impl Builder<'_> {
             ),
         };
         self.ops.push(b(slo, shi, ids::STONE_BRICK));
+        // Someone lives here: the ground a stride beyond the step, and the
+        // middle of the floor.
+        let out = match facing {
+            Facing::NegZ => Vec2::new(0.0, -1.0),
+            Facing::PosZ => Vec2::new(0.0, 1.0),
+            Facing::NegX => Vec2::new(-1.0, 0.0),
+            Facing::PosX => Vec2::new(1.0, 0.0),
+        };
+        let mid = Vec2::new((door_lo.x + door_hi.x) * 0.5, (door_lo.z + door_hi.z) * 0.5);
+        let door = mid + out * 1.8;
+        self.homes.push(Home {
+            door: v3(door.x, self.ground(door.x, door.y), door.y),
+            inside: v3((x0 + x1) * 0.5, floor + t, (z0 + z1) * 0.5),
+        });
         // Roof: the gable over the longer side, walls up into its ends, the
         // attic hollow, then the covering overhanging every wall.
         let ridge_x = (x1 - x0) >= (z1 - z0);
@@ -1007,6 +1032,7 @@ fn plan(surface: &Surface, centre: Vec3, seed: u64) -> Village {
         surface,
         ops: Vec::new(),
         claimed: Vec::new(),
+        homes: Vec::new(),
     };
     let c = Vec2::new(centre.x, centre.z);
     // Plaza: cobbles, and a well with a roof on four posts.
@@ -1135,12 +1161,18 @@ fn plan(surface: &Surface, centre: Vec3, seed: u64) -> Village {
             d += rng.range(10.0, 13.0);
         }
     }
-    assemble(centre, bld.ops, bld.claimed, false)
+    assemble(centre, bld.ops, bld.claimed, bld.homes, false)
 }
 
 /// A settlement from its operations: bounds, and the operations bucketed
 /// by the squares they reach.
-fn assemble(centre: Vec3, ops: Vec<Op>, claimed: Vec<(Vec2, Vec2)>, town: bool) -> Village {
+fn assemble(
+    centre: Vec3,
+    ops: Vec<Op>,
+    claimed: Vec<(Vec2, Vec2)>,
+    homes: Vec<Home>,
+    town: bool,
+) -> Village {
     let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
     let mut tiles: FxHashMap<(i32, i32), Tile> = FxHashMap::default();
     for (n, op) in ops.iter().enumerate() {
@@ -1169,6 +1201,7 @@ fn assemble(centre: Vec3, ops: Vec<Op>, claimed: Vec<(Vec2, Vec2)>, town: bool) 
         lo,
         hi,
         claimed,
+        homes,
     }
 }
 
@@ -1196,7 +1229,8 @@ impl Settlements {
         let v = self.site(surface, i, k).map(|(centre, h, town)| {
             Arc::new(if town {
                 let (ops, claimed) = crate::town::plan(surface, centre, h);
-                assemble(centre, ops, claimed, true)
+                // Towns have no homes yet: nobody lives in them.
+                assemble(centre, ops, claimed, Vec::new(), true)
             } else {
                 plan(surface, centre, h)
             })
@@ -1430,5 +1464,54 @@ impl Village {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::erosion::ErosionParams;
+    use crate::terrain::{CoarseTerrain, TerrainParams};
+
+    #[test]
+    fn every_village_house_is_a_home_with_its_door_outside() {
+        let params = TerrainParams {
+            size: 128,
+            cell_m: 128.0,
+            sea_level: 96.0,
+            erosion: ErosionParams {
+                iterations: 60,
+                ..Default::default()
+            },
+        };
+        let cells = (params.extent_m() / VILLAGE_CELL_M) as i32;
+        let surface = Surface::new(Arc::new(CoarseTerrain::generate(7, params, &mut |_, _| {})));
+        let settlements = Settlements::new(7);
+        let mut villages = 0;
+        for k in 0..cells {
+            for i in 0..cells {
+                let Some(v) = settlements.village(&surface, i, k) else {
+                    continue;
+                };
+                if v.town {
+                    continue;
+                }
+                villages += 1;
+                assert!(!v.homes.is_empty(), "nobody lives at {}", v.centre);
+                for h in &v.homes {
+                    let within = |p: Vec3| {
+                        v.claimed
+                            .iter()
+                            .any(|(a, b)| p.x > a.x && p.x < b.x && p.z > a.y && p.z < b.y)
+                    };
+                    // The floor is under a roof, the door a few steps from it
+                    // and no higher than the floor.
+                    assert!(within(h.inside), "{h:?}");
+                    assert!(h.door.distance(h.inside) < 12.0, "{h:?}");
+                    assert!(h.door.y <= h.inside.y + 0.1, "{h:?}");
+                }
+            }
+        }
+        assert!(villages > 0, "no villages on the test map");
     }
 }
