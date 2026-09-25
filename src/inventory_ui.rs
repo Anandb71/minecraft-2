@@ -314,11 +314,21 @@ impl Screen {
             "furnace: none in reach".to_owned()
         };
         line(hud, y, status(near.furnace), &fire);
+        if let Some(p) = near.trader {
+            y += 20.0;
+            line(
+                hud,
+                y,
+                status(true),
+                &format!("trading with a {}", p.name()),
+            );
+        }
         y += 30.0;
         for hint in [
             "left: pick up / put down   right: half / one",
             "shift: move to or from the hotbar   1-9: swap",
-            "E on TNT lights it   I or Esc closes   pad: LS cursor  A pick  X half  B close",
+            "E on TNT lights it, on a villager trades   I or Esc closes",
+            "pad: LS cursor  A pick  X half  B close",
         ] {
             hud.text(lx, y, 1.0, dim(), hint);
             y += 14.0;
