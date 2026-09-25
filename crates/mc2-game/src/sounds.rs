@@ -29,6 +29,8 @@ pub struct Heard {
     pub sound: Sound,
     pub at: DVec3,
     pub gain: f32,
+    /// When it happened, game seconds.
+    pub time: f64,
 }
 
 /// This frame's sounds and the beds' levels.
@@ -36,11 +38,18 @@ pub struct Heard {
 pub struct Sounds {
     pub events: Vec<Heard>,
     pub beds: Beds,
+    /// The game's time now, to stamp what is heard with.
+    pub now: f64,
 }
 
 impl Sounds {
     pub fn hear(&mut self, sound: Sound, at: DVec3, gain: f32) {
-        self.events.push(Heard { sound, at, gain });
+        self.events.push(Heard {
+            sound,
+            at,
+            gain,
+            time: self.now,
+        });
     }
 
     /// Hands over this frame's events.
@@ -77,10 +86,12 @@ pub fn hardness_of(m: MaterialId) -> f32 {
 /// Every fixed tick: a footstep for every stride a walker covers on the
 /// ground, sounding of what is underfoot (or the water it wades in).
 pub fn footsteps(
+    time: Res<crate::input::Time>,
     voxels: Res<Voxels>,
     mut sounds: ResMut<Sounds>,
     mut walkers: Query<(&Body, &mut Stride, Option<&Player>)>,
 ) {
+    sounds.now = time.elapsed;
     for (b, mut stride, player) in &mut walkers {
         if player.is_some_and(|p| !p.on_ground || p.seated) {
             stride.0 = 0.0;
@@ -114,6 +125,7 @@ pub fn footsteps(
 /// before the fire takes the blasts.
 #[allow(clippy::too_many_arguments)]
 pub fn listen(
+    time: Res<crate::input::Time>,
     mut sounds: ResMut<Sounds>,
     mut interaction: ResMut<Interaction>,
     physics: Res<Physics>,
@@ -122,6 +134,7 @@ pub fn listen(
     garage: Res<Garage>,
     players: Query<&Body, With<Player>>,
 ) {
+    sounds.now = time.elapsed;
     for &(centre, radius) in &physics.blasts_out {
         sounds.hear(Sound::Blast { radius }, centre, 1.0);
     }
