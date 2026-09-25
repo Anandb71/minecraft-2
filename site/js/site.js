@@ -244,6 +244,150 @@
     touchX = null;
   });
 
+  // The trailer: every chapter's stills full screen, one after another,
+  // the chapter's title over its first, a caption over each.
+  const reel = document.getElementById("reel");
+  const reelImgs = [...reel.querySelectorAll(".reel-stage img")];
+  const reelCard = reel.querySelector(".reel-card");
+  const reelNo = reelCard.querySelector(".pixel");
+  const reelKicker = reelCard.querySelector(".reel-kicker");
+  const reelTitle = reelCard.querySelector(".reel-title");
+  const reelCap = reelCard.querySelector(".reel-cap");
+  const reelBar = reel.querySelector(".reel-bar");
+  const pauseBtn = reel.querySelector(".reel-pause");
+  const scenes = chapters.flatMap((c) => {
+    const no = c.querySelector(".chapter-no");
+    const num = no.querySelector(".pixel").textContent;
+    const kicker = no.textContent.replace(num, "").trim();
+    const title = c.querySelector("h2").textContent;
+    return c._shots.map((fig, j) => ({
+      num,
+      kicker,
+      title,
+      first: j === 0,
+      fig,
+      caption: fig.dataset.caption,
+    }));
+  });
+  scenes.forEach(() => {
+    const li = document.createElement("li");
+    li.append(document.createElement("i"));
+    reelBar.append(li);
+  });
+  const bars = [...reelBar.children];
+  let scene = -1;
+  let front = 0;
+  let timer = 0;
+  let left = 0;
+  let started = 0;
+  let paused = false;
+  let shown = 0;
+
+  const length = (s) => (s.first ? 5600 : 4400);
+  // Full size on big screens, the small still on phones.
+  const srcOf = (s) =>
+    innerWidth * devicePixelRatio > 1400 ? big(s.fig) : s.fig.querySelector("img").getAttribute("src");
+
+  function play(i) {
+    if (i >= scenes.length) {
+      reel.close();
+      return;
+    }
+    i = Math.max(i, 0);
+    const s = scenes[i];
+    const chapterChanged = scene < 0 || scenes[scene].title !== s.title;
+    scene = i;
+    const dur = length(s);
+    reel.style.setProperty("--dur", `${dur}ms`);
+    // Crossfade onto the other image once it has loaded.
+    const next = reelImgs[1 - front];
+    const show = () => {
+      next.classList.remove("on");
+      void next.offsetWidth;
+      next.classList.add("on");
+      reelImgs[front].classList.remove("on");
+      front = 1 - front;
+    };
+    const token = ++shown;
+    next.onload = () => token === shown && show();
+    next.src = srcOf(s);
+    if (next.complete) {
+      next.onload = null;
+      show();
+    }
+    if (chapterChanged) {
+      reelNo.textContent = s.num;
+      reelKicker.textContent = s.kicker;
+      reelTitle.textContent = s.title;
+      reelCard.classList.remove("enter");
+      void reelCard.offsetWidth;
+      reelCard.classList.add("enter");
+    }
+    reelCap.textContent = s.caption;
+    reelCap.classList.remove("enter");
+    void reelCap.offsetWidth;
+    reelCap.classList.add("enter");
+    bars.forEach((b, j) => {
+      b.className = j < i ? "done" : j === i ? "now" : "";
+    });
+    // Warm the next still.
+    if (scenes[i + 1]) new Image().src = srcOf(scenes[i + 1]);
+    run(dur);
+  }
+
+  function run(ms) {
+    clearTimeout(timer);
+    left = ms;
+    started = performance.now();
+    if (!paused) timer = setTimeout(() => play(scene + 1), ms);
+  }
+
+  function setPaused(p) {
+    paused = p;
+    reel.classList.toggle("paused", p);
+    pauseBtn.textContent = p ? "Play" : "Pause";
+    pauseBtn.setAttribute("aria-label", p ? "Play" : "Pause");
+    if (p) {
+      clearTimeout(timer);
+      left -= performance.now() - started;
+    } else {
+      started = performance.now();
+      timer = setTimeout(() => play(scene + 1), Math.max(left, 0));
+    }
+  }
+
+  document.querySelectorAll("[data-reel]").forEach((a) =>
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      scene = -1;
+      setPaused(false);
+      reel.showModal();
+      play(0);
+    })
+  );
+  pauseBtn.addEventListener("click", () => setPaused(!paused));
+  reel.querySelector(".reel-close").addEventListener("click", () => reel.close());
+  reel.addEventListener("close", () => {
+    clearTimeout(timer);
+    reelImgs.forEach((im) => im.classList.remove("on"));
+  });
+  reel.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowRight") play(scene + 1);
+    if (e.key === "ArrowLeft") play(scene - 1);
+    if (e.key === " ") {
+      e.preventDefault();
+      setPaused(!paused);
+    }
+  });
+  reel.addEventListener("click", (e) => {
+    if (e.target.closest("button")) return;
+    // Tap the right third to skip on, the left third to go back.
+    const x = e.clientX / innerWidth;
+    if (x > 0.66) play(scene + 1);
+    else if (x < 0.33) play(scene - 1);
+    else setPaused(!paused);
+  });
+
   // Copy the three commands.
   const copy = document.getElementById("copy");
   const cmd = document.getElementById("cmd");

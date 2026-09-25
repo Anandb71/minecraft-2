@@ -80,7 +80,7 @@
           </p>
           <div class="cta">
             <a class="btn btn-amber" href="#play">Play it</a>
-            <a class="btn btn-ghost" href="#world">Watch the world</a>
+            <a class="btn btn-ghost" href="#world" data-reel>Watch the trailer</a>
           </div>
           <p class="credits">Rust · wgpu · open source · MIT</p>
         </div>
@@ -359,6 +359,20 @@ cargo run --release</code></pre>
       <p><span class="mark-small">MC<span>2</span></span> Made by Anand B in Tamil Nadu. Code under the MIT licence.</p>
       <p class="fine">A fan-made engine. Not an official Minecraft product; not approved by or associated with Mojang or Microsoft.</p>
     </footer>
+
+    <dialog class="reel" id="reel" aria-label="Trailer">
+      <div class="reel-stage" aria-hidden="true"><img alt="" /><img alt="" /></div>
+      <div class="reel-card">
+        <p class="chapter-no"><span class="pixel"></span> <span class="reel-kicker"></span></p>
+        <h2 class="reel-title"></h2>
+        <p class="reel-cap"></p>
+      </div>
+      <ol class="reel-bar" aria-hidden="true"></ol>
+      <div class="reel-controls">
+        <button type="button" class="reel-pause" aria-label="Pause">Pause</button>
+        <button type="button" class="reel-close" aria-label="Close the trailer">Close</button>
+      </div>
+    </dialog>
 
     <dialog class="lightbox" id="lightbox" aria-label="Still">
       <figure>
