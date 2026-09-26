@@ -39,6 +39,7 @@ pub fn draw(
 
     // Hotbar, held item, break progress and news.
     let (x0, y0) = crate::inventory_ui::draw_hotbar(game, hud, screen);
+    draw_vitals(game, hud, screen, x0, y0);
     let mode = match (state.mode, gamepad) {
         (Mode::Block, true) => "BLOCK  (D-pad up: carve)".to_owned(),
         (Mode::Block, false) => "BLOCK  (Tab: carve)".to_owned(),
@@ -154,4 +155,120 @@ fn car_hint(game: &mut Game, key: &str, gamepad: bool) -> Option<String> {
         .filter_map(|c| host.body(c.body))
         .any(|b| b.pos.distance(feet + glam::DVec3::Y) < ENTER_M + f64::from(b.shape.radius) * 0.5)
         .then(|| format!("a car  ({key}: get in)"))
+}
+
+/// A heart and a loaf, seven pixels across.
+const HEART: [&str; 6] = [
+    ".XX.XX.", "XXXXXXX", "XXXXXXX", ".XXXXX.", "..XXX..", "...X...",
+];
+const LOAF: [&str; 6] = [
+    "..XXX..", ".XXXXX.", "XXXXXXX", "XXXXXXX", "XXXXXXX", ".......",
+];
+const BUBBLE: [&str; 6] = [
+    ".XXX...", "X...X..", "X...X..", "X...X..", ".XXX...", ".......",
+];
+
+/// Draws `icon` at (x, y), pixels `px` wide, the left `share` of it (0..1)
+/// in `full` and the rest in `empty`.
+fn icon(
+    hud: &mut HudCanvas,
+    icon: &[&str; 6],
+    x: f32,
+    y: f32,
+    px: f32,
+    share: f32,
+    full: u32,
+    empty: u32,
+) {
+    for (row, line) in icon.iter().enumerate() {
+        for (col, c) in line.chars().enumerate() {
+            if c != 'X' {
+                continue;
+            }
+            let colour = if (col as f32 + 0.5) / 7.0 <= share {
+                full
+            } else {
+                empty
+            };
+            hud.rect(x + col as f32 * px, y + row as f32 * px, px, px, colour);
+        }
+    }
+}
+
+/// Health and hunger over the hotbar, breath while under water, and a red
+/// flash when hurt. Returns whether it drew anything (not in creative).
+fn draw_vitals(game: &mut Game, hud: &mut HudCanvas, screen: (u32, u32), x0: f32, y0: f32) -> bool {
+    use mc2_game::vitals::{MAX_AIR, Vitals};
+    if game.world.resource::<Interaction>().inventory.creative {
+        return false;
+    }
+    let Some(v) = game
+        .world
+        .query::<(&Player, &Vitals)>()
+        .iter(&game.world)
+        .next()
+        .map(|(_, v)| *v)
+    else {
+        return false;
+    };
+    let now = game.world.resource::<mc2_game::input::Time>().elapsed;
+    let px = 2.0;
+    let step = 7.0 * px + 4.0;
+    let y = y0 - 6.0 - 6.0 * px - 6.0;
+    let total = 9.0 * 60.0 - 4.0;
+    // A heart or loaf is two points; a half is one.
+    for i in 0..10 {
+        let share = |value: f32| ((value - i as f32 * 2.0) / 2.0).clamp(0.0, 1.0);
+        let hx = x0 + i as f32 * step;
+        icon(
+            hud,
+            &HEART,
+            hx,
+            y,
+            px,
+            share(v.health),
+            rgba(226, 48, 44, 255),
+            rgba(70, 20, 20, 170),
+        );
+        let fx = x0 + total - (i as f32 + 1.0) * step + 4.0;
+        icon(
+            hud,
+            &LOAF,
+            fx,
+            y,
+            px,
+            share(v.food),
+            rgba(232, 160, 64, 255),
+            rgba(70, 45, 20, 170),
+        );
+        if v.air < MAX_AIR {
+            let left = (v.air / MAX_AIR * 10.0) - (9 - i) as f32;
+            if left > 0.0 {
+                icon(
+                    hud,
+                    &BUBBLE,
+                    fx + 2.0,
+                    y - 6.0 * px - 4.0,
+                    px,
+                    1.0,
+                    rgba(170, 220, 255, 230),
+                    0,
+                );
+            }
+        }
+    }
+    // Hurt: the screen flashes red and fades over half a second.
+    let since = (now - v.hurt_at) as f32;
+    if (0.0..0.5).contains(&since) {
+        let a = (1.0 - since / 0.5) * 90.0;
+        hud.rect_behind(
+            0,
+            0.0,
+            0.0,
+            screen.0 as f32,
+            screen.1 as f32,
+            rgba(200, 20, 16, a as u8),
+        );
+    }
+    true
 }
