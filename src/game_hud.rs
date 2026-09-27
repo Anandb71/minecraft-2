@@ -39,7 +39,13 @@ pub fn draw(
 
     // Hotbar, held item, break progress and news.
     let (x0, y0) = crate::inventory_ui::draw_hotbar(game, hud, screen);
-    draw_vitals(game, hud, screen, x0, y0);
+    // In survival, health and hunger sit on the hotbar and the lines above
+    // it move up to make room.
+    let lift = if draw_vitals(game, hud, screen, x0, y0) {
+        24.0
+    } else {
+        0.0
+    };
     let mode = match (state.mode, gamepad) {
         (Mode::Block, true) => "BLOCK  (D-pad up: carve)".to_owned(),
         (Mode::Block, false) => "BLOCK  (Tab: carve)".to_owned(),
@@ -88,7 +94,7 @@ pub fn draw(
         let tw = HudCanvas::text_width(&line, 2.0);
         hud.text(
             (w - tw) * 0.5,
-            y0 - 30.0,
+            y0 - 30.0 - lift,
             2.0,
             rgba(255, 222, 140, 255),
             &line,
@@ -98,7 +104,7 @@ pub fn draw(
         let tw = HudCanvas::text_width(&line, 2.0);
         hud.text(
             (w - tw) * 0.5,
-            y0 - 30.0,
+            y0 - 30.0 - lift,
             2.0,
             rgba(255, 222, 140, 255),
             &line,
@@ -120,7 +126,7 @@ pub fn draw(
         let tw = HudCanvas::text_width(&line, 1.0);
         hud.text(
             (w - tw) * 0.5,
-            y0 - 22.0,
+            y0 - 22.0 - lift,
             1.0,
             rgba(255, 255, 255, 230),
             &line,
