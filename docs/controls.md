@@ -91,11 +91,13 @@ Crazy Duper Realistic into `captures/photo_<time>.png`.
 
 The game starts in survival with empty hands. Hold left click to break a
 block: logs and dirt give way to bare hands, rock needs a pickaxe, iron ore a
-stone one, and better tools break things faster until they wear out. Press I
-for the inventory: drag stacks between the pack and the hotbar (right click
-splits, shift click moves) and click a recipe to make it. Logs become planks,
-planks sticks and a crafting table; at the table come tools, a furnace, stone
-bricks, windows, lanterns, concrete and TNT (gunpowder is coal and flint from
-gravel); the furnace, fed coal or wood, makes glass, iron and steel ingots,
-charcoal and bricks. `--creative` gives an endless hotbar and a catalogue of
-every item instead.
+stone one, and better tools break things faster until they wear out. Hearts
+and hunger sit on the hotbar; go under water and bubbles appear above the
+loaves. Press I for the inventory: drag stacks between the pack and the
+hotbar (right click splits, shift click moves) and click a recipe to make it.
+Logs become planks, planks sticks and a crafting table; at the table come
+tools, a furnace, stone bricks, windows, lanterns, concrete and TNT
+(gunpowder is coal and flint from gravel); the furnace, fed coal or wood,
+makes glass, iron and steel ingots, charcoal and bricks. `--creative` gives
+an endless hotbar and a catalogue of every item instead, and hides the
+vitals.
